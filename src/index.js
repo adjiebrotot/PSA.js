@@ -8,7 +8,10 @@ import "./network/io.js";
 import "./network/power_flow.js";
 export { SubNetwork } from "./network/power_flow.js";
 import "./optimization/optimize.js";
-export { Model as LinopyModel } from "./optimization/linopy.js";
+export { Model as LinopyModel, Variable as LinopyVariable } from "./optimization/linopy.js";
+export { LinearExpression, ConstraintSpec, merge as mergeExpressions } from "./optimization/expressions.js";
+export { generate_directions_random, generate_directions_evenly_spaced, generate_directions_halton } from "./optimization/mga.js";
+export { discretized_capacity } from "./optimization/abstract.js";
 export { StatisticsAccessor, groupers, statisticsOptions, get_transmission_branches, port_efficiency } from "./statistics/accessor.js";
 
 export { Index } from "./core/index.js";

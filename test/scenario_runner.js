@@ -161,6 +161,29 @@ export async function runScenario(scenario, onRecord = null) {
         if (op[4]) results[op[4]] = res;
         break;
       }
+      case "create_model":
+        n.optimize.create_model(decodeValue(op[1] ?? {}, n));
+        break;
+      case "add_constraint": {
+        const [, varName, dimsSpec, sign, rhs, cname] = op;
+        let v = n.model.variables.get(varName).toExpr();
+        let dims = dimsSpec;
+        if (dims && typeof dims === "object" && !Array.isArray(dims)) {
+          v = v.sel(decodeValue(dims.sel, n));
+          dims = "sum" in dims ? dims.sum : "all";
+        }
+        const expr = dims === "all" ? v.sum() : dims === null ? v : v.sum(dims);
+        n.model.add_constraints(expr, sign, decodeValue(rhs, n), { name: cname });
+        break;
+      }
+      case "add_variable":
+        n.model.add_variables({ name: op[1] });
+        break;
+      case "solve_model": {
+        const res = await n.optimize.solve_model(decodeValue(op[1] ?? {}, n));
+        if (op[2]) results[op[2]] = res;
+        break;
+      }
       case "copy":
         n = n.copy(op[1] ?? {});
         break;
@@ -170,6 +193,7 @@ export async function runScenario(scenario, onRecord = null) {
         if (what === "network") records[key] = n;
         else if (what === "result") records[key] = results[op[3]];
         else if (what === "path") records[key] = await getPath(n, op[3]);
+        else if (what === "model_lp") records[key] = { $lp: n.model.to_lp() };
         else if (what === "lp") records[key] = { $lp: n.optimize.create_model(decodeValue(op[3] ?? {}, n)).to_lp() };
         else throw new Error(`unknown record ${what}`);
         if (onRecord) onRecord(key, records[key]);

@@ -147,6 +147,22 @@ def run(scenario: dict) -> dict:
             res = target(*args, **kwargs)
             if out_key:
                 results[out_key] = res
+        elif kind == "create_model":
+            n.optimize.create_model(**decode(op[1] if len(op) > 1 else {}, n))
+        elif kind == "add_constraint":
+            _, var, dims, sign, rhs, cname = op
+            v = n.model.variables[var]
+            if isinstance(dims, dict):
+                v = v.sel(**decode(dims["sel"], n))
+                dims = dims.get("sum", "all")
+            expr = v.sum() if dims == "all" else (1 * v if dims is None else v.sum(dim=dims))
+            n.model.add_constraints(expr, sign, decode(rhs, n), name=cname)
+        elif kind == "add_variable":
+            n.model.add_variables(name=op[1])
+        elif kind == "solve_model":
+            res = n.optimize.solve_model(**decode(op[1] if len(op) > 1 else {}, n))
+            if len(op) > 2:
+                results[op[2]] = res
         elif kind == "copy":
             n = n.copy(**(op[1] if len(op) > 1 else {}))
         elif kind == "record":
@@ -157,6 +173,12 @@ def run(scenario: dict) -> dict:
                 records[key] = to_json(results[op[3]])
             elif what == "path":
                 records[key] = to_json(get_path(n, op[3]))
+            elif what == "model_lp":
+                import tempfile, os
+                with tempfile.TemporaryDirectory() as d:
+                    fn = os.path.join(d, "model.lp")
+                    n.model.to_file(fn, io_api="lp", progress=False)
+                    records[key] = {"$type": "lp", "text": open(fn).read()}
             elif what == "lp":
                 import tempfile, os
                 kwargs = decode(op[3] if len(op) > 3 else {}, n)

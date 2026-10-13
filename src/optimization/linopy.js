@@ -9,6 +9,7 @@
  * solver PyPSA uses by default) reproduces PyPSA's solutions.
  */
 
+import { installExpressions } from "./expressions.js";
 import { Index } from "../core/index.js";
 import { polarsFloat } from "./format.js";
 
@@ -491,3 +492,5 @@ export function getHighs() {
   }
   return highsPromise;
 }
+
+installExpressions(Variable, Model);

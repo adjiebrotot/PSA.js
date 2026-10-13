@@ -4,7 +4,8 @@
  */
 
 import { installAbstract } from "./abstract.js";
-import { DataFrame, Series } from "../core/frame.js";
+import { installMGA } from "./mga.js";
+import { DataFrame, Series, isNumberArray } from "../core/frame.js";
 import { Index } from "../core/index.js";
 import { Network } from "../network/network.js";
 import { as_index, isOptions } from "../common.js";
@@ -546,7 +547,11 @@ export function assign_duals(n, assignAllDuals = false) {
       continue;
     }
     if (c.name === "GlobalConstraint" && !c.static.index.has(suffix) && assignAllDuals) {
-      n.add("GlobalConstraint", suffix, {});
+      // `c.static.loc[suffix] = None`: a row of missing values
+      const st = c.static;
+      const row = new DataFrame({ index: new Index([suffix], st.index.name) });
+      for (const col of st.columns) row.set(col, isNumberArray(st.col(col)) ? Float64Array.of(NaN) : [null]);
+      c.static = DataFrame.concatRows([st, row]);
     }
     if (con.dims.includes("snapshot")) {
       let dualSpec = suffix.split("-").pop();
@@ -558,16 +563,17 @@ export function assign_duals(n, assignAllDuals = false) {
         unassigned.push(cname);
         continue;
       }
-      // dual frame: (snapshot, name)
+      // dual frame: (snapshot, name); a missing name dimension is expanded
+      // over all component names
       const si = con.dims.indexOf("snapshot");
-      const ni = 1 - si;
-      const names = con.coords[ni];
+      const ni = con.dims.indexOf("name");
+      const names = ni >= 0 ? con.coords[ni] : c.static.index;
       const snsC = con.coords[si];
       const data = new Map();
       names.values.forEach((nm, j) => {
         const a = new Float64Array(snsC.length);
         for (let s = 0; s < snsC.length; s++) {
-          const idx = si === 0 ? [s, j] : [j, s];
+          const idx = ni < 0 ? [s] : si === 0 ? [s, j] : [j, s];
           a[s] = con.dual[con.flat(...idx)];
         }
         data.set(nm, a);
@@ -820,6 +826,7 @@ export class OptimizationAccessor {
 }
 
 installAbstract(OptimizationAccessor);
+installMGA(OptimizationAccessor);
 
 /** Install `n.optimize(...)` callable accessor with methods. */
 Network._accessorInitialisers.push((n) => {
