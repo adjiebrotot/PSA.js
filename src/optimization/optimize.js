@@ -3,6 +3,7 @@
  * Optimisation entry points (mirrors `pypsa.optimization.optimize`).
  */
 
+import { installAbstract } from "./abstract.js";
 import { DataFrame, Series } from "../core/frame.js";
 import { Index } from "../core/index.js";
 import { Network } from "../network/network.js";
@@ -641,14 +642,29 @@ export function post_processing(n) {
   // voltage angles
   if (n.c.sub_networks.static.index.length === 0) n.determine_network_topology();
   if (n.c.sub_networks.static.has("obj")) {
-    const vang = new DataFrame({ index: n.snapshots });
-    for (const b of buses) vang.set(b, new Float64Array(n.snapshots.length));
+    // pd.concat(axis=1) over sub-networks: single-bus sub-networks only cover
+    // the optimised snapshots, the others all snapshots (unsorted union).
+    const parts = [];
     for (const sub of n.c.sub_networks.static.col("obj")) {
       const busesO = sub.buses_o;
-      if (busesO.length === 1) continue;
+      if (busesO.length === 1) {
+        parts.push({ index: sns, cols: busesO.values, data: [new Float64Array(sns.length)] });
+        continue;
+      }
       sub.calculate_B_H({ skip_pre: true });
-      const theta = pinvApply(sub.B, busesO, pdf);
-      busesO.values.forEach((b, i) => vang.set(b, theta[i]));
+      parts.push({ index: n.snapshots, cols: busesO.values, data: pinvApply(sub.B, busesO, pdf) });
+    }
+    let index = parts.length ? parts[0].index : n.snapshots;
+    for (const part of parts.slice(1)) {
+      if (part.index.equals(index)) continue;
+      const extra = part.index.values.filter((x) => !index.has(x));
+      index = new Index([...index.values, ...extra], index.names);
+    }
+    const vang = new DataFrame({ index });
+    for (const b of buses) vang.set(b, new Float64Array(index.length));
+    for (const part of parts) {
+      const pos = part.index.getIndexer(index);
+      part.cols.forEach((b, i) => vang.set(b, Float64Array.from(pos, (p) => (p < 0 ? NaN : part.data[i][p]))));
     }
     n.c.buses.dynamic.v_ang = vang;
   }
@@ -795,6 +811,8 @@ export class OptimizationAccessor {
     return n.add("Generator", b.values ?? b, { bus: b.values ?? b, carrier: "load", sign, marginal_cost, p_nom }, { suffix, return_names: true });
   }
 }
+
+installAbstract(OptimizationAccessor);
 
 /** Install `n.optimize(...)` callable accessor with methods. */
 Network._accessorInitialisers.push((n) => {

@@ -6,6 +6,6 @@
     ["record", "network", "network"],
     ["record", "contingency", "path", [["lpf_contingency", [{"$ts": "2011-01-01 00:00:00"}, [{"$tuple": ["Line", "527"]}, {"$tuple": ["Line", "1"]}, {"$tuple": ["Transformer", "2"]}, {"$tuple": ["Transformer", "10"]}]]]]]
   ],
-  "tolerance": {"rtol": 1e-8, "atol": 1e-6},
+  "tolerance": {"rtol": 1e-08, "atol": 1e-06},
   "record_tolerance": {"contingency": {"ignoreIndexOrder": true}}
 }

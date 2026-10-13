@@ -11,6 +11,6 @@
     ["call", "pf", [], {"distribute_slack": true, "slack_weights": "p_nom"}],
     ["record", "network_ds_pnom", "network"]
   ],
-  "tolerance": {"rtol": 1e-6, "atol": 1e-6},
-  "record_tolerance": {"pf_result": {"rtol": 1, "atol": 1e100}}
+  "tolerance": {"rtol": 1e-06, "atol": 1e-06},
+  "record_tolerance": {"pf_result": {"rtol": 1, "atol": 1e+100}}
 }

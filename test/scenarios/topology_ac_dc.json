@@ -17,5 +17,5 @@
     ["record", "ptdf1", "path", ["c", "sub_networks", "static", "obj", "1", "PTDF"]],
     ["record", "bodf1", "path", ["c", "sub_networks", "static", "obj", "1", "BODF"]]
   ],
-  "tolerance": {"rtol": 1e-9, "atol": 1e-9}
+  "tolerance": {"rtol": 1e-09, "atol": 1e-09}
 }

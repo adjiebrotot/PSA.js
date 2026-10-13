@@ -1,54 +1,14 @@
 {
- "description": "Linear optimal power flow / capacity expansion of the scigrid-de example (default options).",
- "ops": [
-  [
-   "load_example",
-   "scigrid-de"
+  "description": "Linear optimal power flow / capacity expansion of the scigrid-de example (default options).",
+  "ops": [
+    ["load_example", "scigrid-de"],
+    ["call", "optimize", [], {}, "status"],
+    ["record", "status", "result", "status"],
+    ["record", "objective", "path", ["objective"]],
+    ["record", "objective_constant", "path", ["objective_constant"]],
+    ["record", "network", "network"]
   ],
-  [
-   "call",
-   "optimize",
-   [],
-   {},
-   "status"
-  ],
-  [
-   "record",
-   "status",
-   "result",
-   "status"
-  ],
-  [
-   "record",
-   "objective",
-   "path",
-   [
-    "objective"
-   ]
-  ],
-  [
-   "record",
-   "objective_constant",
-   "path",
-   [
-    "objective_constant"
-   ]
-  ],
-  [
-   "record",
-   "network",
-   "network"
-  ]
- ],
- "tolerance": {
-  "rtol": 1e-06,
-  "atol": 1e-06
- },
- "path_tolerance": {
-  "buses.dynamic.v_ang": {
-   "rtol": 0.001,
-   "atol": 0.0001
-  }
- },
- "note": "PyPSA computes post-optimisation voltage angles with a dense numpy pinv whose accuracy on SciGrid is ~5e-5 (constant gauge offset); PSA.js uses an exact grounded solve."
+  "tolerance": {"rtol": 1e-06, "atol": 1e-06},
+  "path_tolerance": {"buses.dynamic.v_ang": {"rtol": 0.001, "atol": 0.0001}},
+  "note": "PyPSA computes post-optimisation voltage angles with a dense numpy pinv whose accuracy on SciGrid is ~5e-5 (constant gauge offset); PSA.js uses an exact grounded solve."
 }

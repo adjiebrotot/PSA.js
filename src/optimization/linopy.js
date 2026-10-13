@@ -164,14 +164,15 @@ export class Constraint {
     }
     this.termPtr[k + 1] = this.vars.length;
     this.sign[k] = normalizeSign(sign);
-    let r = rhs;
-    let act = active;
-    if (Number.isNaN(r)) {
-      r = 0;
-      act = false;
-    }
-    this.rhs[k] = r;
-    this.labels[k] = act ? this.start + k : -1;
+    // NaN rhs masks the row (linopy) but is kept so that derived constraints
+    // (e.g. security constraints) see the same data as in linopy.
+    this.rhs[k] = rhs;
+    this.labels[k] = active && !Number.isNaN(rhs) ? this.start + k : -1;
+  }
+
+  /** Raw (unfiltered) terms of a row, like `con.lhs` in linopy. */
+  rawTerms(k) {
+    return [Array.from(this.vars.subarray(this.termPtr[k], this.termPtr[k + 1])), Array.from(this.coeffs.subarray(this.termPtr[k], this.termPtr[k + 1]))];
   }
 
   finalize() {
@@ -241,6 +242,11 @@ export class Model {
    */
   add_variables({ name, dims = [], coords = [], lower = -Infinity, upper = Infinity, mask = null, binary = false, integer = false }) {
     if (this.variables.has(name)) throw new Error(`Variable '${name}' already assigned to model`);
+    if (binary) {
+      // linopy: binaries cannot carry bounds and are stored with [0, 1]
+      lower = 0;
+      upper = 1;
+    }
     const v = new Variable(this, { name, dims, coords: coords.map((c) => (c instanceof Index ? c : new Index(c))), start: this._xCounter, lower, upper, mask, binary, integer });
     this._xCounter += v.size;
     this.variables.set(name, v);
@@ -447,20 +453,17 @@ export class Model {
             v.solution[k] = l === -1 ? NaN : xsol.get(l) ?? NaN;
           }
         }
-        const isMip = this.type.startsWith("MI") || this.type === "MILP";
-        const dualValid = !isMip && sol.rowDual && sol.rowDual.length === model.getNumRow?.() ? true : !isMip;
-        if (dualValid && sol.rowDual) {
-          const dsol = new Map();
-          for (let i = 0; i < sol.rowDual.length; i++) dsol.set(Number(model.getRowName(i).slice(1)), sol.rowDual[i]);
-          for (const c of this.constraints.values()) {
-            c.dual = new Float64Array(c.size);
-            for (let k = 0; k < c.size; k++) {
-              const l = c.labels[k];
-              c.dual[k] = l === -1 ? NaN : dsol.has(l) ? dsol.get(l) : NaN;
-            }
+        // HiGHS reports an all-zero row dual for MIPs (dual_valid false), which
+        // linopy passes through unchanged.
+        const isMip = this.type === "MILP" || this.type === "MIQP";
+        const dsol = new Map();
+        if (!isMip && sol.rowDual) for (let i = 0; i < sol.rowDual.length; i++) dsol.set(Number(model.getRowName(i).slice(1)), sol.rowDual[i]);
+        for (const c of this.constraints.values()) {
+          c.dual = new Float64Array(c.size);
+          for (let k = 0; k < c.size; k++) {
+            const l = c.labels[k];
+            c.dual[k] = l === -1 ? NaN : isMip ? 0 : dsol.has(l) ? dsol.get(l) : NaN;
           }
-        } else {
-          for (const c of this.constraints.values()) c.dual = null;
         }
         this.objectiveValue = model.getObjectiveValue() + (this.objective.const || 0);
       }

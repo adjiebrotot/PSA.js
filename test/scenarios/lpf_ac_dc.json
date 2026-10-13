@@ -8,5 +8,5 @@
     ["call", "lpf", [[{"$ts": "2015-01-01 03:00:00"}]]],
     ["record", "network_one_snapshot", "network"]
   ],
-  "tolerance": {"rtol": 1e-9, "atol": 1e-7}
+  "tolerance": {"rtol": 1e-09, "atol": 1e-07}
 }

@@ -9,5 +9,5 @@
     ["record", "objective_constant", "path", ["objective_constant"]],
     ["record", "network", "network"]
   ],
-  "tolerance": {"rtol": 1e-6, "atol": 1e-6}
+  "tolerance": {"rtol": 1e-06, "atol": 1e-06}
 }

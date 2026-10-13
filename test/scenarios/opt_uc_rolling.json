@@ -1,0 +1,31 @@
+{
+  "description": "Rolling horizon unit commitment (history from previous windows) and Link ramp limits with optimize_with_rolling_horizon.",
+  "ops": [
+    ["new_network"],
+    ["set_snapshots", [0, 1, 2, 3, 4, 5, 6]],
+    ["add", "Bus", "bus"],
+    ["add", "Generator", "coal", {"bus": "bus", "committable": true, "p_min_pu": 0.1, "up_time_before": 1, "marginal_cost": 20, "min_up_time": 2, "min_down_time": 2, "start_up_cost": 10000, "p_nom": 10000}],
+    ["add", "Generator", "gas", {"bus": "bus", "committable": true, "marginal_cost": 70, "p_min_pu": 0.01, "start_up_cost": 100, "up_time_before": 0, "p_nom": 10000}],
+    ["add", "Load", "load", {"bus": "bus", "p_set": [4000, 6000, 800, 5000, 3000, 950, 800]}],
+    ["record", "lp0", "lp", {"snapshots": [0, 1, 2]}],
+    ["call", "optimize", [], {"snapshots": [0, 1, 2]}],
+    ["record", "objective0", "path", ["objective"]],
+    ["record", "lp1", "lp", {"snapshots": [2, 3, 4]}],
+    ["call", "optimize", [], {"snapshots": [2, 3, 4]}],
+    ["record", "objective1", "path", ["objective"]],
+    ["record", "lp2", "lp", {"snapshots": [4, 5, 6]}],
+    ["call", "optimize", [], {"snapshots": [4, 5, 6]}],
+    ["record", "objective2", "path", ["objective"]],
+    ["record", "network", "network"],
+    ["new_network"],
+    ["set_snapshots", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]],
+    ["add", "Bus", ["gas", "electricity"]],
+    ["add", "Generator", "gas", {"bus": "gas", "marginal_cost": 10, "p_nom": 20000}],
+    ["add", "Link", "OCGT", {"bus0": "gas", "bus1": "electricity", "p_min_pu": 0.1, "efficiency": 0.5, "p_nom": 10000, "ramp_limit_up": 0.3, "ramp_limit_down": 0.4, "marginal_cost": 20}],
+    ["add", "Generator", "backup", {"bus": "electricity", "marginal_cost": 100, "p_nom": 10000}],
+    ["add", "Load", "load", {"bus": "electricity", "p_set": [2000, 6000, 1000, 5500, 9000, 3000, 7500, 2500, 7000, 1500, 6000, 2000]}],
+    ["call", "optimize.optimize_with_rolling_horizon", [], {"horizon": 4, "overlap": 1}],
+    ["record", "rh_network", "network"]
+  ],
+  "tolerance": {"rtol": 1e-06, "atol": 1e-06}
+}
