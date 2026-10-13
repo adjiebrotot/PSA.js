@@ -56,6 +56,10 @@ def value(v):
         return f
     if isinstance(v, pd.Timestamp):
         return label(v)
+    if isinstance(v, np.datetime64):
+        return label(pd.Timestamp(v))
+    if isinstance(v, tuple):
+        return [value(x) for x in v]
     return str(v)
 
 

@@ -9,11 +9,26 @@ import { Network, DataFrame, Series, Index } from "../src/index.js";
 import path from "node:path";
 import { ROOT, examplePath, decode as decodeFixture, assertFrameClose, assertSeriesClose, assertNetworkMatches, isClose, fmtLabel } from "./helpers.js";
 
+function dateRange({ start, periods, freq = "h" }) {
+  const m = /^(\d*)(h|D|min|s)$/.exec(freq);
+  const step = (m[1] ? Number(m[1]) : 1) * { h: 36e5, D: 864e5, min: 6e4, s: 1e3 }[m[2]];
+  const [d, t = "00:00:00"] = start.split(/[ T]/);
+  const [Y, M, D] = d.split("-").map(Number);
+  const [hh, mm, ss = 0] = t.split(":").map(Number);
+  const t0 = Date.UTC(Y, M - 1, D, hh, mm, ss);
+  const p = (x) => String(x).padStart(2, "0");
+  return Array.from({ length: periods }, (_, i) => {
+    const dt = new Date(t0 + i * step);
+    return `${dt.getUTCFullYear()}-${p(dt.getUTCMonth() + 1)}-${p(dt.getUTCDate())} ${p(dt.getUTCHours())}:${p(dt.getUTCMinutes())}:${p(dt.getUTCSeconds())}`;
+  });
+}
+
 export function decodeValue(v, n) {
   if (v && typeof v === "object" && !Array.isArray(v)) {
     if ("$float" in v) return v.$float === "inf" ? Infinity : v.$float === "-inf" ? -Infinity : NaN;
     if ("$ts" in v) return v.$ts;
     if ("$slice" in v) return n.snapshots.slice(...v.$slice);
+    if ("$date_range" in v) return dateRange(v.$date_range);
     if ("$multiindex" in v) return new Index(v.$multiindex, v.$multiindex[0].map(() => null));
     if ("$path" in v) return getPathSync(n, v.$path);
     if ("$tuple" in v) return v.$tuple.map((x) => decodeValue(x, n));
@@ -184,6 +199,15 @@ export async function runScenario(scenario, onRecord = null) {
         if (op[2]) results[op[2]] = res;
         break;
       }
+      case "call_replace": {
+        const parts = op[1].split(".");
+        let target = n;
+        for (const p of parts.slice(0, -1)) target = target[p];
+        const res = await callWithKwargs(target, parts[parts.length - 1], decodeValue(op[2] ?? [], n), decodeValue(op[3] ?? {}, n));
+        if (op[4]) results[op[4]] = res;
+        n = res instanceof Network ? res : res.n ?? res;
+        break;
+      }
       case "copy":
         n = n.copy(op[1] ?? {});
         break;
@@ -192,6 +216,7 @@ export async function runScenario(scenario, onRecord = null) {
         const what = op[2];
         if (what === "network") records[key] = n;
         else if (what === "result") records[key] = results[op[3]];
+        else if (what === "result_path") records[key] = await getPath(results[op[3]], op[4]);
         else if (what === "path") records[key] = await getPath(n, op[3]);
         else if (what === "model_lp") records[key] = { $lp: n.model.to_lp() };
         else if (what === "lp") records[key] = { $lp: n.optimize.create_model(decodeValue(op[3] ?? {}, n)).to_lp() };

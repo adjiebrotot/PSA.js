@@ -28,6 +28,22 @@ pypsa.options.params.optimize.log_to_console = False
 
 SCENARIOS = ROOT / "test" / "scenarios"
 
+# Work around read-only arrays under pandas copy-on-write in the pinned PyPSA:
+# networks built by clustering can hold read-only column arrays, so in-place
+# writes in `determine_network_topology` (`find_slack_bus`) fail. Making the
+# static frames writable copies first does not change any result.
+_orig_topology = pypsa.Network.determine_network_topology
+
+
+def _topology_writable(self, *args, **kwargs):
+    for c in self.components:
+        if not c.static.empty:
+            c.static = c.static.copy(deep=True)
+    return _orig_topology(self, *args, **kwargs)
+
+
+pypsa.Network.determine_network_topology = _topology_writable
+
 
 def decode(v, n):
     """Decode JSON scenario values into python objects."""
@@ -38,6 +54,8 @@ def decode(v, n):
             return pd.Timestamp(v["$ts"])
         if "$path" in v:
             return get_path(n, v["$path"])
+        if "$date_range" in v:
+            return pd.date_range(**v["$date_range"])
         if "$multiindex" in v:
             return pd.MultiIndex.from_tuples([tuple(x) for x in v["$multiindex"]])
         if "$slice" in v:
@@ -178,6 +196,14 @@ def _run_op(op, state, records, results):
             res = n.optimize.solve_model(**decode(op[1] if len(op) > 1 else {}, n))
             if len(op) > 2:
                 results[op[2]] = res
+        elif kind == "call_replace":
+            target = n
+            for part in op[1].split("."):
+                target = getattr(target, part)
+            res = target(*decode(op[2] if len(op) > 2 else [], n), **decode(op[3] if len(op) > 3 else {}, n))
+            if len(op) > 4 and op[4]:
+                results[op[4]] = res
+            n = res.n if hasattr(res, "n") and not isinstance(res, pypsa.Network) else res
         elif kind == "copy":
             n = n.copy(**(op[1] if len(op) > 1 else {}))
         elif kind == "record":
@@ -186,6 +212,8 @@ def _run_op(op, state, records, results):
                 records[key] = {"$type": "network", **dump_network(n, skip_standard_types=True)}
             elif what == "result":
                 records[key] = to_json(results[op[3]])
+            elif what == "result_path":
+                records[key] = to_json(get_path(results[op[3]], op[4]))
             elif what == "path":
                 records[key] = to_json(get_path(n, op[3]))
             elif what == "model_lp":

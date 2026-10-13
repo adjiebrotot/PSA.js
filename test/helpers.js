@@ -37,6 +37,9 @@ function fmtLabel(v) {
 }
 
 export function isClose(a, b, rtol, atol) {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => isClose(x, b[i], rtol, atol));
+  }
   if (typeof a === "boolean" || typeof b === "boolean") return a === b;
   if (typeof a === "string" || typeof b === "string") return a === b;
   if (Number.isNaN(a) && Number.isNaN(b)) return true;
