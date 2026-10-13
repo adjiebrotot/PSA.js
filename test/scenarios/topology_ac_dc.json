@@ -1,0 +1,21 @@
+{
+  "description": "Topology, cycle matrix, PTDF and BODF on the AC-DC meshed example.",
+  "ops": [
+    ["load_example", "ac-dc-meshed"],
+    ["call", "determine_network_topology"],
+    ["call", "calculate_dependent_values"],
+    ["record", "buses", "path", ["c", "buses", "static"]],
+    ["record", "sub_networks", "path", ["c", "sub_networks", "static", ["drop", [], {"columns": ["obj"]}]]],
+    ["record", "lines", "path", ["c", "lines", "static"]],
+    ["record", "cycles", "path", [["cycle_matrix", [], {"apply_weights": false}]]],
+    ["record", "cycles_w", "path", [["cycle_matrix", [], {"apply_weights": true}]]],
+    ["call", "determine_network_topology"],
+    ["record", "bodf0_call", "path", ["c", "sub_networks", "static", "obj", "0", ["calculate_BODF"]]],
+    ["record", "ptdf0", "path", ["c", "sub_networks", "static", "obj", "0", "PTDF"]],
+    ["record", "bodf0", "path", ["c", "sub_networks", "static", "obj", "0", "BODF"]],
+    ["record", "bodf1_call", "path", ["c", "sub_networks", "static", "obj", "1", ["calculate_BODF"]]],
+    ["record", "ptdf1", "path", ["c", "sub_networks", "static", "obj", "1", "PTDF"]],
+    ["record", "bodf1", "path", ["c", "sub_networks", "static", "obj", "1", "BODF"]]
+  ],
+  "tolerance": {"rtol": 1e-09, "atol": 1e-09}
+}

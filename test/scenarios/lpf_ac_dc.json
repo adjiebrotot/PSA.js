@@ -1,0 +1,12 @@
+{
+  "description": "Linear power flow on AC-DC meshed (PyPSA test_lpf).",
+  "ops": [
+    ["load_network", "ac-dc-lpf"],
+    ["call", "lpf"],
+    ["record", "network", "network"],
+    ["load_network", "ac-dc-lpf"],
+    ["call", "lpf", [[{"$ts": "2015-01-01 03:00:00"}]]],
+    ["record", "network_one_snapshot", "network"]
+  ],
+  "tolerance": {"rtol": 1e-09, "atol": 1e-07}
+}

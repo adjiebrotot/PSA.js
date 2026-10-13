@@ -1,0 +1,3 @@
+name,type,carrier,unit,location,control,generator,sub_network
+electricity,,electricity,,,PQ,,
+hydrogen,,hydrogen,,,PQ,,
