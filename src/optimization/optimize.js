@@ -867,6 +867,7 @@ export class OptimizationAccessor {
       meshed_thresholds = null,
       cycle_basis_method = "bfs-refined",
       piecewise_options = null,
+      reformulate_sos = false,
     } = opts;
     const sns = as_index(n, snapshots, "snapshots");
     n._multi_invest = multi_investment_periods ? 1 : 0;
@@ -886,7 +887,7 @@ export class OptimizationAccessor {
       piecewise_options,
     });
     if (extra_functionality) await extra_functionality(n, sns);
-    const [status, condition] = await m.solve({ solver_name, solver_options, log_to_console });
+    const [status, condition] = await m.solve({ solver_name, solver_options, log_to_console, reformulate_sos });
     if (status === "ok") {
       assign_solution(n);
       assign_duals(n, assign_all_duals);
@@ -899,10 +900,10 @@ export class OptimizationAccessor {
     return create_model(this._n, opts);
   }
 
-  async solve_model({ extra_functionality = null, solver_name = "highs", solver_options = {}, log_to_console = false, assign_all_duals = false } = {}) {
+  async solve_model({ extra_functionality = null, solver_name = "highs", solver_options = {}, log_to_console = false, assign_all_duals = false, reformulate_sos = false } = {}) {
     const n = this._n;
     if (extra_functionality) await extra_functionality(n, n.model.parameters.snapshots);
-    const [status, condition] = await n.model.solve({ solver_name, solver_options, log_to_console });
+    const [status, condition] = await n.model.solve({ solver_name, solver_options, log_to_console, reformulate_sos });
     if (status === "ok") {
       assign_solution(n);
       assign_duals(n, assign_all_duals);

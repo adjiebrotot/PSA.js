@@ -2,7 +2,7 @@
 /**
  * Piecewise linear constraints (mirrors `pypsa.optimization.piecewise` and
  * the parts of linopy's `add_piecewise_formulation` it relies on: the LP
- * tangent-line and the incremental formulations; SOS2 is not supported).
+ * tangent-line, incremental and SOS2 formulations).
  */
 
 import { Index, compareLabels, labelKey } from "../core/index.js";
@@ -278,9 +278,9 @@ function addPiecewiseFormulation(m, spec) {
     resolved = "sos2";
   }
   if (resolved === "sos2") {
-    throw new Error(
-      `NotImplementedError: The SOS2 piecewise formulation ('${name}') is not supported in PSA.js; use strictly monotonic breakpoints (incremental formulation) instead.`,
-    );
+    if (!trailing) throw new Error("ValueError: SOS2 method does not support non-trailing NaN breakpoints.");
+    addSos2(m, name, { dims, coords, extraDims, nN, nB, pinned, bounded, sign: isEq ? "=" : sign, active, mask: spec.mask });
+    return "sos2";
   }
   addIncremental(m, name, { dims, coords, extraDims, nE, nN, nB, pinned, bounded, sign: isEq ? "=" : sign, active, mask: spec.mask });
   return "incremental";
@@ -326,6 +326,54 @@ function addLp(m, name, { dims, coords, nE, nN, nB, xLab, yLab, xBp, yBp, sign }
   };
   m.add_constraints(`${name}_domain_lo`, dims, coords, row(xMin, ">="));
   m.add_constraints(`${name}_domain_hi`, dims, coords, row(xMax, "<="));
+}
+
+function addSos2(m, name, { dims, coords, extraDims, nN, nB, pinned, bounded, sign, active, mask }) {
+  const bpIdx = new Index(Array.from({ length: nB }, (_, b) => b), BREAKPOINT_DIM);
+  const vDims = [...dims, BREAKPOINT_DIM];
+  const vCoords = [...coords, bpIdx];
+  const lambda = m.add_variables({
+    name: `${name}_lambda`,
+    dims: vDims,
+    coords: vCoords,
+    lower: 0,
+    upper: 1,
+    mask: (...idx) => Boolean(mask[idx[idx.length - 2]][idx[idx.length - 1]]),
+  });
+  m.add_sos_constraints(lambda, 2, BREAKPOINT_DIM);
+  const hasE = extraDims.length > 0;
+  const ll = (e, j, b) => (hasE ? lambda.at(e, j, b) : lambda.at(j, b));
+  const ej = (idx) => [hasE ? idx[0] : 0, idx[idx.length - 1]];
+
+  // Σ lambda == active (or 1)
+  m.add_constraints(`${name}_convex`, dims, coords, (...idx) => {
+    const [e, j] = ej(idx);
+    const vars = [];
+    for (let b = 0; b < nB; b++) vars.push(ll(e, j, b));
+    const coeffs = vars.map(() => 1);
+    if (!active) return [vars, coeffs, "=", r(0, 1)];
+    const a = active(e, j);
+    return [[...vars, a.label], [...coeffs, -1], "=", r(0, a.const)];
+  });
+  // `expr <sign> Σ lambda * bp` with absent breakpoints zeroed
+  const linkRow = (lab, bp, s) => (...idx) => {
+    const [e, j] = ej(idx);
+    const vars = [lab(e, j)];
+    const coeffs = [1];
+    for (let b = 0; b < nB; b++) {
+      vars.push(ll(e, j, b));
+      coeffs.push(-(mask[j][b] ? bp[j][b] : 0));
+    }
+    return [vars, coeffs, s, r(0, 0)];
+  };
+  if (pinned.length) {
+    const linkIdx = new Index(
+      pinned.map((p) => p.coord),
+      PWL_LINK_DIM,
+    );
+    m.add_constraints(`${name}_link`, [PWL_LINK_DIM, ...dims], [linkIdx, ...coords], (l, ...rest) => linkRow(pinned[l].lab, pinned[l].bp, "=")(...rest));
+  }
+  if (bounded) m.add_constraints(`${name}_output_link`, dims, coords, linkRow(bounded.lab, bounded.bp, sign));
 }
 
 function addIncremental(m, name, { dims, coords, extraDims, nN, nB, pinned, bounded, sign, active, mask }) {

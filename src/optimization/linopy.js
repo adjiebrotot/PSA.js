@@ -80,6 +80,8 @@ export class Variable {
     this.lower = fillArray(this.size, this.shape, lower, binary ? 0 : -Infinity);
     this.upper = fillArray(this.size, this.shape, upper, binary ? 1 : Infinity);
     this.solution = null;
+    /** SOS constraint attributes (`sos_type`, `sos_dim`, `big_m_upper`) or null */
+    this.sos = null;
   }
 
   get kind() {
@@ -240,6 +242,69 @@ export function normalizeSign(sign) {
   return sign;
 }
 
+function reformulateSos1(m, v, d, M, prefix) {
+  const yName = `${prefix}${v.name}_y`;
+  const y = m.add_variables({ name: yName, dims: v.dims, coords: v.coords, binary: true });
+  const upper = `${prefix}${v.name}_upper`;
+  m.add_constraints(upper, v.dims, v.coords, (...idx) => {
+    const k = v.flat(...idx);
+    return [[v.labels[k], y.labels[k]], [1, -M[k]], "<=", -0];
+  });
+  const other = v.dims.map((_, i) => i).filter((i) => i !== d);
+  const card = `${prefix}${v.name}_card`;
+  m.add_constraints(card, other.map((i) => v.dims[i]), other.map((i) => v.coords[i]), (...oidx) => {
+    const vars = [];
+    for (let b = 0; b < v.shape[d]; b++) {
+      const idx = new Array(v.dims.length);
+      other.forEach((i, t) => (idx[i] = oidx[t]));
+      idx[d] = b;
+      vars.push(y.labels[y.flat(...idx)]);
+    }
+    return [vars, vars.map(() => 1), "<=", 1];
+  });
+  return [[yName], [upper, card]];
+}
+
+function reformulateSos2(m, v, d, M, prefix) {
+  const n = v.shape[d];
+  const zName = `${prefix}${v.name}_z`;
+  const zCoords = v.coords.map((c, i) => (i === d ? c.slice(0, n - 1) : c));
+  const z = m.add_variables({ name: zName, dims: v.dims, coords: zCoords, binary: true });
+  const other = v.dims.map((_, i) => i).filter((i) => i !== d);
+  const odims = other.map((i) => v.dims[i]);
+  const ocoords = other.map((i) => v.coords[i]);
+  const at = (arr, obj, oidx, b) => {
+    const idx = new Array(v.dims.length);
+    other.forEach((i, t) => (idx[i] = oidx[t]));
+    idx[d] = b;
+    return arr === "M" ? M[v.flat(...idx)] : obj.labels[obj.flat(...idx)];
+  };
+  // `x <= M * z` rows become `x - M z <= -0.0` in linopy
+  const first = `${prefix}${v.name}_upper_first`;
+  m.add_constraints(first, odims, ocoords, (...oidx) => [[at(null, v, oidx, 0), at(null, z, oidx, 0)], [1, -at("M", null, oidx, 0)], "<=", -0]);
+  const cons = [first];
+  if (n > 2) {
+    const mid = `${prefix}${v.name}_upper_mid`;
+    m.add_constraints(mid, v.dims, v.coords.map((c, i) => (i === d ? c.slice(1, n - 1) : c)), (...idx) => {
+      const b = idx[d] + 1;
+      const oidx = other.map((i) => idx[i]);
+      const Mi = at("M", null, oidx, b);
+      return [[at(null, v, oidx, b), at(null, z, oidx, b - 1), at(null, z, oidx, b)], [1, -Mi, -Mi], "<=", -0];
+    });
+    cons.push(mid);
+  }
+  const last = `${prefix}${v.name}_upper_last`;
+  m.add_constraints(last, odims, ocoords, (...oidx) => [[at(null, v, oidx, n - 1), at(null, z, oidx, n - 2)], [1, -at("M", null, oidx, n - 1)], "<=", -0]);
+  const card = `${prefix}${v.name}_card`;
+  m.add_constraints(card, odims, ocoords, (...oidx) => {
+    const vars = [];
+    for (let b = 0; b < n - 1; b++) vars.push(at(null, z, oidx, b));
+    return [vars, vars.map(() => 1), "<=", 1];
+  });
+  cons.push(last, card);
+  return [[zName], cons];
+}
+
 export class Model {
   constructor() {
     this._xCounter = 0;
@@ -271,6 +336,74 @@ export class Model {
     this._xCounter += v.size;
     this.variables.set(name, v);
     return v;
+  }
+
+  /**
+   * Add an SOS1 or SOS2 constraint along one dimension of a variable
+   * (`Model.add_sos_constraints`).
+   */
+  add_sos_constraints(variable, sos_type, sos_dim, big_m = null) {
+    if (sos_type !== 1 && sos_type !== 2) throw new Error(`ValueError: sos_type must be 1 or 2, got ${sos_type}`);
+    if (!variable.dims.includes(sos_dim)) throw new Error(`ValueError: sos_dim must name a variable dimension, got ${sos_dim}`);
+    if (variable.sos) {
+      throw new Error(
+        `ValueError: variable already has an sos${variable.sos.sos_type} constraint on dimension ${variable.sos.sos_dim}; remove it first`,
+      );
+    }
+    variable.sos = { sos_type, sos_dim, big_m_upper: big_m };
+  }
+
+  /** Names of variables carrying SOS constraints (`m.variables.sos`). */
+  get sosVariables() {
+    return [...this.variables.values()].filter((v) => v.sos).map((v) => v.name);
+  }
+
+  /**
+   * Reformulate SOS constraints as binary + linear constraints with big-M
+   * values from the variable bounds (`linopy.sos_reformulation`). Returns a
+   * token for `undo_sos_reformulation`.
+   */
+  reformulate_sos_constraints(prefix = "_sos_reform_") {
+    const result = { reformulated: [], savedAttrs: new Map(), addedVariables: [], addedConstraints: [] };
+    for (const name of this.sosVariables) {
+      const v = this.variables.get(name);
+      const { sos_type, sos_dim, big_m_upper } = v.sos;
+      const d = v.dims.indexOf(sos_dim);
+      result.savedAttrs.set(name, v.sos);
+      if (v.shape[d] <= 1) {
+        v.sos = null;
+        result.reformulated.push(name);
+        continue;
+      }
+      if (v.lower.some((x) => x < 0)) {
+        throw new Error(`ValueError: Variable '${name}' has negative lower bounds. SOS reformulation requires non-negative variables (lower >= 0).`);
+      }
+      const M = Float64Array.from(v.upper, (u) => (big_m_upper === null || big_m_upper === undefined ? u : Math.min(u, big_m_upper)));
+      if (M.some((x) => x === Infinity)) {
+        throw new Error(`ValueError: Variable '${name}' has infinite upper bounds. Set finite bounds or specify big_m in add_sos_constraints().`);
+      }
+      if (M.every((x) => x === 0)) {
+        v.sos = null;
+        result.reformulated.push(name);
+        continue;
+      }
+      const [vars, cons] = sos_type === 1 ? reformulateSos1(this, v, d, M, prefix) : reformulateSos2(this, v, d, M, prefix);
+      result.addedVariables.push(...vars);
+      result.addedConstraints.push(...cons);
+      v.sos = null;
+      result.reformulated.push(name);
+    }
+    return result;
+  }
+
+  /** Undo `reformulate_sos_constraints`. */
+  undo_sos_reformulation(result) {
+    for (const c of result.addedConstraints) this.constraints.delete(c);
+    for (const v of result.addedVariables) this.variables.delete(v);
+    for (const [name, attrs] of result.savedAttrs) {
+      const v = this.variables.get(name);
+      if (v) v.sos = attrs;
+    }
   }
 
   /** Create an empty constraint array; rows are then pushed in C order. */
@@ -429,6 +562,36 @@ export class Model {
       out.push("\n\ngeneral\n\n");
       for (const v of integers) for (const l of v.labels) if (l !== -1) out.push(` x${l}\n`);
     }
+    const sosVars = vars.filter((v) => v.sos);
+    if (sosVars.length) {
+      // one set per slice along `sos_dim`, identified by its largest member label
+      // (linopy emits the sets in polars group order; PSA.js sorts them)
+      out.push("\n\nsos\n\n");
+      for (const v of sosVars) {
+        const d = v.dims.indexOf(v.sos.sos_dim);
+        const coords = v.coords[d].values;
+        const ascending = coords.every((c, i) => i === 0 || (typeof c === "number" && c > coords[i - 1])) && typeof coords[0] === "number";
+        const weights = coords.map((c, i) => (ascending ? c : i));
+        const sets = new Map();
+        for (let k = 0; k < v.size; k++) {
+          const idx = unravel(k, v.shape, v.strides);
+          const b = idx[d];
+          idx[d] = 0;
+          const key = v.flat(...idx);
+          if (!sets.has(key)) sets.set(key, []);
+          sets.get(key).push([v.labels[k], weights[b]]);
+        }
+        const lines = [];
+        for (const members of sets.values()) {
+          const id = Math.max(...members.map(([l]) => l));
+          const kept = members.filter(([l]) => l !== -1);
+          if (id === -1 || !kept.length) continue;
+          lines.push([id, `s${id}: S${v.sos.sos_type} :: ${kept.map(([l, w]) => ` x${l}:${w}`).join(" ")}\n`]);
+        }
+        lines.sort((a, b) => a[0] - b[0]);
+        for (const [, line] of lines) out.push(line);
+      }
+    }
     out.push("end\n");
     return out.join("");
   }
@@ -436,8 +599,25 @@ export class Model {
   /**
    * Solve with HiGHS (highs-js). Returns [status, termination_condition].
    */
-  async solve({ solver_name = "highs", solver_options = {}, log_to_console = false } = {}) {
+  async solve({ solver_name = "highs", solver_options = {}, log_to_console = false, reformulate_sos = false } = {}) {
     if (solver_name !== "highs") throw new Error(`Solver ${solver_name} is not available in PSA.js (only 'highs').`);
+    if (reformulate_sos !== true && reformulate_sos !== false && reformulate_sos !== "auto") {
+      throw new Error(`ValueError: Invalid value for reformulate_sos: ${reformulate_sos}. Must be True, False, or 'auto'.`);
+    }
+    if (this.sosVariables.length) {
+      // HiGHS does not support SOS constraints
+      if (reformulate_sos === false) {
+        throw new Error(
+          `ValueError: Solver ${solver_name} does not support SOS constraints. Reformulate first via \`Model.solve(reformulate_sos=True)\` or \`model.apply_sos_reformulation()\`, or use a solver that supports SOS.`,
+        );
+      }
+      const state = this.reformulate_sos_constraints();
+      try {
+        return await this.solve({ solver_name, solver_options, log_to_console, reformulate_sos: false });
+      } finally {
+        this.undo_sos_reformulation(state);
+      }
+    }
     const highs = await getHighs();
     // linopy sanitizes the constraints in place before writing the problem
     for (const con of this.constraints.values()) con.sanitize_zeros().sanitize_infinities();
