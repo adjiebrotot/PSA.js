@@ -754,7 +754,7 @@ export class OptimizationAccessor {
     const sns = as_index(n, snapshots, "snapshots");
     n._multi_invest = multi_investment_periods ? 1 : 0;
     n._linearized_uc = linearized_unit_commitment ? 1 : 0;
-    if (typeof n.consistency_check === "function") n.consistency_check({ strict: ["unknown_buses"] });
+    if (typeof n.consistency_check === "function") n.consistency_check({ strict: ["unknown_buses", "maintenance", "phase_shift_bounds"] });
     else for (const c of n.components.values()) checkForUnknownBuses(n, c, true);
     const m = create_model(n, {
       snapshots: sns,

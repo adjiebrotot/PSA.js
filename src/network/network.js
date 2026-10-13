@@ -762,10 +762,12 @@ export class Network {
 
   *get_switchable_as_iter(component, attr, snapshots, inds = null) {
     const df = this.get_switchable_as_dense(component, attr, snapshots, inds);
+    // the series follow the order of `inds` (unique, known names only)
+    const cols = inds === null ? df.columns : new Index(asIndex(inds).unique().values, "name").intersection(df.columns);
     for (let i = 0; i < df.index.length; i++) {
       yield new Series(
-        Float64Array.from(df.columns.values, (c) => df.col(c)[i]),
-        df.columns,
+        Float64Array.from(cols.values, (c) => df.col(c)[i]),
+        cols,
         df.index.at(i),
       );
     }
@@ -858,8 +860,16 @@ export class Network {
     if (snapshots === null && investment_periods === null && !ignore_standard_types) {
       return deepCopyNetwork(this);
     }
-    const sns = snapshots === null ? this.snapshots : asIndex(snapshots, "snapshot");
-    const periods = investment_periods === null ? this.investment_periods : asIndex(investment_periods, "period");
+    let sns = snapshots === null ? this.snapshots : asIndex(snapshots, "snapshot");
+    let periods = investment_periods === null ? this.investment_periods : asIndex(investment_periods, "period");
+    if (sns.isMulti && periods.length > 0) {
+      // keep snapshots and investment periods consistent with each other
+      if (snapshots === null) sns = sns.filter(sns.values.map((t) => periods.has(t[0])));
+      else if (investment_periods === null) {
+        const used = new Set(sns.values.map((t) => labelKey(t[0])));
+        periods = periods.filter(periods.values.map((p) => used.has(labelKey(p))));
+      }
+    }
     const n = new Network({ ignore_standard_types });
     const others = [...this.all_components].filter((c) => c !== "Bus" && c !== "Carrier").sort();
     for (const cname of ["Bus", "Carrier", ...others]) {

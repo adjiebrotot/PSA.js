@@ -585,9 +585,11 @@ export class StatisticsAccessor {
       if (!attr) throw new KeyError(c);
       const cap = staticCol(comp, `${attr}_opt`);
       const cost = cost_attribute === "capital_cost" ? comp.capital_cost : staticCol(comp, cost_attribute);
+      // optimised piecewise capital costs (`<cost_attribute>_piecewise_opt`)
+      const pw = comp.static.has(`${cost_attribute}_piecewise_opt`) ? staticCol(comp, `${cost_attribute}_piecewise_opt`) : null;
       return Tab.series(
         comp.static.index,
-        Float64Array.from(cap, (x, i) => x * cost[i]),
+        Float64Array.from(cap, (x, i) => x * (pw ? cost[i] + pw[i] : cost[i] + 0)),
       );
     };
     let tab = this._aggregate_components(func, { ...o, agg: o.groupby_method });
@@ -598,12 +600,13 @@ export class StatisticsAccessor {
   /** Capital expenditure of the installed (pre-optimisation) capacity. */
   installed_capex(opts = {}) {
     const o = { ...DEFAULTS, ...opts };
+    const cost_attribute = opts.cost_attribute ?? "capital_cost";
     const func = (n, c) => {
       const comp = n.c.get(c);
       const attr = NOMINAL_ATTRS[c];
       if (!attr) throw new KeyError(c);
       const cap = staticCol(comp, attr);
-      const cost = comp.capital_cost;
+      const cost = cost_attribute === "capital_cost" ? comp.capital_cost : staticCol(comp, cost_attribute);
       return Tab.series(
         comp.static.index,
         Float64Array.from(cap, (x, i) => x * cost[i]),
@@ -721,7 +724,9 @@ export class StatisticsAccessor {
         if (!rows.length) throw new KeyError(c);
         if (rows.length !== 1) throw new Error("can only convert an array of size 1 to a Python scalar");
         const attr = rows[0].variable + port;
-        const cost = n.get_switchable_as_dense(c, costType);
+        let cost = n.get_switchable_as_dense(c, costType);
+        const pw = comp.dynamic[`${costType}_piecewise_opt`];
+        if (pw && !pw.empty) cost = frameOp(cost, pw, (a, b) => a + b);
         const p = dynamic(comp, attr);
         const v = costType === "marginal_cost_quadratic" ? frameMap(p, (x) => x * x) : p;
         const opex = frameOp(v, cost, (a, b) => a * b);
@@ -744,16 +749,15 @@ export class StatisticsAccessor {
     return this._finalize(tab, "Operational Expenditure", "currency");
   }
 
-  /** Total system cost (capex + opex). */
+  /** Total system cost (capex + fixed O&M + opex). */
   system_cost(opts = {}) {
     const groupby_time = opts.groupby_time === false ? "sum" : opts.groupby_time ?? "sum";
     if (opts.groupby_time === false) logger.warning("Passing `groupby_time=False` to `system_cost` is deprecated.");
     const capex = this.capex(stripKeys(opts, ["groupby_time"]));
+    const fom = this.fom(stripKeys(opts, ["groupby_time"]));
     const opex = this.opex({ ...opts, groupby_time });
-    let df;
-    if (!isEmpty(capex) && !isEmpty(opex)) df = addFill(capex, opex);
-    else if (!isEmpty(capex)) df = capex;
-    else df = opex;
+    const parts = [capex, fom, opex].filter((part) => !isEmpty(part));
+    const df = parts.length ? parts.slice(1).reduce((a, b) => addFill(a, b), parts[0]) : capex;
     df.attrs = { name: "System Cost", unit: "currency" };
     return df;
   }

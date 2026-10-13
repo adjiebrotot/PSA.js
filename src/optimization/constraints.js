@@ -417,9 +417,6 @@ export function define_operational_constraints_for_committables(n, sns, componen
   }
 }
 
-function labelKeyEq(a, b) {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
 
 /** Big-M values (snapshot-major Float64Array) for committable extendables. */
 export function bigMValues(c, names, sns, maxPu = null, committableBigM = null) {

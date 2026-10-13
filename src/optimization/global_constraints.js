@@ -332,7 +332,9 @@ export function define_primary_energy_limit(n, sns) {
     const glc = glcRow(n, i);
     let snsSel;
     if (Number.isNaN(glc.investment_period)) snsSel = sns;
-    else if (sns.isMulti && sns.uniqueLevel(0).has(glc.investment_period)) snsSel = snsForPeriod(sns, glc.investment_period);
+    else if (!n._multi_invest) {
+      throw new Error(`GlobalConstraint '${name}' sets \`investment_period\`, but the network has no investment periods.`);
+    } else if (sns.isMulti && sns.uniqueLevel(0).has(glc.investment_period)) snsSel = snsForPeriod(sns, glc.investment_period);
     else continue;
     const cst = n.c.carriers.static;
     const emCol = cst.col(glc.carrier_attribute);
@@ -387,7 +389,9 @@ export function define_operational_limit(n, sns) {
     const glc = glcRow(n, i);
     let snsSel;
     if (Number.isNaN(glc.investment_period)) snsSel = sns;
-    else if (sns.isMulti && sns.uniqueLevel(0).has(glc.investment_period)) snsSel = snsForPeriod(sns, glc.investment_period);
+    else if (!n._multi_invest) {
+      throw new Error(`GlobalConstraint '${name}' sets \`investment_period\`, but the network has no investment periods.`);
+    } else if (sns.isMulti && sns.uniqueLevel(0).has(glc.investment_period)) snsSel = snsForPeriod(sns, glc.investment_period);
     else continue;
     const vars = [];
     const coeffs = [];
@@ -548,7 +552,9 @@ export function define_transmission_expansion_cost_limit(n, sns) {
           return w;
         });
       } else compWeights = extI.values.map(() => weights);
-      const cc = staticValues(c, "capital_cost", extI);
+      // annuitised investment cost (`c.capital_cost`, without fixed O&M)
+      const ccAll = c.capital_cost;
+      const cc = extI.values.map((nm) => ccAll[c.static.index.getLoc(nm)]);
       const v = labeler1(m.variables.get(`${cName}-${attr}`), extI);
       extI.values.forEach((_, j) => {
         vars.push(v(j));
