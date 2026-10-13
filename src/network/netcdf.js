@@ -157,7 +157,8 @@ class ImporterNetCDF {
     const t = `${listName}_`;
     const df = new DataFrame({ index: new Index(idx.value.map((x) => (typeof x === "number" || typeof x === "string" ? x : String(x))), "name") });
     for (const [name, v] of this.vars) {
-      if (!name.startsWith(t) || name.slice(t.length, t.length + 2) === "t_" || name === idxName || this._isCoordinate(name)) continue;
+      const rest = name.slice(t.length, t.length + 3);
+      if (!name.startsWith(t) || rest.startsWith("t_") || rest === "pw_" || name === idxName || this._isCoordinate(name)) continue;
       const attr = name.slice(t.length);
       const vals = v.value;
       df.set(attr, vals.every((x) => typeof x === "number") ? Float64Array.from(vals) : vals.map((x) => (x === null ? "" : x)));
@@ -180,6 +181,27 @@ class ImporterNetCDF {
         );
       });
       yield [attr, df];
+    }
+  }
+
+  *getPiecewise(listName) {
+    const t = `${listName}_pw_`;
+    for (const [name, v] of this.vars) {
+      if (!name.startsWith(t) || this._isCoordinate(name)) continue;
+      const names = this.vars.get(`${name}_i`)?.value ?? [];
+      const attrs = this.vars.get(`${name}_attr_i`)?.value ?? [];
+      const [nB, nN, nA] = v.shape;
+      const bps = this.vars.get("breakpoint")?.value ?? Array.from({ length: nB }, (_, i) => i);
+      const tuples = [];
+      const data = new Map();
+      for (let j = 0; j < nN; j++) {
+        for (let a = 0; a < nA; a++) {
+          const tup = [String(names[j]), String(attrs[a])];
+          tuples.push(tup);
+          data.set(tup, Float64Array.from({ length: nB }, (_, i) => v.value[(i * nN + j) * nA + a]));
+        }
+      }
+      yield [name.slice(t.length), new DataFrame({ index: new Index(bps.slice(0, nB), "breakpoint"), columns: new Index(tuples, ["name", "attribute"]), data })];
     }
   }
 }
@@ -294,6 +316,31 @@ async function exportToNetCDF(n, path, { export_standard_types = false, compress
         for (let i = 0; i < nS; i++) flat[i * cols.length + j] = Number(a[i]);
       });
       w.variable(name, ["snapshots", `${name}_i`], float32 ? Array.from(Float32Array.from(flat)) : flat, true);
+    }
+    // piecewise data share one "breakpoint" dimension; shorter frames are
+    // padded with NaN rows (dropped again on import)
+    if (ex.piecewise.length) {
+      const nB = Math.max(...ex.piecewise.map(({ df }) => df.index.length));
+      w.dimension(
+        "breakpoint",
+        Array.from({ length: nB }, (_, i) => i),
+      );
+      for (const { listName, attr, df } of ex.piecewise) {
+        const name = `${listName}_pw_${attr}`;
+        const names = df.columns.uniqueLevel("name").values.map(String);
+        const attrs = df.columns.uniqueLevel("attribute").values.map(String);
+        w.dimension(`${name}_i`, names);
+        w.dimension(`${name}_attr_i`, attrs);
+        const flat = new Array(nB * names.length * attrs.length).fill(NaN);
+        names.forEach((nm, j) => {
+          attrs.forEach((a, k) => {
+            if (!df.has([nm, a])) return;
+            const col = df.col([nm, a]);
+            for (let i = 0; i < df.index.length; i++) flat[(i * names.length + j) * attrs.length + k] = Number(col[i]);
+          });
+        });
+        w.variable(name, ["breakpoint", `${name}_i`, `${name}_attr_i`], float32 ? Array.from(Float32Array.from(flat)) : flat, true);
+      }
     }
   } finally {
     f.close();

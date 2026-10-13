@@ -13,6 +13,7 @@ import { NOMINAL_ATTRS, activityMask, denseValues, staticValues, weightings, per
 import { labeler1, labeler2 } from "./variables.js";
 import { logger } from "../logger.js";
 import { pyPow } from "../core/pymath.js";
+import { define_piecewise, optionsFor } from "./piecewise.js";
 
 const r = (lc, rc) => -(lc - rc);
 
@@ -935,17 +936,19 @@ function iterBalanceArgs(c, sns) {
       const [db, cb] = b.split("|").map(Number);
       return da - db || ca - cb;
     });
+    const delayGroups = [];
     for (const key of keys) {
       const g = groups.get(key);
       const names = new Index(g.names, "name").intersection(active);
       if (names.empty) continue;
-      out.push({ busCol: `bus${port}`, coeffAttr: `${c._coefficient_attr}${suffix}`, names, delay: g.delay, cyclic: g.cyclic });
+      delayGroups.push({ names, delay: g.delay, cyclic: g.cyclic });
     }
+    out.push({ busCol: `bus${port}`, coeffAttr: `${c._coefficient_attr}${suffix}`, names: active, delayGroups });
   }
   return out;
 }
 
-export function define_nodal_balance_constraints(n, sns, { transmissionLosses = false, buses = null, suffix = "" } = {}) {
+export function define_nodal_balance_constraints(n, sns, { transmissionLosses = false, buses = null, suffix = "", piecewiseOptions = [] } = {}) {
   const m = n.model;
   const busI = buses ?? n.c.buses.names;
   const nS = sns.length;
@@ -995,25 +998,51 @@ export function define_nodal_balance_constraints(n, sns, { transmissionLosses = 
   }
   for (const component of ["Process", "Link"]) {
     const c = n.c.get(component);
-    for (const { busCol, coeffAttr, names, delay, cyclic } of iterBalanceArgs(c, sns)) {
-      const coeff = denseValues(c, coeffAttr, sns, names);
-      const v = labeler2(m.variables.get(`${c.name}-p`), sns, names);
-      let src = null;
-      let valid = null;
-      if (delay > 0) {
-        [src, valid] = getDelaySourceIndexer(sns, weightings(n, "generators", sns), delay, cyclic);
+    for (const { busCol, coeffAttr, names: portNames, delayGroups } of iterBalanceArgs(c, sns)) {
+      const portBuses = staticValues(c, busCol, portNames);
+      if (!portBuses.some((b) => busI.has(b) && b !== "")) continue;
+
+      let pw = null;
+      if (c._piecewise_schema(coeffAttr)) {
+        const status = c.committables.intersection(portNames).empty ? null : m.variables.get(`${c.name}-status`);
+        pw = define_piecewise(n, c, {
+          xVar: m.variables.get(`${c.name}-p`),
+          sns,
+          pwAttr: coeffAttr,
+          auxVarName: c._piecewise_aux_var(coeffAttr),
+          activeNames: portNames,
+          sign: "=",
+          cumulativeAttr: false,
+          extraOptions: optionsFor(piecewiseOptions, c.name, coeffAttr),
+          status,
+        });
       }
-      const busVals = staticValues(c, busCol, names);
-      const nN = names.length;
-      const members = [];
-      names.values.forEach((nm, j) => {
-        const bus = busVals[j];
-        if (!busI.has(bus) || bus === "") return;
-        if (delay <= 0) members.push({ bus, lab: (s) => v(s, j), coef: (s) => coeff[s * nN + j] });
-        else members.push({ bus, lab: (s) => v(src[s], j), coef: (s) => coeff[s * nN + j] * (valid[s] ? 1 : 0) });
-      });
-      if (!members.length) continue;
-      pushBlock(members);
+
+      for (const { names: dNames, delay, cyclic } of delayGroups) {
+        const groups = pw ? [[dNames.difference(pw.names), false], [dNames.intersection(pw.names), true]] : [[dNames, false]];
+        let src = null;
+        let valid = null;
+        if (delay > 0) {
+          [src, valid] = getDelaySourceIndexer(sns, weightings(n, "generators", sns), delay, cyclic);
+        }
+        for (const [gNames, isPw] of groups) {
+          // `cbuses.indexes["name"].intersection(group_names)`: port order
+          const names = portNames.filter(portBuses.map((b) => busI.has(b) && b !== "")).intersection(gNames);
+          if (names.empty) continue;
+          const nN = names.length;
+          const coeff = isPw ? null : denseValues(c, coeffAttr, sns, names);
+          const v = labeler2(isPw ? pw.variable : m.variables.get(`${c.name}-p`), sns, names);
+          const busVals = staticValues(c, busCol, names);
+          const members = [];
+          names.values.forEach((nm, j) => {
+            const bus = busVals[j];
+            const cf = isPw ? () => 1 : (s) => coeff[s * nN + j];
+            if (delay <= 0) members.push({ bus, lab: (s) => v(s, j), coef: cf });
+            else members.push({ bus, lab: (s) => v(src[s], j), coef: (s) => cf(s) * (valid[s] ? 1 : 0) });
+          });
+          pushBlock(members);
+        }
+      }
     }
   }
   // rhs from loads

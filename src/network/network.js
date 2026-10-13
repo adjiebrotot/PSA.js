@@ -9,6 +9,8 @@ import { DataFrame, Series, isNumberArray, makeFilled } from "../core/frame.js";
 import { Index, asIndex, labelKey } from "../core/index.js";
 import { pyFloatRepr } from "../core/csv.js";
 import { ComponentsStore, installStoreAccessors } from "./store.js";
+import { NOMINAL_ATTRS } from "../components/components.js";
+import { importPiecewiseFromDf, piecewiseFromAddValue } from "../components/piecewise.js";
 import { logger } from "../logger.js";
 
 export const DEFAULT_TIMESTAMP = "now";
@@ -114,6 +116,10 @@ function inferDtype(arr) {
   if (arr.length && allBool) return "bool";
   if (allNum) return "float";
   return "object";
+}
+
+function isPlainObject(v) {
+  return v !== null && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype;
 }
 
 /** Generic deep copy of a DataFrame. */
@@ -536,7 +542,23 @@ export class Network {
 
     const series = {};
     const staticVals = {};
+    const piecewise = {};
+    const addSuffix = (s) => {
+      s = pyStr(s);
+      return typeof suffix === "string" && s.endsWith(suffix) ? s : s + suffix;
+    };
     for (let [k, v] of Object.entries(kwargs)) {
+      // Intercept piecewise breakpoint data: a dict {x: y} or a DataFrame whose
+      // columns are the curve attributes (or (name, attribute) tuples)
+      const pwSchema = c._piecewise_schema(k);
+      if (pwSchema) {
+        if (isPlainObject(v)) v = new Map(Object.entries(v).map(([x, y]) => [Number(x), y]));
+        const pw = piecewiseFromAddValue(v, k, pwSchema.x, names, addSuffix);
+        if (pw) {
+          piecewise[k] = pw;
+          continue;
+        }
+      }
       if (v instanceof Series && single) {
         if (!v.index.equals(this.snapshots)) throw new Error(`Series ${k} has an index which does not align with the passed network snapshots.`);
       } else if (v instanceof Series) {
@@ -600,6 +622,13 @@ export class Network {
     const staticDf = new DataFrame({ index: names, columns: [...data.keys()], data });
 
     this._import_components_from_df(staticDf, c.name, overwrite);
+
+    // Load piecewise breakpoint data (after the static import, so that
+    // overwriting an existing component does not drop the new breakpoints)
+    const extCol = `${NOMINAL_ATTRS[c.name] ?? "None"}_extendable`;
+    const isExtendable = staticDf.has(extCol) ? new Map(names.values.map((nm, i) => [nm, Boolean(staticDf.col(extCol)[i])])) : null;
+    for (const [k, v] of Object.entries(piecewise)) importPiecewiseFromDf(this, v, c.name, k, { isExtendable, overwrite });
+
     for (const [k, v] of Object.entries(series)) this._import_series_from_df(v, c.name, k, overwrite);
 
     return return_names ? names : null;
@@ -615,6 +644,12 @@ export class Network {
       const df = c.dynamic[k];
       const drop = df.columns.intersection(names);
       if (drop.length) c.dynamic[k] = df.dropCols(drop);
+    }
+    // Drop piecewise breakpoint data
+    const nameKeys = new Set(names.values.map(labelKey));
+    for (const [k, df] of Object.entries(c.piecewise)) {
+      const stale = df.columns.values.filter((t) => nameKeys.has(labelKey(t[0])));
+      if (stale.length) c.piecewise[k] = df.loc(null, df.columns.filter((t) => !nameKeys.has(labelKey(t[0]))));
     }
   }
 
@@ -1177,6 +1212,8 @@ function deepCopyNetwork(src) {
     dst.static = copyFrame(comp.static);
     dst.dynamic = {};
     for (const [k, v] of Object.entries(comp.dynamic)) dst.dynamic[k] = copyFrame(v);
+    dst.piecewise = {};
+    for (const [k, v] of Object.entries(comp.piecewise)) dst.piecewise[k] = copyFrame(v);
   }
   if (src.c.sub_networks.static.has("obj")) {
     // rebuild SubNetwork objects bound to the new network

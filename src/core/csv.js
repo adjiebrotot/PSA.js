@@ -225,3 +225,47 @@ export function writeCSV(df, { index = true, indexLabel = null, columnKinds = {}
   }
   return lines.join("\n") + "\n";
 }
+
+/**
+ * Write a frame with two-level (tuple) columns like `DataFrame.to_csv`:
+ * one header row per column level (prefixed by the level name), then a row
+ * with the index name.
+ */
+export function writeCSVMulti(df, { quoteChar = '"' } = {}) {
+  const lines = [];
+  const names = df.columns.names;
+  for (let l = 0; l < names.length; l++) {
+    lines.push([names[l] ?? "", ...df.columns.values.map((t) => String(t[l]))].map((h) => quote(h, quoteChar)).join(","));
+  }
+  lines.push([df.index.name ?? "", ...df.columns.values.map(() => "")].map((h) => quote(h, quoteChar)).join(","));
+  const cols = df.columns.values.map((c) => df.col(c));
+  for (let i = 0; i < df.index.length; i++) {
+    const row = [formatCell(df.index.at(i))];
+    for (const a of cols) row.push(formatCell(a[i], { floatColumn: true }));
+    lines.push(row.map((x) => quote(x, quoteChar)).join(","));
+  }
+  return lines.join("\n") + "\n";
+}
+
+/** Read a CSV written by `writeCSVMulti` (`pd.read_csv(index_col=0, header=[0, 1])`). */
+export function readCSVMulti(text, { quoteChar = '"', nlevels = 2 } = {}) {
+  const res = Papa.parse(text, { skipEmptyLines: true, quoteChar });
+  const rows = res.data;
+  const headers = rows.slice(0, nlevels);
+  const indexRow = rows[nlevels];
+  // the index-name row only has its first field set
+  const hasIndexRow = indexRow && indexRow.slice(1).every((x) => x === "");
+  const body = rows.slice(nlevels + (hasIndexRow ? 1 : 0));
+  const ncol = headers[0].length;
+  const levelNames = headers.map((h) => (h[0] === "" ? null : h[0]));
+  const tuples = [];
+  const data = new Map();
+  for (let j = 1; j < ncol; j++) {
+    const t = headers.map((h) => h[j]);
+    tuples.push(t);
+    const { values } = inferColumn(body.map((r) => (j < r.length ? r[j] : "")));
+    data.set(t, Float64Array.from(values, (v) => (typeof v === "number" ? v : Number(v))));
+  }
+  const index = new Index(inferIndexLabels(body.map((r) => r[0]), false), hasIndexRow && indexRow[0] !== "" ? indexRow[0] : null);
+  return new DataFrame({ index, columns: new Index(tuples, levelNames), data });
+}

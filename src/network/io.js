@@ -4,7 +4,8 @@
  * (mirrors `pypsa.network.io` CSV importer/exporter).
  */
 
-import { readCSV, writeCSV } from "../core/csv.js";
+import { readCSV, writeCSV, readCSVMulti, writeCSVMulti } from "../core/csv.js";
+import { importPiecewiseFromDf } from "../components/piecewise.js";
 import { DataFrame } from "../core/frame.js";
 import { Index } from "../core/index.js";
 import { Network, updatePortsComponentAttrs } from "./network.js";
@@ -189,9 +190,18 @@ class ImporterCSV {
 
   *getSeries(listName) {
     for (const fn of this.folder.list()) {
-      if (fn.startsWith(`${listName}-`) && fn.endsWith(".csv")) {
+      if (fn.startsWith(`${listName}-`) && fn.endsWith(".csv") && !fn.endsWith("-pw.csv")) {
         const attr = fn.slice(listName.length + 1, -4);
         yield [attr, readCSV(this.folder.read(fn), { indexCol: 0 })];
+      }
+    }
+  }
+
+  *getPiecewise(listName) {
+    for (const fn of this.folder.list()) {
+      if (fn.startsWith(`${listName}-`) && fn.endsWith("-pw.csv") && fn.length > listName.length + 8) {
+        const attr = fn.slice(listName.length + 1, -7);
+        yield [attr, readCSVMulti(this.folder.read(fn))];
       }
     }
   }
@@ -292,6 +302,9 @@ function importFromImporter(n, importer, skipTime = false) {
         n._import_series_from_df(sdf2, component, attr);
       }
     }
+    if (typeof importer.getPiecewise === "function") {
+      for (const [attr, pdf] of importer.getPiecewise(listName)) importPiecewiseFromDf(n, pdf, component, attr);
+    }
     imported.push(listName);
   }
   logger.info(`Imported network '${n.name}' has ${imported.join(", ")}`);
@@ -375,6 +388,7 @@ export function collectExport(n, { export_standard_types = false } = {}) {
 
   const statics = [];
   const series = [];
+  const piecewise = [];
   const removed = [];
   for (const component of [...n.all_components].sort()) {
     const c = n.c.get(component);
@@ -421,8 +435,13 @@ export function collectExport(n, { export_standard_types = false } = {}) {
         removed.push({ listName, attr });
       }
     }
+
+    for (const [attr, df] of Object.entries(c.piecewise)) {
+      if (!df.empty) piecewise.push({ listName, attr, df });
+      else removed.push({ listName, attr, piecewise: true });
+    }
   }
-  return { name: n.name, attrs, crs, meta: n.meta, snapshots, periods, statics, series, removed };
+  return { name: n.name, attrs, crs, meta: n.meta, snapshots, periods, statics, series, piecewise, removed };
 }
 
 function exportToFolder(n, folder, { export_standard_types = false } = {}) {
@@ -453,7 +472,10 @@ function exportToFolder(n, folder, { export_standard_types = false } = {}) {
     folder.write(`${listName}.csv`, writeCSV(df));
     for (const { attr, df: sdf } of seriesBy.get(listName) ?? []) folder.write(`${listName}-${attr}.csv`, writeCSV(sdf));
   }
-  for (const { listName, attr } of ex.removed) if (attr !== null) folder.remove(`${listName}-${attr}.csv`);
+  for (const { listName, attr, df } of ex.piecewise) folder.write(`${listName}-${attr}-pw.csv`, writeCSVMulti(df));
+  for (const { listName, attr, piecewise } of ex.removed) {
+    if (attr !== null) folder.remove(piecewise ? `${listName}-${attr}-pw.csv` : `${listName}-${attr}.csv`);
+  }
   logger.info(`Exported network '${n.name}' contains: ${ex.statics.map((s) => s.listName).join(", ")}`);
 }
 

@@ -9,6 +9,7 @@ import { Index, asIndex, labelKey } from "../core/index.js";
 import { annuity, periodizedCost } from "../costs.js";
 import { typToDtype } from "./types.js";
 import { logger } from "../logger.js";
+import { piecewiseAttrs, piecewiseSchema, splitPort, emptyPiecewiseFrame } from "./piecewise.js";
 
 export const RE_PORTS = /^bus(\d*)$/;
 export const RE_PORTS_GE_2 = /^bus((?:[2-9]|[1-9]\d+))$/;
@@ -58,6 +59,54 @@ export class Components {
     for (const [attr, def] of ctype.defaults) {
       if (def.varying) this.dynamic[attr] = new DataFrame({ index: sns, columns: [] });
     }
+    // Piecewise breakpoint data: one empty frame per piecewise y attribute
+    this.piecewise = {};
+    for (const row of piecewiseAttrs(ctype.name)) {
+      if (!(row.y in this.piecewise)) this.piecewise[row.y] = emptyPiecewiseFrame();
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Piecewise data
+  // ------------------------------------------------------------------
+
+  /** Piecewise schema rows for this component type. */
+  get _piecewise_attrs() {
+    return piecewiseAttrs(this.name);
+  }
+
+  /** Whether this component has piecewise breakpoint data for `attr`. */
+  has_piecewise(attr) {
+    const df = this.piecewise[attr];
+    return df !== undefined && !df.empty;
+  }
+
+  /** Piecewise schema row for `attr`, ignoring any port suffix (null if undefined). */
+  _piecewise_schema(attr) {
+    let row = piecewiseSchema(this.name, attr);
+    const [base, port] = splitPort(attr);
+    if (!row && port) {
+      // only schema rows with a {port} placeholder accept suffixed attrs
+      const candidate = piecewiseSchema(this.name, base);
+      if (candidate && candidate.aux_variable.includes("{port}")) row = candidate;
+    }
+    return row;
+  }
+
+  /** Model-variable name of the piecewise auxiliary variable for `attr`. */
+  _piecewise_aux_var(attr) {
+    const row = this._piecewise_schema(attr);
+    if (!row) throw new Error(`ValueError: '${this.name}' has no piecewise schema for attribute '${attr}'.`);
+    // an empty port suffix denotes port 1
+    const port = splitPort(attr)[1] || "1";
+    return `${this.name}-${row.aux_variable.replace("{port}", port)}`;
+  }
+
+  /** Model-variable name of the piecewise x variable for `attr`. */
+  _piecewise_x_var(attr) {
+    const row = this._piecewise_schema(attr);
+    if (!row) throw new Error(`ValueError: '${this.name}' has no piecewise schema for attribute '${attr}'.`);
+    return `${this.name}-${row.x.replaceAll("_pu", "")}`;
   }
 
   // ------------------------------------------------------------------

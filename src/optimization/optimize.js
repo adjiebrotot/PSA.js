@@ -21,6 +21,7 @@ import * as G from "./global_constraints.js";
 import { sparseLU } from "../linalg/sparse.js";
 import { logger } from "../logger.js";
 import { checkForUnknownBuses } from "../network/network.js";
+import { define_piecewise, asPiecewiseOptions, optionsFor } from "./piecewise.js";
 
 let warnedObjectiveConstant = false;
 
@@ -61,7 +62,7 @@ function periodizedCostFor(c, names) {
   return names.values.map((nm) => pc[c.static.index.getLoc(nm)]);
 }
 
-export function define_objective(n, sns, includeObjectiveConstant) {
+export function define_objective(n, sns, includeObjectiveConstant, piecewiseOptions = []) {
   const m = n.model;
   const capexTerms = [];
   const opexTerms = [];
@@ -116,9 +117,37 @@ export function define_objective(n, sns, includeObjectiveConstant) {
     for (const [cName, attr] of lookupQuery((r) => r[costType])) {
       const c = n.c.get(cName);
       if (c.static.index.length === 0) continue;
+      let names = c.active_assets;
+      if (c.has_piecewise(costType)) {
+        const status = c.committables.intersection(names).empty ? null : m.variables.get(`${c.name}-status`);
+        const pw = define_piecewise(n, c, {
+          xVar: m.variables.get(c._piecewise_x_var(costType)),
+          sns,
+          pwAttr: costType,
+          auxVarName: c._piecewise_aux_var(costType),
+          activeNames: names,
+          sign: ">=",
+          cumulativeAttr: true,
+          extraOptions: optionsFor(piecewiseOptions, c.name, costType),
+          status,
+        });
+        if (pw) {
+          // `(pw_cost_var * weight).sum(dim=["name", "snapshot"])`
+          const lab = labeler2(pw.variable, sns, pw.names);
+          const vars = [];
+          const coeffs = [];
+          for (let j = 0; j < pw.names.length; j++) {
+            for (let s = 0; s < sns.length; s++) {
+              vars.push(lab(s, j));
+              coeffs.push(weight[s]);
+            }
+          }
+          opexTerms.push([vars, coeffs]);
+          names = names.difference(pw.names);
+        }
+      }
       const varName = `${c.name}-${attr}`;
       if (!m.variables.has(varName) && costType === "spill_cost") continue;
-      const names = c.active_assets;
       const cost = denseValues(c, costType, sns, names);
       if (cost.length === 0 || cost.every((x) => x === 0)) continue;
       const nN = names.length;
@@ -173,30 +202,61 @@ export function define_objective(n, sns, includeObjectiveConstant) {
     opexTerms.push([vars, coeffs]);
   }
 
-  for (const [cName, attr] of Object.entries(NOMINAL_ATTRS)) {
-    const c = n.c.get(cName);
-    const extI = c.extendables.intersection(c.active_assets);
-    if (extI.empty) continue;
-    const pc = periodizedCostFor(c, extI);
-    if (pc.length === 0 || pc.every((x) => x === 0)) continue;
-    let weighted;
+  // per-name capex weights, `(active * period_weight) * cost` summed over periods
+  const capexWeights = (c, names, cost) => {
     if (n._multi_invest) {
       // one term per (name, period); the LP writer sums the non-zero ones
-      const pw = periodActiveWeights(c, extI);
-      weighted = extI.values.map((_, j) => {
+      const pw = periodActiveWeights(c, names);
+      return names.values.map((_, j) => {
         let acc = null;
         for (const w of pw) {
-          const t = w[j] * pc[j];
+          const t = w[j] * cost[j];
           if (t !== 0) acc = acc === null ? t : acc + t;
         }
         return acc ?? 0;
       });
-    } else {
-      const active = anyActive(c, extI, sns);
-      weighted = pc.map((x, j) => (active[j] ? 1 : 0) * x);
     }
+    const active = anyActive(c, names, sns);
+    return cost.map((x, j) => (active[j] ? 1 : 0) * x);
+  };
+
+  for (const [cName, attr] of Object.entries(NOMINAL_ATTRS)) {
+    const c = n.c.get(cName);
+    let extI = c.extendables.intersection(c.active_assets);
+    if (extI.empty) continue;
+
+    const pwSchema = c._piecewise_schema("capital_cost");
+    if (pwSchema) {
+      const pw = define_piecewise(n, c, {
+        xVar: m.variables.get(`${c.name}-${pwSchema.x}`),
+        sns,
+        pwAttr: "capital_cost",
+        auxVarName: `${c.name}-${pwSchema.aux_variable}`,
+        activeNames: extI,
+        sign: ">=",
+        cumulativeAttr: true,
+        extraOptions: optionsFor(piecewiseOptions, c.name, "capital_cost"),
+      });
+      if (pw) {
+        const overnight = staticValues(c, "overnight_cost", pw.names);
+        const bad = pw.names.values.filter((_, j) => overnight[j] !== null && overnight[j] !== undefined && !Number.isNaN(overnight[j]));
+        if (bad.length) {
+          throw new Error(
+            `ValueError: Components [${bad.map((b) => `'${b}'`).join(", ")}] of type ${c.name} define both a piecewise 'capital_cost' curve and 'overnight_cost'. The piecewise curve must already be periodized; remove 'overnight_cost'.`,
+          );
+        }
+        extI = extI.difference(pw.names);
+        const lab = labeler1(pw.variable, pw.names);
+        capexTerms.push([pw.names.values.map((_, j) => lab(j)), capexWeights(c, pw.names, pw.names.values.map(() => 1))]);
+      }
+    }
+
+    // linear capital cost for non-piecewise components
+    if (extI.empty) continue;
+    const pc = periodizedCostFor(c, extI);
+    if (pc.length === 0 || pc.every((x) => x === 0)) continue;
     const lab = labeler1(m.variables.get(`${c.name}-${attr}`), extI);
-    capexTerms.push([extI.values.map((_, j) => lab(j)), weighted]);
+    capexTerms.push([extI.values.map((_, j) => lab(j)), capexWeights(c, extI, pc)]);
   }
 
   for (const [cName, attr] of LOOKUP.filter((r) => r.variable === "start_up" || r.variable === "shut_down").map((r) => [r.component, r.variable])) {
@@ -251,9 +311,18 @@ export function create_model(
     committable_big_m = null,
     meshed_thresholds = null,
     cycle_basis_method = "bfs-refined",
+    piecewise_options = null,
   } = {},
 ) {
   const sns = as_index(n, snapshots, "snapshots");
+  // deduplicated like PyPSA's `set` of frozen PiecewiseOptions
+  const pwSeen = new Set();
+  const piecewiseOpts = asPiecewiseOptions(piecewise_options).filter((o) => {
+    const key = JSON.stringify([o.component, o.attribute, o.sign, o.name, o.method, o.cumulative_attr]);
+    if (pwSeen.has(key)) return false;
+    pwSeen.add(key);
+    return true;
+  });
   n._linearized_uc = linearized_unit_commitment ? 1 : 0;
   n._linearizedUcSet = true;
   n._multi_invest = multi_investment_periods ? 1 : 0;
@@ -311,7 +380,7 @@ export function create_model(
   for (const t of [...thresholds, Infinity]) {
     const sel = busNames.filter(busCounts.map((cnt) => (t === Infinity ? cnt > prev : cnt > prev && cnt <= t)));
     const suffix = prev > 0 ? `-meshed-${prev}` : "";
-    if (!sel.empty) C.define_nodal_balance_constraints(n, sns, { transmissionLosses: transmission_losses, buses: sel, suffix });
+    if (!sel.empty) C.define_nodal_balance_constraints(n, sns, { transmissionLosses: transmission_losses, buses: sel, suffix, piecewiseOptions: piecewiseOpts });
     prev = t;
   }
 
@@ -339,7 +408,7 @@ export function create_model(
     }
   }
 
-  G.define_primary_energy_limit(n, sns);
+  G.define_primary_energy_limit(n, sns, piecewiseOpts);
   G.define_transmission_expansion_cost_limit(n, sns);
   G.define_transmission_volume_expansion_limit(n, sns);
   G.define_tech_capacity_expansion_limit(n, sns);
@@ -347,7 +416,7 @@ export function create_model(
   G.define_nominal_constraints_per_bus_carrier(n, sns);
   G.define_growth_limit(n, sns);
 
-  define_objective(n, sns, includeConst);
+  define_objective(n, sns, includeConst, piecewiseOpts);
   return m;
 }
 
@@ -393,18 +462,30 @@ export function setDynamicData(n, component, attr, df) {
   c.dynamic[attr] = out;
 }
 
-function solutionFrame(v, sns) {
+function solutionFrame(v, sns, sol = v.solution) {
   const names = v.coords[1];
-  const lab = labeler2(v, sns, names);
   const nN = names.length;
   const data = new Map();
   names.values.forEach((nm, j) => {
     const a = new Float64Array(sns.length);
-    for (let s = 0; s < sns.length; s++) a[s] = v.solution[v.coords[0].getLoc(sns.at(s)) * nN + j];
+    for (let s = 0; s < sns.length; s++) a[s] = sol[v.coords[0].getLoc(sns.at(s)) * nN + j];
     data.set(nm, a);
   });
-  void lab;
   return new DataFrame({ index: sns, columns: names, data });
+}
+
+/** `port_df.update(-df_piecewise)` for piecewise port coefficients of Link/Process. */
+function updatePiecewisePort(portDf, c, m, effAttr, varName, sns) {
+  if (!c.has_piecewise(effAttr)) return;
+  const pv = m.variables.get(varName);
+  if (!pv) throw new Error(`KeyError: '${varName}'`);
+  const pdf = solutionFrame(pv, sns);
+  for (const nm of pdf.columns) {
+    if (!portDf.has(nm)) continue;
+    const src = pdf.col(nm);
+    const dst = portDf.col(nm);
+    for (let i = 0; i < src.length; i++) if (!Number.isNaN(src[i])) dst[i] = -src[i];
+  }
 }
 
 function negFrame(df) {
@@ -445,16 +526,38 @@ export function assign_solution(n) {
   }
   for (const [name, v] of m.variables) {
     if (name === "objective_constant" || name.startsWith("CVaR")) continue;
+    // piecewise formulation helpers (linopy breakpoint/segment/piece/link dims)
+    if (v.dims.some((d) => ["_breakpoint", "_segment", "_breakpoint_piece", "_pwl_var"].includes(d))) continue;
     if (!name.includes("-")) continue;
     const k = name.indexOf("-");
     const cName = name.slice(0, k);
-    const attr = name.slice(k + 1);
+    let attr = name.slice(k + 1);
     // auxiliary McCormick linearisation variables
     if (attr === "maintenance_capacity" || attr === "maintenance_status") continue;
     if (!n.c.has(cName)) continue;
     const c = n.c.get(cName);
+    const pwSchema = c._piecewise_attrs.find((row) => row.aux_variable === attr);
+    // Link/Process port variables are dealt with when processing `p`
+    if (!pwSchema && attr.endsWith("_piecewise")) continue;
+    let sol = v.solution;
+    if (pwSchema) {
+      // piecewise auxiliaries are passed back per unit of their x variable
+      const xv = m.variables.get(c._piecewise_x_var(pwSchema.y));
+      const nameDim = v.dims.indexOf("name");
+      const xpos = xv.coords[xv.dims.indexOf("name")].getIndexer(v.coords[nameDim]);
+      const snsPos = v.dims.includes("snapshot") ? xv.coords[0].getIndexer(v.coords[0]) : null;
+      const nN = v.coords[nameDim].length;
+      const nX = xv.coords[xv.dims.indexOf("name")].length;
+      sol = Float64Array.from(v.solution, (val, f) => {
+        const j = f % nN;
+        const s = Math.floor(f / nN);
+        const xf = snsPos ? snsPos[s] * nX + xpos[j] : xpos[j];
+        return val / xv.solution[xf];
+      });
+      if (v.dims.includes("snapshot")) attr += "_opt";
+    }
     if (v.dims.includes("snapshot")) {
-      const df = solutionFrame(v, sns);
+      const df = solutionFrame(v, sns, sol);
       if (n.passive_branch_components.has(c.name) && attr === "s") {
         setDynamicData(n, c.name, "p0", df);
         setDynamicData(n, c.name, "p1", negFrame(df));
@@ -467,6 +570,7 @@ export function assign_solution(n) {
           const suf = i === "1" ? "" : i;
           const eff = n.get_switchable_as_dense("Link", `efficiency${suf}`, sns);
           const portDf = df.applyNumeric((x, r, col) => -x * eff.col(col)[r]);
+          updatePiecewisePort(portDf, c, m, `efficiency${suf}`, `${cName}-p${i}_piecewise`, sns);
           applyDelayShift(portDf, c, `delay${suf}`, `cyclic_delay${suf}`, sns, n);
           setDynamicData(n, c.name, `p${i}`, portDf);
           const busCol = c.static.col(`bus${i}`);
@@ -482,6 +586,7 @@ export function assign_solution(n) {
         for (const i of c.ports) {
           const rate = n.get_switchable_as_dense(c.name, `rate${i}`, sns);
           const portDf = df.applyNumeric((x, r, col) => -x * rate.col(col)[r]);
+          updatePiecewisePort(portDf, c, m, `rate${i}`, `${cName}-p${i}_piecewise`, sns);
           applyDelayShift(portDf, c, `delay${i}`, `cyclic_delay${i}`, sns, n);
           setDynamicData(n, c.name, `p${i}`, portDf);
           const busCol = c.static.col(`bus${i}`);
@@ -503,7 +608,7 @@ export function assign_solution(n) {
       if (!st.has(col)) st.set(col, new Float64Array(st.index.length).fill(NaN));
       const a = st.col(col);
       v.coords[0].values.forEach((nm, j) => {
-        const val = v.solution[j];
+        const val = sol[j];
         // `df.replace(-0.0, 0.0)`
         if (!Number.isNaN(val)) a[st.index.getLoc(nm)] = val === 0 ? 0 : val;
       });
@@ -761,6 +866,7 @@ export class OptimizationAccessor {
       committable_big_m = null,
       meshed_thresholds = null,
       cycle_basis_method = "bfs-refined",
+      piecewise_options = null,
     } = opts;
     const sns = as_index(n, snapshots, "snapshots");
     n._multi_invest = multi_investment_periods ? 1 : 0;
@@ -777,6 +883,7 @@ export class OptimizationAccessor {
       committable_big_m,
       meshed_thresholds,
       cycle_basis_method,
+      piecewise_options,
     });
     if (extra_functionality) await extra_functionality(n, sns);
     const [status, condition] = await m.solve({ solver_name, solver_options, log_to_console });

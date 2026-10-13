@@ -6621,5 +6621,112 @@ export default {
    ],
    "standard_types": null
   }
+ ],
+ "piecewise": [
+  {
+   "component": "Generator",
+   "x": "p_pu",
+   "y": "marginal_cost",
+   "aux_variable": "marginal_cost_piecewise",
+   "allow_extendable": false
+  },
+  {
+   "component": "Generator",
+   "x": "p_nom",
+   "y": "capital_cost",
+   "aux_variable": "capital_cost_piecewise",
+   "allow_extendable": true
+  },
+  {
+   "component": "Generator",
+   "x": "p_pu",
+   "y": "efficiency",
+   "aux_variable": "p_primary_piecewise",
+   "allow_extendable": false
+  },
+  {
+   "component": "Line",
+   "x": "s_nom",
+   "y": "capital_cost",
+   "aux_variable": "capital_cost_piecewise",
+   "allow_extendable": true
+  },
+  {
+   "component": "Link",
+   "x": "p_pu",
+   "y": "marginal_cost",
+   "aux_variable": "marginal_cost_piecewise",
+   "allow_extendable": false
+  },
+  {
+   "component": "Link",
+   "x": "p_nom",
+   "y": "capital_cost",
+   "aux_variable": "capital_cost_piecewise",
+   "allow_extendable": true
+  },
+  {
+   "component": "Link",
+   "x": "p_pu",
+   "y": "efficiency",
+   "aux_variable": "p{port}_piecewise",
+   "allow_extendable": false
+  },
+  {
+   "component": "Process",
+   "x": "p_pu",
+   "y": "marginal_cost",
+   "aux_variable": "marginal_cost_piecewise",
+   "allow_extendable": false
+  },
+  {
+   "component": "Process",
+   "x": "p_nom",
+   "y": "capital_cost",
+   "aux_variable": "capital_cost_piecewise",
+   "allow_extendable": true
+  },
+  {
+   "component": "Process",
+   "x": "p_pu",
+   "y": "rate",
+   "aux_variable": "p{port}_piecewise",
+   "allow_extendable": false
+  },
+  {
+   "component": "StorageUnit",
+   "x": "p_dispatch_pu",
+   "y": "marginal_cost",
+   "aux_variable": "marginal_cost_piecewise",
+   "allow_extendable": false
+  },
+  {
+   "component": "StorageUnit",
+   "x": "p_nom",
+   "y": "capital_cost",
+   "aux_variable": "capital_cost_piecewise",
+   "allow_extendable": true
+  },
+  {
+   "component": "Store",
+   "x": "p_pu",
+   "y": "marginal_cost",
+   "aux_variable": "marginal_cost_piecewise",
+   "allow_extendable": false
+  },
+  {
+   "component": "Store",
+   "x": "e_nom",
+   "y": "capital_cost",
+   "aux_variable": "capital_cost_piecewise",
+   "allow_extendable": true
+  },
+  {
+   "component": "Transformer",
+   "x": "s_nom",
+   "y": "capital_cost",
+   "aux_variable": "capital_cost_piecewise",
+   "allow_extendable": true
+  }
  ]
 };
