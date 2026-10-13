@@ -183,6 +183,25 @@ export class Constraint {
     return this;
   }
 
+  /** Remove terms with zero or near-zero coefficients (linopy `sanitize_zeros`). */
+  sanitize_zeros() {
+    for (let p = 0; p < this.vars.length; p++) {
+      if (!(Math.abs(this.coeffs[p]) > 1e-10)) {
+        this.vars[p] = -1;
+        this.coeffs[p] = NaN;
+      }
+    }
+    return this;
+  }
+
+  /** Mask rows with `<= inf` or `>= -inf` right-hand sides (linopy `sanitize_infinities`). */
+  sanitize_infinities() {
+    for (let k = 0; k < this.size; k++) {
+      if ((this.sign[k] === "<=" && this.rhs[k] === Infinity) || (this.sign[k] === ">=" && this.rhs[k] === -Infinity)) this.labels[k] = -1;
+    }
+    return this;
+  }
+
   /** Terms of a row after linopy's filtering (vars != -1, coeffs != 0) and duplicate grouping. */
   rowTerms(k) {
     const vs = [];
@@ -420,6 +439,8 @@ export class Model {
   async solve({ solver_name = "highs", solver_options = {}, log_to_console = false } = {}) {
     if (solver_name !== "highs") throw new Error(`Solver ${solver_name} is not available in PSA.js (only 'highs').`);
     const highs = await getHighs();
+    // linopy sanitizes the constraints in place before writing the problem
+    for (const con of this.constraints.values()) con.sanitize_zeros().sanitize_infinities();
     const lp = this.to_lp();
     this._lp = lp;
     const model = highs.createModel({ format: "lp", data: lp });
