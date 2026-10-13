@@ -66,6 +66,9 @@ def decode(v, n):
             spec = v["$frame"]
             data = np.array([[float(decode(x, n)) for x in row] for row in spec["data"]], dtype=float)
             return pd.DataFrame(data, index=n.snapshots, columns=spec["columns"])
+        if "$df" in v:
+            spec = v["$df"]
+            return pd.DataFrame([[decode(x, n) for x in row] for row in spec["data"]], index=spec["index"], columns=spec["columns"])
         if "$series" in v:
             spec = v["$series"]
             idx = spec.get("index")

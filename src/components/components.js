@@ -633,6 +633,65 @@ export class Components {
     return new Series(Float64Array.from(out), this.static.index, null);
   }
 
+  /**
+   * Scale `s_max_pu` of lines to per-line summer / winter ratings by month
+   * (`Lines.apply_seasonal_rating`). `ratings` is a DataFrame indexed by line
+   * name with `summer` and `winter` columns (absolute MVA ratings).
+   */
+  apply_seasonal_rating(ratings, { summer_months = [4, 5, 6, 7, 8, 9], compose = true } = {}) {
+    if (this.name !== "Line") throw new TypeError(`'${this.name}' components have no method 'apply_seasonal_rating'.`);
+    const n = this.n;
+    const sns = n.snapshots;
+    const months = sns.isMulti
+      ? null
+      : sns.values.map((t) => {
+          const m = typeof t === "string" ? /^\d{4}-(\d{2})-\d{2}/.exec(t.trim()) : null;
+          return m ? Number(m[1]) : null;
+        });
+    if (!months || months.some((x) => x === null)) {
+      throw new TypeError(`apply_seasonal_rating requires n.snapshots to be a DatetimeIndex; got ${sns.isMulti ? "MultiIndex" : "Index"}.`);
+    }
+    const missingCols = ["summer", "winter"].filter((col) => !ratings.has(col));
+    if (missingCols.length) throw new Error(`KeyError: \`ratings\` DataFrame is missing required columns: [${missingCols.map((x) => `'${x}'`).join(", ")}]`);
+    const names = ratings.index;
+    const missingLines = names.difference(this.static.index);
+    if (missingLines.length) {
+      const shown = missingLines.values.slice(0, 5).map((x) => `'${x}'`);
+      throw new Error(`KeyError: \`ratings\` references ${missingLines.length} line(s) not in n.lines.index: [${shown.join(", ")}]${missingLines.length > 5 ? "..." : ""}`);
+    }
+    if (!summer_months.length) throw new Error("`summer_months` must be non-empty.");
+    const summer = Array.from(ratings.col("summer"), Number);
+    const winter = Array.from(ratings.col("winter"), Number);
+    if (summer.some((x) => !(x > 0)) || winter.some((x) => !(x > 0))) throw new Error("All summer and winter ratings must be strictly positive.");
+    const sNom = names.values.map((nm) => this.static.at(nm, "s_nom"));
+    const bad = names.values.filter((_, j) => sNom[j] <= 0);
+    if (bad.length) {
+      throw new Error(
+        `apply_seasonal_rating scales s_max_pu = rating / s_nom and requires a strictly positive s_nom for every rated line; got non-positive s_nom for: [${bad
+          .slice(0, 5)
+          .map((x) => `'${x}'`)
+          .join(", ")}]`,
+      );
+    }
+    const isSummer = months.map((mo) => summer_months.includes(mo));
+    const dyn = this.dynamic.s_max_pu;
+    names.values.forEach((nm, j) => {
+      const sPu = summer[j] / sNom[j];
+      const wPu = winter[j] / sNom[j];
+      const seasonal = isSummer.map((su) => (su ? sPu : wPu));
+      let out = Float64Array.from(seasonal);
+      if (compose) {
+        const staticPu = this.static.at(nm, "s_max_pu");
+        const existing = dyn.has(nm) ? dyn.col(nm) : null;
+        out = out.map((v, i) => {
+          const e = existing && !Number.isNaN(existing[i]) ? existing[i] : staticPu;
+          return e * v;
+        });
+      }
+      dyn.set(nm, out);
+    });
+  }
+
   /** Delay source indexer for multiport components. */
   static get_delay_source_indexer(snapshots, weightings, delay, isCyclic) {
     return getDelaySourceIndexer(snapshots, weightings, delay, isCyclic);

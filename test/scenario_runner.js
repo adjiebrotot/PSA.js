@@ -38,6 +38,12 @@ export function decodeValue(v, n) {
       spec.columns.forEach((c, j) => data.set(c, Float64Array.from(spec.data, (row) => Number(decodeValue(row[j], n)))));
       return new DataFrame({ index: n.snapshots, columns: spec.columns, data });
     }
+    if ("$df" in v) {
+      const spec = v.$df;
+      const data = new Map();
+      spec.columns.forEach((c, j) => data.set(c, spec.data.map((row) => decodeValue(row[j], n))));
+      return new DataFrame({ index: new Index(spec.index), columns: spec.columns, data });
+    }
     if ("$series" in v) {
       const spec = v.$series;
       const vals = spec.values.map((x) => decodeValue(x, n));

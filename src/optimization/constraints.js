@@ -533,7 +533,7 @@ export function define_operational_constraints_for_committables(n, sns, componen
     const pos = comI.getIndexer(ceI);
     const coords = [sns, ceI];
     const K = (s, j) => s * nN + pos[j];
-    const sBefore = pos.map((jj) => statusBefore[jj]);
+    const sBefore = Array.from(pos, (jj) => statusBefore[jj]);
     const pInit = dispatchBefore(n, c, ceI, sns, sBefore);
     const pInitF = pInit.map((v) => (Number.isNaN(v) ? 0 : v));
     const first = (s) => (s === 0 ? 1 : 0);
