@@ -73,6 +73,11 @@ export function define_operational_constraints_for_non_extendables(n, sns, compo
   const withLoss = n.passive_branch_components.has(c.name) && transmissionLosses;
   const loss = withLoss ? labeler2(m.variables.get(`${c.name}-loss`), sns, fixI) : null;
   const nN = fixI.length;
+  // maintenance reduces the available capacity by `maintenance_pu * maintenance`
+  const maintFixI = c.maintainables.intersection(fixI);
+  const maint = maintFixI.empty ? null : labeler2(m.variables.get(`${c.name}-maintenance`), sns, fixI);
+  const isMaint = maintFixI.empty ? null : fixI.isin(maintFixI);
+  const alpha = maintFixI.empty ? null : staticValues(c, "maintenance_pu", fixI);
   const lower = (s, j) => {
     const k = s * nN + j;
     const inf = isinf(nom[j]);
@@ -85,14 +90,21 @@ export function define_operational_constraints_for_non_extendables(n, sns, compo
   };
   const dims = ["snapshot", "name"];
   const coords = [sns, fixI];
-  m.add_constraints(`${c.name}-fix-${attr}-lower`, dims, coords, (s, j) => {
+  const row = (s, j, bound, lossSign) => {
     const vars = withLoss ? [v(s, j), loss(s, j)] : [v(s, j)];
-    const coeffs = withLoss ? [1, -1] : [1];
+    const coeffs = withLoss ? [1, lossSign] : [1];
+    if (maint) {
+      vars.push(isMaint[j] ? maint(s, j) : -1);
+      coeffs.push(isMaint[j] ? bound * alpha[j] : NaN);
+    }
+    return [vars, coeffs];
+  };
+  m.add_constraints(`${c.name}-fix-${attr}-lower`, dims, coords, (s, j) => {
+    const [vars, coeffs] = row(s, j, lower(s, j), -1);
     return [vars, coeffs, ">=", r(0, lower(s, j)), act[s * nN + j]];
   });
   m.add_constraints(`${c.name}-fix-${attr}-upper`, dims, coords, (s, j) => {
-    const vars = withLoss ? [v(s, j), loss(s, j)] : [v(s, j)];
-    const coeffs = withLoss ? [1, 1] : [1];
+    const [vars, coeffs] = row(s, j, upper(s, j), 1);
     return [vars, coeffs, "<=", r(0, upper(s, j)), act[s * nN + j]];
   });
 }
@@ -111,28 +123,146 @@ export function define_operational_constraints_for_extendables(n, sns, component
   const withLoss = n.passive_branch_components.has(c.name) && transmissionLosses;
   const loss = withLoss ? labeler2(m.variables.get(`${c.name}-loss`), sns, extI) : null;
   const nN = extI.length;
+  // maintenance of extendables enters through z = p_nom * maintenance
+  const maintExtI = c.maintainables.intersection(extI);
+  const z = maintExtI.empty ? null : labeler2(m.variables.get(`${c.name}-maintenance_capacity`), sns, extI);
+  const isMaint = maintExtI.empty ? null : extI.isin(maintExtI);
+  const alpha = maintExtI.empty ? null : staticValues(c, "maintenance_pu", extI);
   const dims = ["snapshot", "name"];
   const coords = [sns, extI];
-  m.add_constraints(`${c.name}-ext-${attr}-lower`, dims, coords, (s, j) => {
-    const k = s * nN + j;
+  const row = (s, j, pu, lossSign) => {
     const vars = [v(s, j), cap(j)];
-    const coeffs = [1, -(minPu[k] * 1)];
+    const coeffs = [1, -(pu * 1)];
     if (withLoss) {
       vars.push(loss(s, j));
-      coeffs.push(-1);
+      coeffs.push(lossSign);
     }
+    if (z) {
+      vars.push(isMaint[j] ? z(s, j) : -1);
+      coeffs.push(isMaint[j] ? pu * alpha[j] : NaN);
+    }
+    return [vars, coeffs];
+  };
+  m.add_constraints(`${c.name}-ext-${attr}-lower`, dims, coords, (s, j) => {
+    const k = s * nN + j;
+    const [vars, coeffs] = row(s, j, minPu[k], -1);
     return [vars, coeffs, ">=", r(0, 0), act[k]];
   });
   m.add_constraints(`${c.name}-ext-${attr}-upper`, dims, coords, (s, j) => {
     const k = s * nN + j;
-    const vars = [v(s, j), cap(j)];
-    const coeffs = [1, -(maxPu[k] * 1)];
-    if (withLoss) {
-      vars.push(loss(s, j));
-      coeffs.push(1);
-    }
+    const [vars, coeffs] = row(s, j, maxPu[k], 1);
     return [vars, coeffs, "<=", r(0, 0), act[k]];
   });
+}
+
+/**
+ * Maintenance scheduling (`define_maintenance_constraints`): event count,
+ * window coverage of each event (snapshots whose weightings sum to at least
+ * `maintenance_duration`), starts that cannot complete within the horizon,
+ * and McCormick bounds for `z = p_nom * maintenance` of extendables.
+ */
+export function define_maintenance_constraints(n, sns, component) {
+  const c = n.c.get(component);
+  const maintI = c.maintainables.intersection(c.active_assets);
+  if (maintI.empty) return;
+  const m = n.model;
+  const nS = sns.length;
+  const nN = maintI.length;
+  const w = weightings(n, "generators", sns);
+  const maint = labeler2(m.variables.get(`${c.name}-maintenance`), sns, maintI);
+  const start = labeler2(m.variables.get(`${c.name}-maintenance_start`), sns, maintI);
+  const act = activityMask(c, sns, maintI);
+  const duration = staticValues(c, "maintenance_duration", maintI);
+  const events = staticValues(c, "maintenance_events", maintI);
+  const dims = ["snapshot", "name"];
+
+  m.add_constraints(`${c.name}-maint-event-count`, ["name"], [maintI], (j) => {
+    const vars = [];
+    for (let s = 0; s < nS; s++) vars.push(start(s, j));
+    return [vars, vars.map(() => 1), "=", r(0, events[j])];
+  });
+
+  const cum = new Float64Array(nS);
+  for (let s = 0, acc = 0; s < nS; s++) cum[s] = acc += w[s];
+  const cumPrev = cum.map((x, s) => x - w[s]);
+  const searchsorted = (arr, v) => {
+    let lo = 0;
+    let hi = arr.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (arr[mid] < v) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  const windowEnd = [];
+  const valid = [];
+  const width = [];
+  for (let j = 0; j < nN; j++) {
+    const ends = new Int32Array(nS);
+    for (let s = 0; s < nS; s++) ends[s] = searchsorted(cum, duration[j] * (1 - 1e-6) + cumPrev[s]);
+    const inactiveCum = new Int32Array(nS);
+    for (let s = 0, acc = 0; s < nS; s++) inactiveCum[s] = acc += act[s * nN + j] ? 0 : 1;
+    const ok = new Uint8Array(nS);
+    for (let s = 0; s < nS; s++) {
+      const a = act[s * nN + j];
+      const windowInactive = inactiveCum[Math.min(ends[s], nS - 1)] - inactiveCum[s] + (a ? 0 : 1);
+      ok[s] = a && ends[s] < nS && windowInactive === 0 ? 1 : 0;
+    }
+    const wd = new Int32Array(nS);
+    const starts = new Int32Array(nS);
+    let maxWidth = -Infinity;
+    for (let s = 0; s < nS; s++) {
+      starts[s] = searchsorted(ends, s);
+      wd[s] = s - starts[s] + 1;
+      maxWidth = Math.max(maxWidth, wd[s]);
+    }
+    for (let s = 0; s < nS; s++) if (!(starts[s] > 0)) wd[s] = maxWidth;
+    windowEnd.push(ends);
+    valid.push(ok);
+    width.push(wd);
+  }
+  const widths = [...new Set(width.flatMap((wd) => [...wd]))].sort((a, b) => a - b);
+  // -maintenance + sum over widths of rolling(start, width) * (width == w)
+  m.add_constraints(`${c.name}-maint-window`, dims, [sns, maintI], (s, j) => {
+    const vars = [maint(s, j)];
+    const coeffs = [-1];
+    for (const wv of widths) {
+      const on = width[j][s] === wv ? 1 : 0;
+      for (let t = s - wv + 1; t <= s; t++) {
+        vars.push(t >= 0 ? start(t, j) : -1);
+        coeffs.push(t >= 0 ? on : NaN);
+      }
+    }
+    return [vars, coeffs, "=", r(0, 0), act[s * nN + j]];
+  });
+  const forbidden = (s, j) => act[s * nN + j] && !valid[j][s];
+  let anyForbidden = false;
+  for (let s = 0; s < nS && !anyForbidden; s++) for (let j = 0; j < nN; j++) if (forbidden(s, j)) anyForbidden = true;
+  if (anyForbidden) {
+    m.add_constraints(`${c.name}-maint-start-horizon`, dims, [sns, maintI], (s, j) => [[start(s, j)], [1], "=", r(0, 0), forbidden(s, j)]);
+  }
+
+  const extI = c.extendables.intersection(c.active_assets);
+  const modularCom = c.modulars.intersection(c.committables);
+  const maintExtI = maintI.intersection(extI).difference(modularCom);
+  if (!maintExtI.empty) {
+    const nomAttr = c._operational_attrs.nom;
+    const pNom = labeler1(m.variables.get(`${c.name}-${nomAttr}`), maintExtI);
+    const pMin = staticValues(c, `${nomAttr}_min`, maintExtI);
+    const pMax = staticValues(c, `${nomAttr}_max`, maintExtI);
+    const mm = labeler2(m.variables.get(`${c.name}-maintenance`), sns, maintExtI);
+    const z = labeler2(m.variables.get(`${c.name}-maintenance_capacity`), sns, maintExtI);
+    const actE = activityMask(c, sns, maintExtI);
+    const nE = maintExtI.length;
+    const coords = [sns, maintExtI];
+    m.add_constraints(`${c.name}-maintcap_upper`, dims, coords, (s, j) => [[z(s, j), pNom(j), mm(s, j)], [1, -1, -pMin[j]], "<=", r(pMin[j] - 0, 0), actE[s * nE + j]]);
+    m.add_constraints(`${c.name}-maintcap_upper_nommax`, dims, coords, (s, j) => [[z(s, j), mm(s, j)], [1, -pMax[j]], "<=", r(0, 0), actE[s * nE + j]]);
+    m.add_constraints(`${c.name}-maintcap_lower_nommax`, dims, coords, (s, j) => [[z(s, j), pNom(j), mm(s, j)], [1, -1, -pMax[j]], ">=", r(pMax[j] - 0, 0), actE[s * nE + j]]);
+    if (pMin.some((x) => x > 0)) {
+      m.add_constraints(`${c.name}-maintcap_lower_nommin`, dims, coords, (s, j) => [[z(s, j), mm(s, j)], [1, -pMin[j]], ">=", r(0, 0), actE[s * nE + j] && pMin[j] > 0]);
+    }
+  }
 }
 
 /** Position of the window's first snapshot in `n.snapshots`. */
@@ -219,6 +349,8 @@ export function define_operational_constraints_for_committables(n, sns, componen
   const statusBefore = history[0];
   // switches[lag - 1][j]: +1 if started up, -1 if shut down `lag` snapshots before
   const switches = history.slice(0, maxTime).map((row, l) => row.map((v, j) => v - history[l + 1][j]));
+  const maintI = c.maintainables.intersection(c.active_assets);
+  const alphaOf = (names) => staticValues(c, "maintenance_pu", names);
 
   const dims = ["snapshot", "name"];
   if (!comExtI.empty) {
@@ -234,17 +366,27 @@ export function define_operational_constraints_for_committables(n, sns, componen
     const coords = [sns, comExtI];
     const actE = (s, j) => act[s * nN + colOf[j]];
     const minPuE = (s, j) => minPu[s * nN + colOf[j]];
+    // maintenance through z = p_nom * maintenance
+    const maintComExtI = comExtI.intersection(maintI);
+    const z = maintComExtI.empty ? null : labeler2(m.variables.get(`${c.name}-maintenance_capacity`), sns, comExtI);
+    const isMaintE = comExtI.isin(maintComExtI);
+    const alphaE = maintComExtI.empty ? null : alphaOf(comExtI);
+    const withZ = (vars, coeffs, s, j, pu) => {
+      if (z) {
+        vars.push(isMaintE[j] ? z(s, j) : -1);
+        coeffs.push(isMaintE[j] ? pu * alphaE[j] : NaN);
+      }
+      return [vars, coeffs];
+    };
     m.add_constraints(`${c.name}-com-ext-p-lower`, dims, coords, (s, j) => [
-      [pE(s, j), pn(j), stE(s, j)],
-      [1, -minPuE(s, j), -M[s * nE + j]],
+      ...withZ([pE(s, j), pn(j), stE(s, j)], [1, -minPuE(s, j), -M[s * nE + j]], s, j, minPuE(s, j)),
       ">=",
       r(0, -M[s * nE + j]),
       actE(s, j),
     ]);
     m.add_constraints(`${c.name}-com-ext-p-upper-bigM`, dims, coords, (s, j) => [[pE(s, j), stE(s, j)], [1, -M[s * nE + j]], "<=", r(0, 0), actE(s, j)]);
     m.add_constraints(`${c.name}-com-ext-p-upper-cap`, dims, coords, (s, j) => [
-      [pE(s, j), pn(j)],
-      [1, -maxPuExt[s * nE + j]],
+      ...withZ([pE(s, j), pn(j)], [1, -maxPuExt[s * nE + j]], s, j, maxPuExt[s * nE + j]),
       "<=",
       r(0, 0),
       actE(s, j),
@@ -261,25 +403,45 @@ export function define_operational_constraints_for_committables(n, sns, componen
     }
   }
 
+  // McCormick linearisation of w = status * maintenance (or modules in maintenance)
+  const maintStatusConstraints = (names, kind, modulesMax) => {
+    const pos = comI.getIndexer(names);
+    const u = labeler2(statusV, sns, names);
+    const mm = labeler2(m.variables.get(`${c.name}-maintenance`), sns, names);
+    const w = labeler2(m.variables.get(`${c.name}-maintenance_status`), sns, names);
+    const coords = [sns, names];
+    const a = (s, j) => act[s * nN + pos[j]];
+    const mx = (j) => (modulesMax ? modulesMax[j] : 1);
+    m.add_constraints(`${c.name}-maint-${kind}-le-status`, dims, coords, (s, j) => [[w(s, j), u(s, j)], [1, -1], "<=", r(0, 0), a(s, j)]);
+    m.add_constraints(`${c.name}-maint-${kind}-le-maint`, dims, coords, (s, j) => [[w(s, j), mm(s, j)], [1, -mx(j)], "<=", r(0, 0), a(s, j)]);
+    m.add_constraints(`${c.name}-maint-${kind}-lb`, dims, coords, (s, j) => [[w(s, j), u(s, j), mm(s, j)], [1, -1, -mx(j)], ">=", r(0, -mx(j)), a(s, j)]);
+  };
+  const withW = (names, maintNames) => {
+    if (maintNames.empty) return () => [[], []];
+    const w = labeler2(m.variables.get(`${c.name}-maintenance_status`), sns, names);
+    const isMaint = names.isin(maintNames);
+    const alpha = alphaOf(names);
+    return (s, j, bound) => (isMaint[j] ? [[w(s, j)], [bound * alpha[j]]] : [[-1], [NaN]]);
+  };
+
   if (!comFixI.empty) {
     const pos = comI.getIndexer(comFixI);
     const pF = labeler2(m.variables.get(`${c.name}-p`), sns, comFixI);
     const sF = labeler2(statusV, sns, comFixI);
     const coords = [sns, comFixI];
-    m.add_constraints(`${c.name}-com-p-lower`, dims, coords, (s, j) => [
-      [pF(s, j), sF(s, j)],
-      [1, -lowerP[s * nN + pos[j]]],
-      ">=",
-      r(0, 0),
-      act[s * nN + pos[j]],
-    ]);
-    m.add_constraints(`${c.name}-com-p-upper`, dims, coords, (s, j) => [
-      [pF(s, j), sF(s, j)],
-      [1, -upperP[s * nN + pos[j]]],
-      "<=",
-      r(0, 0),
-      act[s * nN + pos[j]],
-    ]);
+    const maintComFixI = comFixI.intersection(maintI);
+    if (!maintComFixI.empty) maintStatusConstraints(maintComFixI, "status", null);
+    const wTerm = withW(comFixI, maintComFixI);
+    m.add_constraints(`${c.name}-com-p-lower`, dims, coords, (s, j) => {
+      const lo = lowerP[s * nN + pos[j]];
+      const [wv, wc] = wTerm(s, j, lo);
+      return [[pF(s, j), sF(s, j), ...wv], [1, -lo, ...wc], ">=", r(0, 0), act[s * nN + pos[j]]];
+    });
+    m.add_constraints(`${c.name}-com-p-upper`, dims, coords, (s, j) => {
+      const up = upperP[s * nN + pos[j]];
+      const [wv, wc] = wTerm(s, j, up);
+      return [[pF(s, j), sF(s, j), ...wv], [1, -up, ...wc], "<=", r(0, 0), act[s * nN + pos[j]]];
+    });
   }
 
   const comModI = comI.intersection(c.modulars);
@@ -289,20 +451,23 @@ export function define_operational_constraints_for_committables(n, sns, componen
     const pM = labeler2(m.variables.get(`${c.name}-p`), sns, comModI);
     const sM = labeler2(statusV, sns, comModI);
     const coords = [sns, comModI];
-    m.add_constraints(`${c.name}-com-mod-p-lower`, dims, coords, (s, j) => [
-      [pM(s, j), sM(s, j)],
-      [1, -(minPu[s * nN + pos[j]] * nomMod[j])],
-      ">=",
-      r(0, 0),
-      act[s * nN + pos[j]],
-    ]);
-    m.add_constraints(`${c.name}-com-mod-p-upper`, dims, coords, (s, j) => [
-      [pM(s, j), sM(s, j)],
-      [1, -(maxPu[s * nN + pos[j]] * nomMod[j])],
-      "<=",
-      r(0, 0),
-      act[s * nN + pos[j]],
-    ]);
+    const maintComModI = comModI.intersection(maintI);
+    if (!maintComModI.empty) {
+      const nomMax = staticValues(c, `${nomAttr}_max`, maintComModI);
+      const modOf = staticValues(c, c._operational_attrs.nom_mod, maintComModI);
+      maintStatusConstraints(maintComModI, "modstatus", nomMax.map((x, j) => x / modOf[j]));
+    }
+    const wTerm = withW(comModI, maintComModI);
+    m.add_constraints(`${c.name}-com-mod-p-lower`, dims, coords, (s, j) => {
+      const lo = minPu[s * nN + pos[j]] * nomMod[j];
+      const [wv, wc] = wTerm(s, j, lo);
+      return [[pM(s, j), sM(s, j), ...wv], [1, -lo, ...wc], ">=", r(0, 0), act[s * nN + pos[j]]];
+    });
+    m.add_constraints(`${c.name}-com-mod-p-upper`, dims, coords, (s, j) => {
+      const up = maxPu[s * nN + pos[j]] * nomMod[j];
+      const [wv, wc] = wTerm(s, j, up);
+      return [[pM(s, j), sM(s, j), ...wv], [1, -up, ...wc], "<=", r(0, 0), act[s * nN + pos[j]]];
+    });
   }
 
   // status transitions; the status before the window enters the first row
@@ -912,14 +1077,22 @@ export function define_nodal_balance_constraints(n, sns, { transmissionLosses = 
   m.add_constraints(name, ["snapshot", "name"], [sns, busI], row);
 }
 
-export function define_kirchhoff_voltage_constraints(n, sns) {
+const DEG2RAD = Math.PI / 180.0;
+
+/** Names of transformers with an optimised phase shift. */
+function optimisedPhaseShifts(m) {
+  const v = m.variables.get("Transformer-phase_shift");
+  return v ? v.coords[1] : new Index([], "name");
+}
+
+export function define_kirchhoff_voltage_constraints(n, sns, cycle_basis_method = "bfs-refined") {
   const m = n.model;
   n.calculate_dependent_values();
   const periods = n._multi_invest ? sns.uniqueLevel(0).values : [null];
   const parts = [];
   for (const period of periods) {
     const snapshots = period === null ? sns : sns.filter(sns.values.map((t) => t[0] === period));
-    const C = n.cycle_matrix({ investment_period: period, apply_weights: true });
+    const C = n.cycle_matrix({ investment_period: period, apply_weights: true, cycle_basis_method });
     if (C.empty) continue;
     const types = [];
     for (const [t] of C.index.values) if (!types.includes(t)) types.push(t);
@@ -932,7 +1105,22 @@ export function define_kirchhoff_voltage_constraints(n, sns) {
       const v = labeler2(m.variables.get(`${t}-s`), snapshots, flowNames);
       typeTerms.push({ flowNames, rowOf, v });
     }
-    parts.push({ snapshots, typeTerms, C });
+    // transformer phase shifts: a constant when fixed, a variable when optimised
+    let shift = null;
+    if (types.includes("Transformer")) {
+      const Cplain = n.cycle_matrix({ investment_period: period, apply_weights: false, cycle_basis_method });
+      const tr = n.c.get("Transformer");
+      const trRows = Cplain.index.values.map((lab, i) => [lab, i]).filter(([lab]) => lab[0] === "Transformer");
+      const rowOf = new Map(trRows.map(([lab, i]) => [lab[1], i]));
+      const names = new Index(trRows.map(([lab]) => lab[1]), "name").intersection(tr.active_assets);
+      const optimised = names.isin(optimisedPhaseShifts(m));
+      const fixedNames = names.filter(optimised.map((o) => !o));
+      const optNames = names.filter(optimised);
+      const ps = denseValues(tr, "phase_shift", snapshots, fixedNames);
+      const psVar = optNames.empty ? null : labeler2(m.variables.get("Transformer-phase_shift"), snapshots, optNames);
+      shift = { Cplain, rowOf, fixedNames, ps, optNames, psVar };
+    }
+    parts.push({ snapshots, typeTerms, C, shift });
   }
   if (!parts.length) return;
   const allSns = parts.length === 1 ? parts[0].snapshots : new Index(parts.flatMap((p) => p.snapshots.values), sns.names);
@@ -956,10 +1144,78 @@ export function define_kirchhoff_voltage_constraints(n, sns) {
         coeffs.push(col[rowOf.get(flowNames.at(j))] * 1e5);
       }
     }
-    return [vars, coeffs, "=", r(0, 0)];
+    let lc = 0;
+    if (p.shift) {
+      const { Cplain, rowOf, fixedNames, ps, optNames, psVar } = p.shift;
+      const pcol = Cplain.col(cyc);
+      // (phase_shift @ C) * deg2rad * 1e5
+      let dot = 0;
+      const nF = fixedNames.length;
+      for (let j = 0; j < nF; j++) dot += ps[s * nF + j] * pcol[rowOf.get(fixedNames.at(j))];
+      lc = lc + dot * DEG2RAD * 1e5;
+      for (let j = 0; j < optNames.length; j++) {
+        vars.push(psVar(s, j));
+        coeffs.push(pcol[rowOf.get(optNames.at(j))] * DEG2RAD * 1e5);
+      }
+    }
+    return [vars, coeffs, "=", r(lc, 0)];
   };
   if (aligned) m.add_constraints("Kirchhoff-Voltage-Law", ["snapshot", "cycle"], [allSns, cycleIdx], row);
   else m.add_constraints("Kirchhoff-Voltage-Law", ["cycle", "snapshot"], [cycleIdx, allSns], (cyc, si) => row(si, cyc));
+}
+
+/**
+ * Voltage angle difference limits (`v_ang_max`, degrees) for AC lines and
+ * transformers: |x_pu_eff * s + phase_shift| <= v_ang_max.
+ */
+export function define_voltage_angle_constraints(n, sns) {
+  const m = n.model;
+  const dims = ["snapshot", "name"];
+  for (const cName of ["Line", "Transformer"]) {
+    const c = n.c.get(cName);
+    const st = c.static;
+    if (st.col("v_ang_min").some((x) => Number.isFinite(x))) {
+      logger.warning(`The \`v_ang_min\` attribute of ${cName} is deprecated and ignored. \`v_ang_max\` applies symmetrically as an absolute voltage angle difference limit.`);
+    }
+    const vmax = st.col("v_ang_max");
+    let assets = new Index(
+      st.index.values.filter((_, i) => Number.isFinite(vmax[i])),
+      "name",
+    )
+      .unique()
+      .intersection(c.active_assets);
+    if (cName === "Line") assets = assets.filter(staticValues(c, "carrier", assets).map((x) => x === "AC"));
+    if (assets.empty) continue;
+    const x = staticValues(c, "x_pu_eff", assets);
+    const cap = staticValues(c, "v_ang_max", assets).map((v, j) => (v * DEG2RAD) / x[j]);
+    const sv = labeler2(m.variables.get(`${cName}-s`), sns, assets);
+    const act = activityMask(c, sns, assets);
+    const nN = assets.length;
+    const on = (s, j) => act[s * nN + j] && Number.isFinite(cap[j]);
+    if (cName === "Line") {
+      m.add_constraints("Line-v_ang-lower", dims, [sns, assets], (s, j) => [[sv(s, j)], [1], ">=", r(0, -cap[j]), on(s, j)]);
+      m.add_constraints("Line-v_ang-upper", dims, [sns, assets], (s, j) => [[sv(s, j)], [1], "<=", r(0, cap[j]), on(s, j)]);
+      continue;
+    }
+    const varying = assets.isin(optimisedPhaseShifts(m));
+    const fixedI = assets.filter(varying.map((v) => !v));
+    const varI = assets.filter(varying);
+    if (!fixedI.empty) {
+      const pos = assets.getIndexer(fixedI);
+      const ps = denseValues(c, "phase_shift", sns, fixedI);
+      const nF = fixedI.length;
+      const offset = (s, j) => (DEG2RAD * ps[s * nF + j]) / x[pos[j]];
+      m.add_constraints("Transformer-v_ang-lower", dims, [sns, fixedI], (s, j) => [[sv(s, pos[j])], [1], ">=", r(0, -cap[pos[j]] - offset(s, j)), on(s, pos[j])]);
+      m.add_constraints("Transformer-v_ang-upper", dims, [sns, fixedI], (s, j) => [[sv(s, pos[j])], [1], "<=", r(0, cap[pos[j]] - offset(s, j)), on(s, pos[j])]);
+    }
+    if (!varI.empty) {
+      const pos = assets.getIndexer(varI);
+      const psV = labeler2(m.variables.get("Transformer-phase_shift"), sns, varI);
+      const row = (s, j) => [[sv(s, pos[j]), psV(s, j)], [1, DEG2RAD / x[pos[j]]]];
+      m.add_constraints("Transformer-v_ang-var-lower", dims, [sns, varI], (s, j) => [...row(s, j), ">=", r(0, -cap[pos[j]]), on(s, pos[j])]);
+      m.add_constraints("Transformer-v_ang-var-upper", dims, [sns, varI], (s, j) => [...row(s, j), "<=", r(0, cap[pos[j]]), on(s, pos[j])]);
+    }
+  }
 }
 
 // ----------------------------------------------------------------------

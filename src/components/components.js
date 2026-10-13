@@ -241,6 +241,12 @@ export class Components {
     return this._indexWhere(this.static.col("committable").map(Boolean));
   }
 
+  /** Components with maintenance scheduling (`maintainable=True`). */
+  get maintainables() {
+    if (!this.static.has("maintainable")) return this.static.index.slice(0, 0);
+    return this._indexWhere(this.static.col("maintainable").map(Boolean));
+  }
+
   get modulars() {
     const base = OPERATIONAL_BASE[this.name];
     const col = base ? `${base}_nom_mod` : null;

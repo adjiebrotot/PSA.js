@@ -250,6 +250,7 @@ export function create_model(
     include_objective_constant = null,
     committable_big_m = null,
     meshed_thresholds = null,
+    cycle_basis_method = "bfs-refined",
   } = {},
 ) {
   const sns = as_index(n, snapshots, "snapshots");
@@ -274,10 +275,15 @@ export function create_model(
     V.define_status_variables(n, sns, c, linearized_unit_commitment);
     V.define_start_up_variables(n, sns, c, linearized_unit_commitment);
     V.define_shut_down_variables(n, sns, c, linearized_unit_commitment);
+    V.define_maintenance_variables(n, sns, c);
+    V.define_maintenance_start_variables(n, sns, c);
+    V.define_maintenance_capacity_variables(n, sns, c);
+    V.define_maintenance_status_variables(n, sns, c);
     C.define_committability_variables_constraints_with_fixed_upper_limit(n, sns, c, attr);
   }
   V.define_spillage_variables(n, sns);
   V.define_operational_variables(n, sns, "Store", "p");
+  V.define_phase_shift_variables(n, sns);
   if (transmission_losses) for (const c of ["Line", "Transformer"]) V.define_loss_variables(n, sns, c);
 
   for (const [c, attr] of lookupQuery((r) => r.nominal)) {
@@ -287,6 +293,7 @@ export function create_model(
     C.define_committability_variables_constraints_with_variable_upper_limit(n, sns, c, attr);
   }
   for (const [c, attr] of lookupQuery((r) => !r.nominal && !r.handle_separately)) {
+    C.define_maintenance_constraints(n, sns, c);
     C.define_operational_constraints_for_non_extendables(n, sns, c, attr, transmission_losses);
     C.define_operational_constraints_for_extendables(n, sns, c, attr, transmission_losses);
     C.define_operational_constraints_for_committables(n, sns, c);
@@ -308,7 +315,8 @@ export function create_model(
     prev = t;
   }
 
-  C.define_kirchhoff_voltage_constraints(n, sns);
+  C.define_kirchhoff_voltage_constraints(n, sns, cycle_basis_method);
+  C.define_voltage_angle_constraints(n, sns);
   C.define_storage_unit_constraints(n, sns);
   C.define_store_constraints(n, sns);
   C.define_total_supply_constraints(n, sns);
@@ -441,6 +449,8 @@ export function assign_solution(n) {
     const k = name.indexOf("-");
     const cName = name.slice(0, k);
     const attr = name.slice(k + 1);
+    // auxiliary McCormick linearisation variables
+    if (attr === "maintenance_capacity" || attr === "maintenance_status") continue;
     if (!n.c.has(cName)) continue;
     const c = n.c.get(cName);
     if (v.dims.includes("snapshot")) {
@@ -750,6 +760,7 @@ export class OptimizationAccessor {
       include_objective_constant = null,
       committable_big_m = null,
       meshed_thresholds = null,
+      cycle_basis_method = "bfs-refined",
     } = opts;
     const sns = as_index(n, snapshots, "snapshots");
     n._multi_invest = multi_investment_periods ? 1 : 0;
@@ -765,6 +776,7 @@ export class OptimizationAccessor {
       include_objective_constant,
       committable_big_m,
       meshed_thresholds,
+      cycle_basis_method,
     });
     if (extra_functionality) await extra_functionality(n, sns);
     const [status, condition] = await m.solve({ solver_name, solver_options, log_to_console });
@@ -782,7 +794,7 @@ export class OptimizationAccessor {
 
   async solve_model({ extra_functionality = null, solver_name = "highs", solver_options = {}, log_to_console = false, assign_all_duals = false } = {}) {
     const n = this._n;
-    if (extra_functionality) await extra_functionality(n, n.snapshots);
+    if (extra_functionality) await extra_functionality(n, n.model.parameters.snapshots);
     const [status, condition] = await n.model.solve({ solver_name, solver_options, log_to_console });
     if (status === "ok") {
       assign_solution(n);

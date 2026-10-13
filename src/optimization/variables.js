@@ -100,3 +100,71 @@ export function define_loss_variables(n, sns, cName) {
   const mask = activityMask(c, sns, names);
   n.model.add_variables({ name: `${c.name}-loss`, dims: ["snapshot", "name"], coords: [sns, names], lower: 0, mask });
 }
+
+/** Continuous maintenance status in [0, 1] (`define_maintenance_variables`). */
+export function define_maintenance_variables(n, sns, cName) {
+  const c = n.c.get(cName);
+  const maintI = c.maintainables.intersection(c.active_assets);
+  if (maintI.empty) return;
+  const mask = activityMask(c, sns, maintI);
+  n.model.add_variables({ name: `${c.name}-maintenance`, dims: ["snapshot", "name"], coords: [sns, new Index(maintI.values, "name")], lower: 0, upper: 1, mask });
+}
+
+/** Binary maintenance start events (`define_maintenance_start_variables`). */
+export function define_maintenance_start_variables(n, sns, cName) {
+  const c = n.c.get(cName);
+  const maintI = c.maintainables.intersection(c.active_assets);
+  if (maintI.empty) return;
+  const mask = activityMask(c, sns, maintI);
+  n.model.add_variables({ name: `${c.name}-maintenance_start`, dims: ["snapshot", "name"], coords: [sns, new Index(maintI.values, "name")], mask, binary: true });
+}
+
+/** Linearisation of `p_nom * maintenance` for maintainable extendables. */
+export function define_maintenance_capacity_variables(n, sns, cName) {
+  const c = n.c.get(cName);
+  const modularCom = c.modulars.intersection(c.committables);
+  const maintExtI = c.maintainables.intersection(c.extendables).intersection(c.active_assets).difference(modularCom);
+  if (maintExtI.empty) return;
+  const mask = activityMask(c, sns, maintExtI);
+  n.model.add_variables({ name: `${c.name}-maintenance_capacity`, dims: ["snapshot", "name"], coords: [sns, new Index(maintExtI.values, "name")], lower: 0, mask });
+}
+
+/** Linearisation of `status * maintenance` for maintainable fixed/modular committables. */
+export function define_maintenance_status_variables(n, sns, cName) {
+  const c = n.c.get(cName);
+  const comI = c.committables.intersection(c.active_assets);
+  const nonModularExt = c.extendables.difference(c.modulars);
+  const maintWI = comI.intersection(c.maintainables).difference(nonModularExt);
+  if (maintWI.empty) return;
+  const mask = activityMask(c, sns, maintWI);
+  n.model.add_variables({ name: `${c.name}-maintenance_status`, dims: ["snapshot", "name"], coords: [sns, new Index(maintWI.values, "name")], lower: 0, mask });
+}
+
+/** Per-snapshot phase shift of phase-shifting transformers (`phase_shift_min < phase_shift_max`). */
+export function define_phase_shift_variables(n, sns) {
+  const c = n.c.get("Transformer");
+  if (c.empty) return;
+  const st = c.static;
+  const lo = st.col("phase_shift_min");
+  const hi = st.col("phase_shift_max");
+  const names = new Index(
+    st.index.values.filter((_, i) => lo[i] < hi[i]),
+    "name",
+  )
+    .unique()
+    .intersection(c.active_assets);
+  if (names.empty) return;
+  const nS = sns.length;
+  const nN = names.length;
+  const loN = names.values.map((nm) => lo[st.index.getLoc(nm)]);
+  const hiN = names.values.map((nm) => hi[st.index.getLoc(nm)]);
+  const lower = new Float64Array(nS * nN);
+  const upper = new Float64Array(nS * nN);
+  for (let s = 0; s < nS; s++) {
+    for (let j = 0; j < nN; j++) {
+      lower[s * nN + j] = loN[j] * 1;
+      upper[s * nN + j] = hiN[j] * 1;
+    }
+  }
+  n.model.add_variables({ name: "Transformer-phase_shift", dims: ["snapshot", "name"], coords: [sns, names], lower, upper });
+}
