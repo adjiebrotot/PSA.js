@@ -6,6 +6,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { ROOT, loadFixture } from "./helpers.js";
 import { runScenario, assertRecordMatches } from "./scenario_runner.js";
+import { logger } from "../src/index.js";
+
+logger.setLevel(process.env.PSA_LOG_LEVEL ?? "error");
 
 const dir = path.join(ROOT, "test", "scenarios");
 const only = process.env.SCENARIO ? new Set(process.env.SCENARIO.split(",")) : null;
@@ -20,7 +23,13 @@ for (const fn of readdirSync(dir).filter((f) => f.endsWith(".json")).sort()) {
     await runScenario(scenario, (key, value) => {
       const expected = fixture.records[key];
       if (!expected) throw new Error(`fixture has no record ${key}`);
-      const t = { ...tol, ...(scenario.record_tolerance?.[key] ?? {}), path_tolerance: scenario.path_tolerance ?? {} };
+      const t = {
+        ...tol,
+        checkIndexNames: scenario.check_index_names ?? false,
+        ...(scenario.record_tolerance?.[key] ?? {}),
+        ...(scenario.record_options?.[key] ?? {}),
+        path_tolerance: scenario.path_tolerance ?? {},
+      };
       assertRecordMatches(value, expected, { ...t, path: key });
     });
   });

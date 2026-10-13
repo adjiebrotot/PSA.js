@@ -9,6 +9,7 @@ import "./network/power_flow.js";
 export { SubNetwork } from "./network/power_flow.js";
 import "./optimization/optimize.js";
 export { Model as LinopyModel } from "./optimization/linopy.js";
+export { StatisticsAccessor, groupers, statisticsOptions, get_transmission_branches, port_efficiency } from "./statistics/accessor.js";
 
 export { Index } from "./core/index.js";
 export { DataFrame, Series } from "./core/frame.js";

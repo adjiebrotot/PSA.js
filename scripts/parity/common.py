@@ -5,8 +5,18 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import os
 import subprocess
+import sys
 from pathlib import Path
+
+# PyPSA iterates over Python sets in a few places (e.g. the passive branch
+# components when adding loss variables), so the variable/constraint order of
+# the generated models depends on string hashing. Pin the hash seed so that the
+# fixtures are reproducible; PSA.js uses the order obtained with seed 0.
+if os.environ.get("PYTHONHASHSEED") != "0":
+    os.environ["PYTHONHASHSEED"] = "0"
+    os.execv(sys.executable, [sys.executable, *sys.argv])
 
 import numpy as np
 import pandas as pd

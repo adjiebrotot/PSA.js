@@ -1014,14 +1014,15 @@ export function define_kirchhoff_voltage_constraints(n, sns) {
   }
   if (!parts.length) return;
   const allSns = parts.length === 1 ? parts[0].snapshots : new Index(parts.flatMap((p) => p.snapshots.values), sns.names);
-  const ncycles = parts[0].C.columns.length;
-  // periods may have different cycle counts; build cycle coordinate as max
+  // periods may have different cycle counts: linopy's merge then aligns the
+  // cycle coordinate (outer join) which moves it in front of the snapshots.
   let cycleCount = 0;
   for (const p of parts) cycleCount = Math.max(cycleCount, p.C.columns.length);
+  const aligned = parts.every((p) => p.C.columns.length === cycleCount);
   const cycleIdx = new Index(Array.from({ length: cycleCount }, (_, i) => i), "cycle");
   const partOf = [];
   for (const p of parts) for (let s = 0; s < p.snapshots.length; s++) partOf.push([p, s]);
-  m.add_constraints("Kirchhoff-Voltage-Law", ["snapshot", "cycle"], [allSns, cycleIdx], (si, cyc) => {
+  const row = (si, cyc) => {
     const [p, s] = partOf[si];
     if (cyc >= p.C.columns.length) return [[], [], "=", NaN];
     const col = p.C.col(cyc);
@@ -1034,8 +1035,9 @@ export function define_kirchhoff_voltage_constraints(n, sns) {
       }
     }
     return [vars, coeffs, "=", r(0, 0)];
-  });
-  void ncycles;
+  };
+  if (aligned) m.add_constraints("Kirchhoff-Voltage-Law", ["snapshot", "cycle"], [allSns, cycleIdx], row);
+  else m.add_constraints("Kirchhoff-Voltage-Law", ["cycle", "snapshot"], [cycleIdx, allSns], (cyc, si) => row(si, cyc));
 }
 
 // ----------------------------------------------------------------------

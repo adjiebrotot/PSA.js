@@ -13,6 +13,8 @@ export function decodeValue(v, n) {
   if (v && typeof v === "object" && !Array.isArray(v)) {
     if ("$float" in v) return v.$float === "inf" ? Infinity : v.$float === "-inf" ? -Infinity : NaN;
     if ("$ts" in v) return v.$ts;
+    if ("$slice" in v) return n.snapshots.slice(...v.$slice);
+    if ("$path" in v) return getPathSync(n, v.$path);
     if ("$tuple" in v) return v.$tuple.map((x) => decodeValue(x, n));
     if ("$frame" in v) {
       const spec = v.$frame;
@@ -36,6 +38,24 @@ function callWithKwargs(target, fnName, args, kwargs) {
   if (typeof fn !== "function") throw new Error(`${fnName} is not a function on ${target}`);
   if (kwargs && Object.keys(kwargs).length) return fn.call(target, ...args, kwargs);
   return fn.call(target, ...args);
+}
+
+function step(obj, p) {
+  if (obj instanceof Map && obj.has(p)) return obj.get(p);
+  if (obj instanceof DataFrame) return obj.series(p);
+  if (obj instanceof Series) return obj.get(p);
+  return obj[p];
+}
+
+export function getPathSync(n, path) {
+  let obj = n;
+  for (const p of path) {
+    if (Array.isArray(p)) {
+      const [name, args = [], kwargs = {}] = p;
+      obj = callWithKwargs(obj, name, decodeValue(args, n), decodeValue(kwargs, n));
+    } else obj = step(obj, p);
+  }
+  return obj;
 }
 
 export async function getPath(n, path) {
@@ -91,6 +111,16 @@ export async function runScenario(scenario, onRecord = null) {
       case "set_static": {
         const [, listName, attr, mapping] = op;
         for (const [k, v] of Object.entries(mapping)) n.c.get(listName).static.setAt(k, attr, decodeValue(v, n));
+        break;
+      }
+      case "set_static_all": {
+        const [, listName, attr, v] = op;
+        const st = n.c.get(listName).static;
+        const val = decodeValue(v, n);
+        const prev = st.colOr(attr, null);
+        if (Array.isArray(val)) st.set(attr, prev instanceof Float64Array ? Float64Array.from(val) : val);
+        else if (typeof val === "number" && (prev === null || prev instanceof Float64Array)) st.set(attr, new Float64Array(st.index.length).fill(val));
+        else st.set(attr, st.index.values.map(() => val));
         break;
       }
       case "set_dynamic": {
@@ -151,10 +181,12 @@ export function assertRecordMatches(actual, expected, opts) {
     }
     case "frame":
       assert.ok(actual instanceof DataFrame, `${where}: expected DataFrame, got ${actual?.constructor?.name}`);
+      if (opts.checkIndexNames) assert.deepEqual(actual.index.names, expected.index.names, `${where}: index names differ`);
       assertFrameClose(actual, expected, opts);
       break;
     case "series":
       assert.ok(actual instanceof Series, `${where}: expected Series, got ${actual?.constructor?.name}`);
+      if (opts.checkIndexNames) assert.deepEqual(actual.index.names, expected.index.names, `${where}: index names differ`);
       assertSeriesClose(actual, expected, opts);
       break;
     case "index": {

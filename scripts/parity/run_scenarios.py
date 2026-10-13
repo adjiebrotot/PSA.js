@@ -36,6 +36,10 @@ def decode(v, n):
             return float(v["$float"])
         if "$ts" in v:
             return pd.Timestamp(v["$ts"])
+        if "$path" in v:
+            return get_path(n, v["$path"])
+        if "$slice" in v:
+            return n.snapshots[slice(*v["$slice"])]
         if "$tuple" in v:
             return tuple(decode(x, n) for x in v["$tuple"])
         if "$frame" in v:
@@ -81,7 +85,7 @@ def get_path(n, path):
             args = p[1] if len(p) > 1 else []
             kwargs = p[2] if len(p) > 2 else {}
             obj = getattr(obj, name)(*decode(args, n), **decode(kwargs, n))
-        elif isinstance(obj, dict) or hasattr(obj, "__getitem__") and not hasattr(obj, p):
+        elif isinstance(obj, dict) or hasattr(obj, "__getitem__") and (not isinstance(p, str) or not hasattr(obj, p)):
             obj = obj[p]
         else:
             obj = getattr(obj, p)
@@ -115,6 +119,9 @@ def run(scenario: dict) -> dict:
             _, list_name, attr, mapping = op
             for k, v in mapping.items():
                 n.c[list_name].static.loc[k, attr] = decode(v, n)
+        elif kind == "set_static_all":
+            _, list_name, attr, v = op
+            n.c[list_name].static[attr] = decode(v, n)
         elif kind == "set_dynamic":
             _, list_name, attr, mapping = op
             for k, v in mapping.items():

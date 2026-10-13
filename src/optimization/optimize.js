@@ -202,8 +202,15 @@ export function define_objective(n, sns, includeObjectiveConstant) {
   if (!capexTerms.length && !opexTerms.length && !quadTerms.length) {
     throw new Error("Objective function could not be created. Please make sure the components have assigned costs.");
   }
-  for (const [v, c] of capexTerms) m.add_objective_terms(v, c);
-  for (const [v, c] of opexTerms) m.add_objective_terms(v, c);
+  if (quadTerms.length) {
+    // linopy: LinearExpression + QuadraticExpression evaluates as quad + lin,
+    // so the (linear part of the) OPEX precedes the CAPEX terms
+    for (const [v, c] of opexTerms) m.add_objective_terms(v, c);
+    for (const [v, c] of capexTerms) m.add_objective_terms(v, c);
+  } else {
+    for (const [v, c] of capexTerms) m.add_objective_terms(v, c);
+    for (const [v, c] of opexTerms) m.add_objective_terms(v, c);
+  }
   for (const [v1, v2, c] of quadTerms) m.add_quadratic_objective_terms(v1, v2, c);
 }
 
