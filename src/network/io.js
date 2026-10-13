@@ -15,6 +15,25 @@ export const PYPSA_VERSION = "1.2.4";
 export const DEFAULT_CRS_WKT =
   'GEOGCRS["WGS 84",ENSEMBLE["World Geodetic System 1984 ensemble",MEMBER["World Geodetic System 1984 (Transit)"],MEMBER["World Geodetic System 1984 (G730)"],MEMBER["World Geodetic System 1984 (G873)"],MEMBER["World Geodetic System 1984 (G1150)"],MEMBER["World Geodetic System 1984 (G1674)"],MEMBER["World Geodetic System 1984 (G1762)"],MEMBER["World Geodetic System 1984 (G2139)"],MEMBER["World Geodetic System 1984 (G2296)"],ELLIPSOID["WGS 84",6378137,298.257223563,LENGTHUNIT["metre",1]],ENSEMBLEACCURACY[2.0]],PRIMEM["Greenwich",0,ANGLEUNIT["degree",0.0174532925199433]],CS[ellipsoidal,2],AXIS["geodetic latitude (Lat)",north,ORDER[1],ANGLEUNIT["degree",0.0174532925199433]],AXIS["geodetic longitude (Lon)",east,ORDER[2],ANGLEUNIT["degree",0.0174532925199433]],USAGE[SCOPE["Horizontal component of 3D system."],AREA["World."],BBOX[-90,-180,90,180]],ID["EPSG",4326]]';
 
+/**
+ * JSON text like Python's `json.dumps` (", " / ": " separators, ASCII
+ * escapes), so exported metadata files match PyPSA byte for byte.
+ */
+export function pyJsonDumps(v) {
+  if (v === null || v === undefined) return "null";
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (typeof v === "number") {
+    if (Number.isNaN(v)) return "NaN";
+    if (!Number.isFinite(v)) return v > 0 ? "Infinity" : "-Infinity";
+    return String(v);
+  }
+  if (typeof v === "string") return JSON.stringify(v).replace(/[\u007f-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  if (Array.isArray(v)) return `[${v.map(pyJsonDumps).join(", ")}]`;
+  return `{${Object.entries(v)
+    .map(([k, x]) => `${pyJsonDumps(String(k))}: ${pyJsonDumps(x)}`)
+    .join(", ")}}`;
+}
+
 // ----------------------------------------------------------------------
 // Folder abstractions
 // ----------------------------------------------------------------------
@@ -207,6 +226,7 @@ function importFromImporter(n, importer, skipTime = false) {
     if (attr === "model" || attr === "objective" || attr === "objective_constant") n[`_${attr}`] = val;
     else if (attr === "srid") n.srid = val;
     else n[attr] = val;
+    if (attr === "_linearized_uc") n._linearizedUcSet = true;
   }
   if (compareVersions(version, PYPSA_VERSION) < 0) {
     logger.info(
@@ -298,12 +318,12 @@ function valuesEqual(a, b) {
   return a === b;
 }
 
-function exportToFolder(n, folder, { export_standard_types = false } = {}) {
-  if (!folder.exists()) {
-    logger.warning(`Directory ${folder.dir ?? ""} does not exist, creating it`);
-    folder.mkdir();
-  }
-
+/**
+ * Collect the data PyPSA's exporters write (network attributes, CRS, meta,
+ * snapshots, investment periods, non-default static columns and time series)
+ * (mirrors `NetworkIOMixin._export_to_exporter`).
+ */
+export function collectExport(n, { export_standard_types = false } = {}) {
   // network attributes (python `dir()` order: sorted)
   const attrs = {};
   const candidates = {
@@ -322,21 +342,11 @@ function exportToFolder(n, folder, { export_standard_types = false } = {}) {
     if (typeof v === "number" || typeof v === "string" || typeof v === "boolean") attrs[k] = v;
   }
   if (!n._linearizedUcSet) delete attrs._linearized_uc;
-  const netDf = new DataFrame({
-    index: new Index([n.name], "name"),
-    columns: Object.keys(attrs),
-    data: Object.fromEntries(Object.entries(attrs).map(([k, v]) => [k, [v]])),
-    dtypes: Object.fromEntries(
-      Object.entries(attrs).map(([k, v]) => [k, typeof v === "number" ? (Number.isInteger(v) && !k.startsWith("_objective") ? "int" : "float") : "object"]),
-    ),
-  });
-  folder.write("network.csv", writeCSV(netDf));
 
-  const crs = n._crs._crs ?? (n.srid === 4326 ? DEFAULT_CRS_WKT : null);
-  folder.write("crs.json", JSON.stringify(crs === null ? {} : { _crs: crs }));
-  folder.write("meta.json", JSON.stringify(n.meta));
+  const crsWkt = n._crs._crs ?? (n.srid === 4326 ? DEFAULT_CRS_WKT : null);
+  const crs = crsWkt === null ? {} : { _crs: crsWkt };
 
-  // snapshots
+  // snapshots (snapshot_weightings.reset_index())
   const sw = n.snapshot_weightings;
   const snsCols = n.snapshots.isMulti ? ["period", "timestep"] : ["snapshot"];
   const snsData = new Map();
@@ -349,22 +359,22 @@ function exportToFolder(n, folder, { export_standard_types = false } = {}) {
     snsData.set(c, sw.col(c));
     dt[c] = "float";
   }
-  const snsDf = new DataFrame({
+  const snapshots = new DataFrame({
     index: new Index(Array.from({ length: n.snapshots.length }, (_, i) => i)),
     columns: [...snsCols, ...sw.columns.values],
     data: snsData,
     dtypes: dt,
   });
-  folder.write("snapshots.csv", writeCSV(snsDf));
 
+  let periods = null;
   if (n.has_periods) {
-    const ipw = n.investment_period_weightings;
-    const df = ipw.copy();
-    for (const c of df.columns) df.dtypes[c] = "float";
-    folder.write("investment_periods.csv", writeCSV(df));
+    periods = n.investment_period_weightings.copy();
+    for (const c of periods.columns) periods.dtypes[c] = "float";
   }
 
-  const exported = [];
+  const statics = [];
+  const series = [];
+  const removed = [];
   for (const component of [...n.all_components].sort()) {
     const c = n.c.get(component);
     const listName = c.list_name;
@@ -387,12 +397,13 @@ function exportToFolder(n, folder, { export_standard_types = false } = {}) {
       colExport.push(col);
     }
     if (st.index.length === 0) {
+      removed.push({ listName, attr: null });
       continue;
     }
-    let out = st.loc(null, colExport);
+    const out = st.loc(null, colExport);
     if (colExport.includes("obj") && component === "SubNetwork") out.set("obj", new Float64Array(out.index.length).fill(NaN));
     out.index = new Index(out.index.values, "name");
-    folder.write(`${listName}.csv`, writeCSV(out));
+    statics.push({ component, listName, df: out });
 
     for (const [attr, df] of Object.entries(c.dynamic)) {
       const def = defaults.get(attr);
@@ -404,14 +415,45 @@ function exportToFolder(n, folder, { export_standard_types = false } = {}) {
         const sdf = df.loc(null, cols);
         sdf.index = new Index(Array.from({ length: df.index.length }, (_, i) => i));
         for (const cc of cols) sdf.dtypes[cc] = "float";
-        folder.write(`${listName}-${attr}.csv`, writeCSV(sdf));
+        series.push({ listName, attr, df: sdf });
       } else {
-        folder.remove(`${listName}-${attr}.csv`);
+        removed.push({ listName, attr });
       }
     }
-    exported.push(listName);
   }
-  logger.info(`Exported network '${n.name}' contains: ${exported.join(", ")}`);
+  return { name: n.name, attrs, crs, meta: n.meta, snapshots, periods, statics, series, removed };
+}
+
+function exportToFolder(n, folder, { export_standard_types = false } = {}) {
+  if (!folder.exists()) {
+    logger.warning(`Directory ${folder.dir ?? ""} does not exist, creating it`);
+    folder.mkdir();
+  }
+  const ex = collectExport(n, { export_standard_types });
+  const netDf = new DataFrame({
+    index: new Index([ex.name], "name"),
+    columns: Object.keys(ex.attrs),
+    data: Object.fromEntries(Object.entries(ex.attrs).map(([k, v]) => [k, [v]])),
+    dtypes: Object.fromEntries(
+      Object.entries(ex.attrs).map(([k, v]) => [k, typeof v === "number" ? (Number.isInteger(v) && !k.startsWith("_objective") ? "int" : "float") : "object"]),
+    ),
+  });
+  folder.write("network.csv", writeCSV(netDf));
+  folder.write("crs.json", pyJsonDumps(ex.crs));
+  folder.write("meta.json", pyJsonDumps(ex.meta));
+  folder.write("snapshots.csv", writeCSV(ex.snapshots));
+  if (ex.periods) folder.write("investment_periods.csv", writeCSV(ex.periods));
+  const seriesBy = new Map();
+  for (const s of ex.series) {
+    if (!seriesBy.has(s.listName)) seriesBy.set(s.listName, []);
+    seriesBy.get(s.listName).push(s);
+  }
+  for (const { listName, df } of ex.statics) {
+    folder.write(`${listName}.csv`, writeCSV(df));
+    for (const { attr, df: sdf } of seriesBy.get(listName) ?? []) folder.write(`${listName}-${attr}.csv`, writeCSV(sdf));
+  }
+  for (const { listName, attr } of ex.removed) if (attr !== null) folder.remove(`${listName}-${attr}.csv`);
+  logger.info(`Exported network '${n.name}' contains: ${ex.statics.map((s) => s.listName).join(", ")}`);
 }
 
 // ----------------------------------------------------------------------
@@ -445,4 +487,4 @@ Network.from_csv_folder = function fromCsvFolder(path, opts = {}) {
   return n;
 };
 
-export { asFolder };
+export { asFolder, importFromImporter };

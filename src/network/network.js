@@ -147,7 +147,6 @@ export class Network {
     this._linearized_uc = 0;
     this._committable_big_m = null;
     this.iteration = 0;
-    this.now = DEFAULT_TIMESTAMP;
 
     this._components = null;
     // initialise store
@@ -893,7 +892,7 @@ export class Network {
     n._committable_big_m = this._committable_big_m;
     n._objective = this._objective;
     n._objective_constant = this._objective_constant;
-    n.now = this.now;
+    if (this.now !== undefined) n.now = this.now;
     return n;
   }
 
@@ -1160,7 +1159,7 @@ function deepCopyNetwork(src) {
   n._multi_invest = src._multi_invest;
   n._linearized_uc = src._linearized_uc;
   n._committable_big_m = src._committable_big_m;
-  n.now = src.now;
+  if (src.now !== undefined) n.now = src.now;
   n.iteration = src.iteration;
   for (const [ln, comp] of src.components) {
     const dst = n.c.get(ln);
