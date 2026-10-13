@@ -4,11 +4,13 @@
  */
 
 import { Components, RE_PORTS_GE_2 } from "../components/components.js";
-import { componentTypes, getComponentType, allStandardAttrs, typToDtype } from "../components/types.js";
+import { componentTypes, getComponentType, allStandardAttrs, typToDtype, PYPSA_VERSION } from "../components/types.js";
 import { DataFrame, Series, isNumberArray, makeFilled } from "../core/frame.js";
 import { Index, asIndex, labelKey } from "../core/index.js";
 import { pyFloatRepr } from "../core/csv.js";
 import { ComponentsStore, installStoreAccessors } from "./store.js";
+import { NOMINAL_ATTRS } from "../components/components.js";
+import { importPiecewiseFromDf, piecewiseFromAddValue } from "../components/piecewise.js";
 import { logger } from "../logger.js";
 
 export const DEFAULT_TIMESTAMP = "now";
@@ -116,6 +118,10 @@ function inferDtype(arr) {
   return "object";
 }
 
+function isPlainObject(v) {
+  return v !== null && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype;
+}
+
 /** Generic deep copy of a DataFrame. */
 function copyFrame(df) {
   return df.copy();
@@ -131,7 +137,7 @@ export class Network {
   constructor(opts = {}) {
     if (typeof opts === "string") opts = { import_name: opts };
     const { name = "Unnamed Network", ignore_standard_types = false, import_name = null, ...rest } = opts;
-    this._pypsa_version = getComponentType("Bus") ? "1.x (PSA.js)" : "";
+    this._pypsa_version = PYPSA_VERSION;
     this._name = name;
     this._meta = {};
     this._crs = { _crs: null, epsg: DEFAULT_EPSG };
@@ -536,7 +542,23 @@ export class Network {
 
     const series = {};
     const staticVals = {};
+    const piecewise = {};
+    const addSuffix = (s) => {
+      s = pyStr(s);
+      return typeof suffix === "string" && s.endsWith(suffix) ? s : s + suffix;
+    };
     for (let [k, v] of Object.entries(kwargs)) {
+      // Intercept piecewise breakpoint data: a dict {x: y} or a DataFrame whose
+      // columns are the curve attributes (or (name, attribute) tuples)
+      const pwSchema = c._piecewise_schema(k);
+      if (pwSchema) {
+        if (isPlainObject(v)) v = new Map(Object.entries(v).map(([x, y]) => [Number(x), y]));
+        const pw = piecewiseFromAddValue(v, k, pwSchema.x, names, addSuffix);
+        if (pw) {
+          piecewise[k] = pw;
+          continue;
+        }
+      }
       if (v instanceof Series && single) {
         if (!v.index.equals(this.snapshots)) throw new Error(`Series ${k} has an index which does not align with the passed network snapshots.`);
       } else if (v instanceof Series) {
@@ -600,6 +622,13 @@ export class Network {
     const staticDf = new DataFrame({ index: names, columns: [...data.keys()], data });
 
     this._import_components_from_df(staticDf, c.name, overwrite);
+
+    // Load piecewise breakpoint data (after the static import, so that
+    // overwriting an existing component does not drop the new breakpoints)
+    const extCol = `${NOMINAL_ATTRS[c.name] ?? "None"}_extendable`;
+    const isExtendable = staticDf.has(extCol) ? new Map(names.values.map((nm, i) => [nm, Boolean(staticDf.col(extCol)[i])])) : null;
+    for (const [k, v] of Object.entries(piecewise)) importPiecewiseFromDf(this, v, c.name, k, { isExtendable, overwrite });
+
     for (const [k, v] of Object.entries(series)) this._import_series_from_df(v, c.name, k, overwrite);
 
     return return_names ? names : null;
@@ -615,6 +644,12 @@ export class Network {
       const df = c.dynamic[k];
       const drop = df.columns.intersection(names);
       if (drop.length) c.dynamic[k] = df.dropCols(drop);
+    }
+    // Drop piecewise breakpoint data
+    const nameKeys = new Set(names.values.map(labelKey));
+    for (const [k, df] of Object.entries(c.piecewise)) {
+      const stale = df.columns.values.filter((t) => nameKeys.has(labelKey(t[0])));
+      if (stale.length) c.piecewise[k] = df.loc(null, df.columns.filter((t) => !nameKeys.has(labelKey(t[0]))));
     }
   }
 
@@ -762,10 +797,12 @@ export class Network {
 
   *get_switchable_as_iter(component, attr, snapshots, inds = null) {
     const df = this.get_switchable_as_dense(component, attr, snapshots, inds);
+    // the series follow the order of `inds` (unique, known names only)
+    const cols = inds === null ? df.columns : new Index(asIndex(inds).unique().values, "name").intersection(df.columns);
     for (let i = 0; i < df.index.length; i++) {
       yield new Series(
-        Float64Array.from(df.columns.values, (c) => df.col(c)[i]),
-        df.columns,
+        Float64Array.from(cols.values, (c) => df.col(c)[i]),
+        cols,
         df.index.at(i),
       );
     }
@@ -858,8 +895,16 @@ export class Network {
     if (snapshots === null && investment_periods === null && !ignore_standard_types) {
       return deepCopyNetwork(this);
     }
-    const sns = snapshots === null ? this.snapshots : asIndex(snapshots, "snapshot");
-    const periods = investment_periods === null ? this.investment_periods : asIndex(investment_periods, "period");
+    let sns = snapshots === null ? this.snapshots : asIndex(snapshots, "snapshot");
+    let periods = investment_periods === null ? this.investment_periods : asIndex(investment_periods, "period");
+    if (sns.isMulti && periods.length > 0) {
+      // keep snapshots and investment periods consistent with each other
+      if (snapshots === null) sns = sns.filter(sns.values.map((t) => periods.has(t[0])));
+      else if (investment_periods === null) {
+        const used = new Set(sns.values.map((t) => labelKey(t[0])));
+        periods = periods.filter(periods.values.map((p) => used.has(labelKey(p))));
+      }
+    }
     const n = new Network({ ignore_standard_types });
     const others = [...this.all_components].filter((c) => c !== "Bus" && c !== "Carrier").sort();
     for (const cname of ["Bus", "Carrier", ...others]) {
@@ -1167,6 +1212,8 @@ function deepCopyNetwork(src) {
     dst.static = copyFrame(comp.static);
     dst.dynamic = {};
     for (const [k, v] of Object.entries(comp.dynamic)) dst.dynamic[k] = copyFrame(v);
+    dst.piecewise = {};
+    for (const [k, v] of Object.entries(comp.piecewise)) dst.piecewise[k] = copyFrame(v);
   }
   if (src.c.sub_networks.static.has("obj")) {
     // rebuild SubNetwork objects bound to the new network

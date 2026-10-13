@@ -7,7 +7,7 @@ import path from "node:path";
 import os from "node:os";
 import { mkdtempSync, rmSync } from "node:fs";
 import { Network, MemoryFolder, logger } from "../src/index.js";
-import { loadFixture, examplePath, assertNetworkMatches, ROOT } from "./helpers.js";
+import { loadFixture, examplePath, assertNetworkMatches, assertFrameClose, ROOT } from "./helpers.js";
 
 logger.setLevel("error");
 
@@ -43,8 +43,6 @@ function assertCsvMatches(actual, expected, where, rtol = 0) {
 function assertExportMatches(n, expected, where, rtol = 0) {
   const folder = n.export_to_csv_folder(new MemoryFolder());
   const files = folder.toObject();
-  // the reference PyPSA checkout reports version "0.0" (no git tags available)
-  files["network.csv"] = files["network.csv"].replace(/,(\d+\.\d+\.\d+)(,\d+\n)$/, ",0.0$2");
   assert.deepEqual(Object.keys(files).sort(), Object.keys(expected).sort(), `${where}: exported file set differs`);
   for (const [name, text] of Object.entries(expected)) assertCsvMatches(files[name], text, `${where}/${name}`, rtol);
 }
@@ -98,4 +96,45 @@ test("solved network: netCDF import and CSV export", async () => {
   const m = Network.from_csv_folder(examplePath("ac-dc-meshed"));
   await m.optimize({ include_objective_constant: true });
   assertExportMatches(m, fx.export, "solved-js", 1e-6);
+});
+
+function assertPiecewiseMatches(n, expected, where) {
+  for (const c of n.components.values()) {
+    for (const [attr, df] of Object.entries(c.piecewise)) {
+      const exp = expected[c.list_name]?.[attr];
+      if (!exp) {
+        assert.ok(df.empty, `${where}: unexpected piecewise data ${c.list_name}.${attr}`);
+        continue;
+      }
+      assertFrameClose(df, exp, { rtol: 0, atol: 0, path: `${where}/${c.list_name}.${attr}` });
+    }
+  }
+  for (const [listName, attrs] of Object.entries(expected)) {
+    for (const attr of Object.keys(attrs)) assert.ok(n.c.get(listName).has_piecewise(attr), `${where}: missing ${listName}.${attr}`);
+  }
+}
+
+test("piecewise data: netCDF and CSV import/export", async () => {
+  const fx = loadFixture("io_piecewise");
+  const n = await Network.from_netcdf(ncPath("piecewise"));
+  assertNetworkMatches(n, fx.network_nc, { rtol: 0, atol: 0 });
+  assertPiecewiseMatches(n, fx.piecewise_nc, "netcdf");
+  assertExportMatches(n, fx.export, "piecewise");
+  const m = new Network();
+  m.import_from_csv_folder(new MemoryFolder(fx.export));
+  assertPiecewiseMatches(m, fx.piecewise, "csv");
+  // PSA.js netCDF round trip, including ragged curves
+  const dir = mkdtempSync(path.join(os.tmpdir(), "psajs-pw-"));
+  try {
+    m.add("Generator", "g4", { bus: "a", p_nom: 10, marginal_cost: new Map([[0, 0], [0.25, 1], [0.5, 2], [1, 8]]) });
+    await m.export_to_netcdf(path.join(dir, "pw.nc"));
+    const k = await Network.from_netcdf(path.join(dir, "pw.nc"));
+    for (const [attr, df] of Object.entries(m.c.generators.piecewise)) {
+      const got = k.c.generators.piecewise[attr];
+      assert.deepEqual(got.columns.values, df.columns.values, `round trip ${attr} columns`);
+      for (const t of df.columns.values) assert.deepEqual(Array.from(got.col(t)), Array.from(df.col(t)), `round trip ${attr} ${t}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

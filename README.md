@@ -5,9 +5,9 @@ System Analysis). PyPSA is the source of truth: every feature listed below is
 checked against PyPSA by parity tests that run the same scenario in both
 libraries and compare the results.
 
-Reference version: PyPSA commit `1eb9db0` (post v1.2.4, branch
-`claude/determined-clarke-0uzw3g` of the `adjiebrotot/PyPSA` fork). Note that the
-fork's `master` has since moved to v1.4.0; PSA.js has **not** been updated to it.
+Reference version: PyPSA **v1.4.0** (commit `6c45594` on `master` of the
+`adjiebrotot/PyPSA` fork, one fix after the v1.4.0 tag). Networks exported by
+PSA.js report `pypsa_version = 1.4.0`.
 
 ## Install and use
 
@@ -48,20 +48,29 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
   types, `add`/`remove`, snapshots, weightings, investment periods, `copy`,
   `merge`, `slice`, multi-port links and processes.
 - **IO**: CSV folders (import and byte-identical export), netCDF import/export
-  in PyPSA's layout (files written by PSA.js re-import identically in PyPSA).
-- **Topology and power flow**: sub-networks, cycle matrices, PTDF/BODF, linear
-  power flow, contingency analysis, Newton-Raphson AC power flow incl.
-  distributed slack.
+  in PyPSA's layout (files written by PSA.js re-import identically in PyPSA),
+  including piecewise breakpoint data (`<list>-<attr>-pw.csv`,
+  `<list>_pw_<attr>`).
+- **Topology and power flow**: sub-networks, cycle matrices (networkx-ordered
+  `bfs-refined` default and `paton` cycle bases), PTDF/BODF, linear power flow,
+  contingency analysis, Newton-Raphson AC power flow incl. distributed slack,
+  seasonal line ratings.
 - **Optimisation**: the LP written by PSA.js is identical to linopy's LP file
   (same labels, row/term order and numbers), so HiGHS returns the same
   solution. Covers operational/extendable/committable constraints, unit
-  commitment (MILP and linearised), ramp limits incl. big-M for
-  committable+extendable, modular capacities, storage units and stores,
+  commitment (MILP and linearised, status history, time-varying start-up and
+  shut-down costs), ramp limits incl. big-M for committable+extendable,
+  maintenance scheduling, modular capacities, storage units and stores,
   multi-investment periods, all global constraint types, growth limits,
   transmission losses (secants/tangents), transport delays, quadratic costs,
-  activity masks, rolling horizon, security-constrained OPF, iterative
-  transmission expansion, optimisation followed by AC power flow, MGA,
-  custom constraints through a linopy-style expression API.
+  phase-shifting transformers and voltage angle limits, activity masks,
+  rolling horizon, security-constrained OPF (per investment period),
+  iterative transmission expansion, optimisation followed by AC power flow,
+  MGA, piecewise linear marginal/capital costs and efficiencies (linopy's LP
+  tangent-line, incremental and SOS2 formulations, `piecewise_options`; SOS
+  constraints are solved through linopy's binary reformulation with
+  `reformulate_sos: true`, as HiGHS has no native SOS support), custom
+  constraints through a linopy-style expression API.
 - **Statistics**: capex, opex, capacities, supply/withdrawal, energy balance,
   transmission, curtailment, capacity factor, revenue, market value, prices,
   with PyPSA's groupers and rounding/drop_zero semantics.
@@ -80,14 +89,19 @@ SCENARIO=opt_uc npm test       # a single scenario
 `test/scenarios/*.json` describe operations that both runners execute:
 `scripts/parity/run_scenarios.py` (PyPSA, writes `test/fixtures/*.json.gz`) and
 `test/scenario_runner.js` (PSA.js). To regenerate fixtures, use a Python
-environment with the reference PyPSA checkout installed:
+environment with the reference PyPSA checkout installed (with its release tags,
+`git fetch --tags`, so that `pypsa.__version__` resolves):
 
 ```
+scripts/parity/generate_all.sh          # definitions + every fixture
 cd scripts/parity
 python run_scenarios.py [scenario ...]   # optimisation/statistics/clustering scenarios
 python gen_io.py                         # IO fixtures (CSV + netCDF)
 python gen_networks.py                   # network fixtures
 ```
+
+Fixtures are deterministic (fixed hash seed, `mtime=0` gzip), so a full
+regeneration leaves `git status` clean unless PyPSA's behaviour changed.
 
 The generators pin `PYTHONHASHSEED=0` because PyPSA iterates over Python sets in
 places that affect variable order. Tolerances are exact for data/IO and
@@ -98,7 +112,7 @@ from libm by one ulp on some CPUs).
 ## Not implemented / known differences
 
 See [`NEXT_STEPS.md`](NEXT_STEPS.md) for the remaining work list. In short:
-stochastic optimisation (scenarios, CVaR), NetworkCollection, Excel/HDF5 IO,
-pandapower/PYPOWER importers, plotting, `to_crs`, tsam segmentation,
+stochastic optimisation (scenarios, CVaR), NetworkCollection, `n.optimize.expressions`,
+Excel/HDF5 IO, pandapower/PYPOWER importers, plotting, `to_crs`, tsam segmentation,
 HAC/greedy-modularity busmaps (k-means is a seeded approximation, not
 scikit-learn's), weekly/monthly resampling, solvers other than HiGHS.

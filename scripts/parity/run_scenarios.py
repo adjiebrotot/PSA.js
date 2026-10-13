@@ -66,6 +66,14 @@ def decode(v, n):
             spec = v["$frame"]
             data = np.array([[float(decode(x, n)) for x in row] for row in spec["data"]], dtype=float)
             return pd.DataFrame(data, index=n.snapshots, columns=spec["columns"])
+        if "$pairs" in v:
+            return {decode(k, n): decode(x, n) for k, x in v["$pairs"]}
+        if "$df" in v:
+            spec = v["$df"]
+            columns = spec["columns"]
+            if spec.get("column_names"):
+                columns = pd.MultiIndex.from_tuples([tuple(c) for c in columns], names=spec["column_names"])
+            return pd.DataFrame([[decode(x, n) for x in row] for row in spec["data"]], index=spec["index"], columns=columns)
         if "$series" in v:
             spec = v["$series"]
             idx = spec.get("index")

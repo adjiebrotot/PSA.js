@@ -171,3 +171,27 @@ export function getBusCounts(n) {
 export function isinf(x) {
   return x === Infinity || x === -Infinity;
 }
+
+/** numpy-like pairwise summation (matches `np.sum` for float64 arrays). */
+export function npSum(arr) {
+  const a = Float64Array.from(arr);
+  const rec = (off, n) => {
+    if (n < 8) {
+      let res = 0;
+      for (let i = 0; i < n; i++) res += a[off + i];
+      return res;
+    }
+    if (n <= 128) {
+      const r = [a[off], a[off + 1], a[off + 2], a[off + 3], a[off + 4], a[off + 5], a[off + 6], a[off + 7]];
+      let i;
+      for (i = 8; i < n - (n % 8); i += 8) for (let j = 0; j < 8; j++) r[j] += a[off + i + j];
+      let res = r[0] + r[1] + (r[2] + r[3]) + (r[4] + r[5] + (r[6] + r[7]));
+      for (; i < n; i++) res += a[off + i];
+      return res;
+    }
+    let n2 = Math.floor(n / 2);
+    n2 -= n2 % 8;
+    return rec(off, n2) + rec(off + n2, n - n2);
+  };
+  return rec(0, a.length);
+}

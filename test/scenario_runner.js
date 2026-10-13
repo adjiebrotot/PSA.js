@@ -38,6 +38,14 @@ export function decodeValue(v, n) {
       spec.columns.forEach((c, j) => data.set(c, Float64Array.from(spec.data, (row) => Number(decodeValue(row[j], n)))));
       return new DataFrame({ index: n.snapshots, columns: spec.columns, data });
     }
+    if ("$pairs" in v) return new Map(v.$pairs.map(([k, x]) => [decodeValue(k, n), decodeValue(x, n)]));
+    if ("$df" in v) {
+      const spec = v.$df;
+      const data = new Map();
+      spec.columns.forEach((c, j) => data.set(c, spec.data.map((row) => decodeValue(row[j], n))));
+      const columns = spec.column_names ? new Index(spec.columns, spec.column_names) : spec.columns;
+      return new DataFrame({ index: new Index(spec.index), columns, data });
+    }
     if ("$series" in v) {
       const spec = v.$series;
       const vals = spec.values.map((x) => decodeValue(x, n));
@@ -313,8 +321,16 @@ function parseNum(t) {
 /** Compare LP texts: identical structure, numbers equal within tolerance. */
 export function assertLpMatches(actual, expected, { lpRtol = 1e-12, path: where = "lp" } = {}) {
   if (actual === expected) return;
-  const a = actual.split("\n");
-  const b = expected.split("\n");
+  // linopy writes the SOS sets in (non-deterministic) polars group order
+  const sosSplit = (t) => {
+    const i = t.indexOf("\n\nsos\n\n");
+    return i < 0 ? [t, ""] : [t.slice(0, i), t.slice(i).split("\n").sort().join("\n")];
+  };
+  const [aMain, aSos] = sosSplit(actual);
+  const [bMain, bSos] = sosSplit(expected);
+  assert.equal(aSos, bSos, `${where}: SOS sections differ`);
+  const a = aMain.split("\n");
+  const b = bMain.split("\n");
   assert.equal(a.length, b.length, `${where}: LP line count differs (PSA.js ${a.length}, PyPSA ${b.length})`);
   for (let i = 0; i < a.length; i++) {
     if (a[i] === b[i]) continue;

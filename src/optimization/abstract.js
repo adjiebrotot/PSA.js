@@ -9,7 +9,7 @@
 import { Index } from "../core/index.js";
 import { logger } from "../logger.js";
 import { as_index } from "../common.js";
-import { NOMINAL_ATTRS } from "./common.js";
+import { NOMINAL_ATTRS, npSum } from "./common.js";
 
 /** Python float modulo (result has the sign of the divisor). */
 function pyMod(a, b) {
@@ -83,7 +83,7 @@ export function installAbstract(Accessor) {
     const n = this._n;
     const lines = () => n.c.lines.static;
     lines().set("carrier", mapCol(n, lines(), "bus0", "Bus", "carrier"));
-    const extI = n.c.lines.extendables.difference(n.c.lines.inactive_assets);
+    const extI = n.c.lines.extendables.intersection(n.c.lines.active_assets);
     const typedI = indexWhere(lines(), (i) => lines().col("type")[i] !== "");
     const extUntypedI = extI.difference(typedI);
     const extTypedI = extI.intersection(typedI);
@@ -146,7 +146,7 @@ export function installAbstract(Accessor) {
         logger.info(`Iteration ${iteration} beyond max_iterations ${max_iterations}. Stopping ...`);
         break;
       }
-      const sNomPrev = Float64Array.from(lines().col("s_nom_opt"));
+      const sNomPrev = Float64Array.from(lines().col(iteration > 1 ? "s_nom_opt" : "s_nom"));
       const [status, condition] = await n.optimize({ snapshots, ...kwargs });
       if (status !== "ok") throw new Error(`Optimization failed with status ${status} and termination ${condition}`);
       if (track_iterations) saveOptimalCapacities(iteration, status);
@@ -207,14 +207,18 @@ export function installAbstract(Accessor) {
       links.setAt(nm, "p_nom_extendable", true);
     }
 
-    let objLinks = 0;
-    for (const nm of fixLinks) objLinks += links.at(nm, "capital_cost") * (links.at(nm, "p_nom_opt") - links.at(nm, "p_nom_min"));
-    let objLines = 0;
-    const ls = lines();
-    ls.index.values.forEach((_, i) => {
-      const v = ls.col("capital_cost")[i] * (ls.col("s_nom_opt")[i] - ls.col("s_nom_min")[i]);
-      if (!Number.isNaN(v)) objLines += v;
+    // pandas `.sum()` (skipna) of periodized cost times added capacity
+    const pcLinks = n.c.links.periodized_cost;
+    const fixLinkSet = new Set(fixLinks.values);
+    const linkTerms = [];
+    links.index.values.forEach((nm, i) => {
+      const v = pcLinks[i] * (links.col("p_nom_opt")[i] - links.col("p_nom_min")[i]);
+      if (fixLinkSet.has(nm) && !Number.isNaN(v)) linkTerms.push(v);
     });
+    const objLinks = npSum(linkTerms);
+    const ls = lines();
+    const pcLines = n.c.lines.periodized_cost;
+    const objLines = npSum(ls.index.values.map((_, i) => pcLines[i] * (ls.col("s_nom_opt")[i] - ls.col("s_nom_min")[i])).filter((v) => !Number.isNaN(v)));
     n._objective += objLinks + objLines;
     n._objective_constant -= objLinks + objLines;
     return [status, condition];
@@ -234,56 +238,39 @@ export function installAbstract(Accessor) {
     if (branch_outages === null) outagesIdx = allPassive;
     else {
       const vals = (branch_outages instanceof Index ? branch_outages.values : branch_outages).map((b) => (Array.isArray(b) ? b : ["Line", b]));
-      const missing = vals.filter((b) => !allPassive.has(b));
-      if (missing.length && !(branch_outages instanceof Index && branch_outages.isMulti)) {
-        throw new Error(`The following passive branches are not in the network: ${missing.map((b) => `('${b[0]}', '${b[1]}')`).join(", ")}`);
-      }
       outagesIdx = new Index(vals, ["type", "name"]);
+    }
+    const missing = outagesIdx.values.filter((b) => !allPassive.has(b));
+    if (missing.length) {
+      throw new Error(`The following passive branches are not in the network: {${missing.map((b) => `('${b[0]}', '${b[1]}')`).join(", ")}}`);
     }
     if (!allPassive.length) return n.optimize({ snapshots, multi_investment_periods, ...model_kwargs, ...kwargs });
 
+    // outages must be active in at least one optimised investment period
+    const sns = as_index(n, snapshots, "snapshots");
+    const periods = multi_investment_periods ? sns.uniqueLevel(0).values : null;
+    const activeNames = new Map();
+    for (const [c] of outagesIdx.values) {
+      if (activeNames.has(c)) continue;
+      const comp = n.c.get(c);
+      const a = comp.get_active_assets(periods);
+      activeNames.set(c, new Set(comp.static.index.values.filter((_, i) => a.values[i])));
+    }
+    const inactive = outagesIdx.values.filter(([c, nm]) => !activeNames.get(c).has(nm));
+    if (branch_outages !== null && inactive.length) {
+      throw new Error(`The following branch outages are not active in any optimized investment period: {${inactive.map((b) => `('${b[0]}', '${b[1]}')`).join(", ")}}`);
+    }
+
     const m = this.create_model({ snapshots, multi_investment_periods, ...model_kwargs });
-    for (const sub of n.c.sub_networks.static.col("obj")) {
-      const branchesI = sub.branches_i();
-      const outages = branchesI.intersection(outagesIdx);
-      if (outages.empty) continue;
-      sub.calculate_BODF();
-      const pos = (b) => branchesI.getLoc(b);
-      const unique0 = (idx) => [...new Set(idx.values.map((b) => b[0]))];
-      for (const cOutage of unique0(outages)) {
-        for (const cAffected of unique0(branchesI)) {
-          const outDim = `${cOutage}-outage`;
-          const cOutages = outages.values.filter((b) => b[0] === cOutage).map((b) => b[1]);
-          const flowVar = m.variables.get(`${cOutage}-s`);
-          const affected = branchesI.values.filter((b) => b[0] === cAffected).map((b) => b[1]);
-          for (const bound of ["lower", "upper"]) {
-            for (const kind of ["fix", "ext"]) {
-              const cname = `${cAffected}-${kind}-s-${bound}`;
-              const con = m.constraints.get(cname);
-              if (!con) continue;
-              const ni = con.dims.indexOf("name");
-              const si = con.dims.indexOf("snapshot");
-              const idx = con.coords[ni].intersection(new Index(affected));
-              const snsC = con.coords[si];
-              const name = `${cname}-security-for-${outDim}-in-sub-network-${sub.name}`;
-              const nc = m.new_constraint(name, ["snapshot", "name", outDim], [snsC, new Index(idx.values, "name"), new Index(cOutages, outDim)]);
-              for (let s = 0; s < snsC.length; s++) {
-                const sn = snsC.at(s);
-                for (const aff of idx) {
-                  const j = con.coords[ni].getLoc(aff);
-                  const k = con.flat(...(si === 0 ? [s, j] : [j, s]));
-                  const [vs, cs] = con.rawTerms(k);
-                  for (const o of cOutages) {
-                    const bodf = sub.BODF[pos([cAffected, aff])][pos([cOutage, o])];
-                    nc.push([...vs, flowVar.get(sn, o)], [...cs, bodf], con.sign[k], con.rhs[k]);
-                  }
-                }
-              }
-              m.add_constraint(nc);
-            }
-          }
-        }
+    const modelSns = m.parameters.snapshots;
+    const windows = n._multi_invest ? sns.uniqueLevel(0).values.map((p) => [p, modelSns.filter(modelSns.values.map((t) => t[0] === p))]) : [[null, null]];
+    for (const [period, periodSns] of windows) {
+      let suffix = "";
+      if (period !== null) {
+        n.determine_network_topology({ investment_period: period, skip_isolated_buses: true });
+        suffix = `-period-${period}`;
       }
+      for (const sub of n.c.sub_networks.static.col("obj")) addSecurityConstraints(m, sub, outagesIdx, periodSns, suffix);
     }
     return this.solve_model(kwargs);
   };
@@ -357,4 +344,49 @@ export function installAbstract(Accessor) {
     const res = await n.pf({ snapshots, skip_pre, x_tol, use_seed, distribute_slack, slack_weights });
     return { status, termination_condition: condition, ...res };
   };
+}
+
+/** Branch outage constraints of a sub-network (`_add_security_constraints`). */
+function addSecurityConstraints(m, sub, branchOutages, periodSns, suffix) {
+  const branchesI = sub.branches_i();
+  const outages = branchesI.intersection(branchOutages);
+  if (outages.empty) return;
+  sub.calculate_BODF();
+  const pos = (b) => branchesI.getLoc(b);
+  const unique0 = (idx) => [...new Set(idx.values.map((b) => b[0]))];
+  for (const cOutage of unique0(outages)) {
+    for (const cAffected of unique0(branchesI)) {
+      const outDim = `${cOutage}-outage`;
+      const cOutages = outages.values.filter((b) => b[0] === cOutage).map((b) => b[1]);
+      const flowVar = m.variables.get(`${cOutage}-s`);
+      const affected = branchesI.values.filter((b) => b[0] === cAffected).map((b) => b[1]);
+      for (const bound of ["lower", "upper"]) {
+        for (const kind of ["fix", "ext"]) {
+          const cname = `${cAffected}-${kind}-s-${bound}`;
+          const con = m.constraints.get(cname);
+          if (!con) continue;
+          const ni = con.dims.indexOf("name");
+          const si = con.dims.indexOf("snapshot");
+          const idx = con.coords[ni].intersection(new Index(affected));
+          const snsC = periodSns ?? con.coords[si];
+          const name = `${cname}-security-for-${outDim}-in-sub-network-${sub.name}${suffix}`;
+          const nc = m.new_constraint(name, ["snapshot", "name", outDim], [snsC, new Index(idx.values, "name"), new Index(cOutages, outDim)]);
+          for (let s = 0; s < snsC.length; s++) {
+            const sn = snsC.at(s);
+            const sc = con.coords[si].getLoc(sn);
+            for (const aff of idx) {
+              const j = con.coords[ni].getLoc(aff);
+              const k = con.flat(...(si === 0 ? [sc, j] : [j, sc]));
+              const [vs, cs] = con.rawTerms(k);
+              for (const o of cOutages) {
+                const bodf = sub.BODF[pos([cAffected, aff])][pos([cOutage, o])];
+                nc.push([...vs, flowVar.get(sn, o)], [...cs, bodf], con.sign[k], con.rhs[k]);
+              }
+            }
+          }
+          m.add_constraint(nc);
+        }
+      }
+    }
+  }
 }

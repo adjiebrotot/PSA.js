@@ -68,6 +68,71 @@ export function check_for_zero_s_nom(c, strict = false) {
   if (bad.length) logOrRaise(strict, `The following ${c.list_name} have zero s_nom, which is used to define the impedance and will thus break the load flow:\n${fmtIndex(bad)}`);
 }
 
+/** Optimisable phase shifts need finite bounds; inverted bounds are flagged. */
+export function check_phase_shift_bounds(c, strict = false) {
+  if (!c.static.has("phase_shift_min")) return;
+  const lo = c.static.col("phase_shift_min");
+  const hi = c.static.col("phase_shift_max");
+  const names = c.static.index.values;
+  const inverted = names.filter((_, i) => lo[i] > hi[i]);
+  if (inverted.length) {
+    logOrRaise(
+      strict,
+      `The following ${c.list_name} have phase_shift_min greater than phase_shift_max; the phase shift is held fixed at phase_shift, which is likely unintended (set phase_shift_min < phase_shift_max to optimise it):\n${fmtIndex(inverted)}`,
+    );
+  }
+  const nonFinite = names.filter((_, i) => lo[i] < hi[i] && !(Number.isFinite(lo[i]) && Number.isFinite(hi[i])));
+  if (nonFinite.length) {
+    logOrRaise(
+      strict,
+      `The following ${c.list_name} have an optimisable phase shift (phase_shift_min < phase_shift_max) but a non-finite bound, which leaves the optimised tap angle unbounded:\n${fmtIndex(nonFinite)}`,
+    );
+  }
+}
+
+/** Maintainable components need valid maintenance parameters. */
+export function check_maintenance_attributes(n, c, strict = false) {
+  if (!c.static.has("maintainable")) return;
+  const st = c.static;
+  const idx = st.index.values.map((_, i) => i).filter((i) => st.col("maintainable")[i]);
+  if (!idx.length) return;
+  const names = (pred) => idx.filter(pred).map((i) => st.index.at(i));
+  const duration = st.col("maintenance_duration");
+  const events = st.col("maintenance_events");
+  const pyNum = (x) => (Number.isInteger(x) ? `${x}.0` : String(x));
+  const badDuration = names((i) => duration[i] <= 0);
+  if (badDuration.length) {
+    logOrRaise(strict, `The following ${c.list_name} have maintainable=True but maintenance_duration <= 0, which is invalid for maintenance scheduling:\n${fmtIndex(badDuration)}`);
+  }
+  const badEvents = names((i) => events[i] <= 0);
+  if (badEvents.length) {
+    logOrRaise(strict, `The following ${c.list_name} have maintainable=True but maintenance_events <= 0, so no maintenance will be scheduled:\n${fmtIndex(badEvents)}`);
+  }
+  let horizon = 0;
+  for (const w of n.snapshot_weightings.col("generators")) horizon += w;
+  const badHorizon = names((i) => duration[i] > horizon);
+  if (badHorizon.length) {
+    logOrRaise(
+      strict,
+      `The following ${c.list_name} have maintenance_duration > total weighted snapshot hours (${pyNum(horizon)}), which will cause infeasibility:\n${fmtIndex(badHorizon)}`,
+    );
+  }
+  const badTotal = names((i) => duration[i] * events[i] > horizon);
+  if (badTotal.length) {
+    logOrRaise(
+      strict,
+      `The following ${c.list_name} have maintenance_duration * maintenance_events > total weighted snapshot hours (${pyNum(horizon)}), which will cause infeasibility:\n${fmtIndex(badTotal)}`,
+    );
+  }
+  const badMax = names((i) => st.col("p_nom_extendable")[i] && !Number.isFinite(st.col("p_nom_max")[i]));
+  if (badMax.length) {
+    logOrRaise(
+      strict,
+      `The following extendable maintainable ${c.list_name} have infinite p_nom_max, which is required to be finite for linearizing the maintenance capacity reduction:\n${fmtIndex(badMax)}`,
+    );
+  }
+}
+
 export function check_time_series(n, c, strict = false) {
   for (const [attr, def] of c.ctype.defaults) {
     if (!def.varying || !def.static) continue;
@@ -261,9 +326,9 @@ export function check_big_m_exceeded(n, strict = false) {
   for (const cName of ["Generator", "Link"]) {
     const c = n.c.get(cName);
     if (c.static.empty) continue;
-    const comI = c.committables.difference(c.inactive_assets);
+    const comI = c.committables.intersection(c.active_assets);
     if (comI.empty) continue;
-    const comExt = comI.intersection(c.extendables.difference(c.inactive_assets));
+    const comExt = comI.intersection(c.extendables.intersection(c.active_assets));
     if (comExt.empty) continue;
     const attr = NOMINAL_ATTRS[cName];
     const st = c.static;
@@ -293,9 +358,11 @@ const STRICT_OPTIONS = [
   "nans_for_component_default_attrs",
   "zero_impedances",
   "zero_s_nom",
+  "phase_shift_bounds",
   "generators",
   "cost_consistency",
   "dispatch_delays",
+  "maintenance",
   "disconnected_buses",
   "investment_periods",
   "shapes",
@@ -310,10 +377,10 @@ const STRICT_OPTIONS = [
 /**
  * Run all consistency checks.
  * @param {object} [opts]
- * @param {string[]} [opts.strict] checks raising errors (default ["dispatch_delays"]; "all" for all)
+ * @param {string[]} [opts.strict] checks raising errors (default ["dispatch_delays", "maintenance", "phase_shift_bounds"]; "all" for all)
  */
 Network.prototype.consistency_check = function consistencyCheck({ check_dtypes = false, strict = null } = {}) {
-  let s = strict ?? ["dispatch_delays"];
+  let s = strict ?? ["dispatch_delays", "maintenance", "phase_shift_bounds"];
   if (s.includes("all")) s = STRICT_OPTIONS;
   const invalid = s.filter((x) => !STRICT_OPTIONS.includes(x));
   if (invalid.length) throw new Error(`Invalid strict option(s) ${invalid}. Valid options are ${STRICT_OPTIONS}.`);
@@ -327,7 +394,9 @@ Network.prototype.consistency_check = function consistencyCheck({ check_dtypes =
     check_nans_for_component_default_attrs(this, c, s.includes("nans_for_component_default_attrs"));
     check_for_zero_impedances(this, c, s.includes("zero_impedances"));
     check_for_zero_s_nom(c, s.includes("zero_s_nom"));
+    check_phase_shift_bounds(c, s.includes("phase_shift_bounds"));
     check_generators(c, s.includes("generators"));
+    check_maintenance_attributes(this, c, s.includes("maintenance"));
     check_cost_consistency(c);
     check_dispatch_delays(this, c, s.includes("dispatch_delays"));
     void check_dtypes;

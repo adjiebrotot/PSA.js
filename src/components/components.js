@@ -9,6 +9,7 @@ import { Index, asIndex, labelKey } from "../core/index.js";
 import { annuity, periodizedCost } from "../costs.js";
 import { typToDtype } from "./types.js";
 import { logger } from "../logger.js";
+import { piecewiseAttrs, piecewiseSchema, splitPort, emptyPiecewiseFrame } from "./piecewise.js";
 
 export const RE_PORTS = /^bus(\d*)$/;
 export const RE_PORTS_GE_2 = /^bus((?:[2-9]|[1-9]\d+))$/;
@@ -58,6 +59,54 @@ export class Components {
     for (const [attr, def] of ctype.defaults) {
       if (def.varying) this.dynamic[attr] = new DataFrame({ index: sns, columns: [] });
     }
+    // Piecewise breakpoint data: one empty frame per piecewise y attribute
+    this.piecewise = {};
+    for (const row of piecewiseAttrs(ctype.name)) {
+      if (!(row.y in this.piecewise)) this.piecewise[row.y] = emptyPiecewiseFrame();
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Piecewise data
+  // ------------------------------------------------------------------
+
+  /** Piecewise schema rows for this component type. */
+  get _piecewise_attrs() {
+    return piecewiseAttrs(this.name);
+  }
+
+  /** Whether this component has piecewise breakpoint data for `attr`. */
+  has_piecewise(attr) {
+    const df = this.piecewise[attr];
+    return df !== undefined && !df.empty;
+  }
+
+  /** Piecewise schema row for `attr`, ignoring any port suffix (null if undefined). */
+  _piecewise_schema(attr) {
+    let row = piecewiseSchema(this.name, attr);
+    const [base, port] = splitPort(attr);
+    if (!row && port) {
+      // only schema rows with a {port} placeholder accept suffixed attrs
+      const candidate = piecewiseSchema(this.name, base);
+      if (candidate && candidate.aux_variable.includes("{port}")) row = candidate;
+    }
+    return row;
+  }
+
+  /** Model-variable name of the piecewise auxiliary variable for `attr`. */
+  _piecewise_aux_var(attr) {
+    const row = this._piecewise_schema(attr);
+    if (!row) throw new Error(`ValueError: '${this.name}' has no piecewise schema for attribute '${attr}'.`);
+    // an empty port suffix denotes port 1
+    const port = splitPort(attr)[1] || "1";
+    return `${this.name}-${row.aux_variable.replace("{port}", port)}`;
+  }
+
+  /** Model-variable name of the piecewise x variable for `attr`. */
+  _piecewise_x_var(attr) {
+    const row = this._piecewise_schema(attr);
+    if (!row) throw new Error(`ValueError: '${this.name}' has no piecewise schema for attribute '${attr}'.`);
+    return `${this.name}-${row.x.replaceAll("_pu", "")}`;
   }
 
   // ------------------------------------------------------------------
@@ -241,6 +290,12 @@ export class Components {
     return this._indexWhere(this.static.col("committable").map(Boolean));
   }
 
+  /** Components with maintenance scheduling (`maintainable=True`). */
+  get maintainables() {
+    if (!this.static.has("maintainable")) return this.static.index.slice(0, 0);
+    return this._indexWhere(this.static.col("maintainable").map(Boolean));
+  }
+
   get modulars() {
     const base = OPERATIONAL_BASE[this.name];
     const col = base ? `${base}_nom_mod` : null;
@@ -286,8 +341,7 @@ export class Components {
   }
 
   get inactive_assets() {
-    const a = this.get_active_assets();
-    return this.static.index.filter(a.values.map((x) => !x)).unique();
+    return this.static.index.unique().difference(this.active_assets);
   }
 
   filter_by_active_assets(data, investment_period = null) {
@@ -626,6 +680,65 @@ export class Components {
       return haversinePts(x.get(bus0), y.get(bus0), x.get(bus1), y.get(bus1)) * 1000;
     });
     return new Series(Float64Array.from(out), this.static.index, null);
+  }
+
+  /**
+   * Scale `s_max_pu` of lines to per-line summer / winter ratings by month
+   * (`Lines.apply_seasonal_rating`). `ratings` is a DataFrame indexed by line
+   * name with `summer` and `winter` columns (absolute MVA ratings).
+   */
+  apply_seasonal_rating(ratings, { summer_months = [4, 5, 6, 7, 8, 9], compose = true } = {}) {
+    if (this.name !== "Line") throw new TypeError(`'${this.name}' components have no method 'apply_seasonal_rating'.`);
+    const n = this.n;
+    const sns = n.snapshots;
+    const months = sns.isMulti
+      ? null
+      : sns.values.map((t) => {
+          const m = typeof t === "string" ? /^\d{4}-(\d{2})-\d{2}/.exec(t.trim()) : null;
+          return m ? Number(m[1]) : null;
+        });
+    if (!months || months.some((x) => x === null)) {
+      throw new TypeError(`apply_seasonal_rating requires n.snapshots to be a DatetimeIndex; got ${sns.isMulti ? "MultiIndex" : "Index"}.`);
+    }
+    const missingCols = ["summer", "winter"].filter((col) => !ratings.has(col));
+    if (missingCols.length) throw new Error(`KeyError: \`ratings\` DataFrame is missing required columns: [${missingCols.map((x) => `'${x}'`).join(", ")}]`);
+    const names = ratings.index;
+    const missingLines = names.difference(this.static.index);
+    if (missingLines.length) {
+      const shown = missingLines.values.slice(0, 5).map((x) => `'${x}'`);
+      throw new Error(`KeyError: \`ratings\` references ${missingLines.length} line(s) not in n.lines.index: [${shown.join(", ")}]${missingLines.length > 5 ? "..." : ""}`);
+    }
+    if (!summer_months.length) throw new Error("`summer_months` must be non-empty.");
+    const summer = Array.from(ratings.col("summer"), Number);
+    const winter = Array.from(ratings.col("winter"), Number);
+    if (summer.some((x) => !(x > 0)) || winter.some((x) => !(x > 0))) throw new Error("All summer and winter ratings must be strictly positive.");
+    const sNom = names.values.map((nm) => this.static.at(nm, "s_nom"));
+    const bad = names.values.filter((_, j) => sNom[j] <= 0);
+    if (bad.length) {
+      throw new Error(
+        `apply_seasonal_rating scales s_max_pu = rating / s_nom and requires a strictly positive s_nom for every rated line; got non-positive s_nom for: [${bad
+          .slice(0, 5)
+          .map((x) => `'${x}'`)
+          .join(", ")}]`,
+      );
+    }
+    const isSummer = months.map((mo) => summer_months.includes(mo));
+    const dyn = this.dynamic.s_max_pu;
+    names.values.forEach((nm, j) => {
+      const sPu = summer[j] / sNom[j];
+      const wPu = winter[j] / sNom[j];
+      const seasonal = isSummer.map((su) => (su ? sPu : wPu));
+      let out = Float64Array.from(seasonal);
+      if (compose) {
+        const staticPu = this.static.at(nm, "s_max_pu");
+        const existing = dyn.has(nm) ? dyn.col(nm) : null;
+        out = out.map((v, i) => {
+          const e = existing && !Number.isNaN(existing[i]) ? existing[i] : staticPu;
+          return e * v;
+        });
+      }
+      dyn.set(nm, out);
+    });
   }
 
   /** Delay source indexer for multiport components. */

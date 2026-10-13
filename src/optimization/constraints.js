@@ -13,6 +13,7 @@ import { NOMINAL_ATTRS, activityMask, denseValues, staticValues, weightings, per
 import { labeler1, labeler2 } from "./variables.js";
 import { logger } from "../logger.js";
 import { pyPow } from "../core/pymath.js";
+import { define_piecewise, optionsFor } from "./piecewise.js";
 
 const r = (lc, rc) => -(lc - rc);
 
@@ -63,7 +64,7 @@ export { boundsPu };
 
 export function define_operational_constraints_for_non_extendables(n, sns, component, attr, transmissionLosses = false) {
   const c = n.c.get(component);
-  const fixI = c.fixed.difference(c.committables).difference(c.inactive_assets);
+  const fixI = c.fixed.difference(c.committables).intersection(c.active_assets);
   if (fixI.empty) return;
   const m = n.model;
   const nom = staticValues(c, c._operational_attrs.nom, fixI);
@@ -73,6 +74,11 @@ export function define_operational_constraints_for_non_extendables(n, sns, compo
   const withLoss = n.passive_branch_components.has(c.name) && transmissionLosses;
   const loss = withLoss ? labeler2(m.variables.get(`${c.name}-loss`), sns, fixI) : null;
   const nN = fixI.length;
+  // maintenance reduces the available capacity by `maintenance_pu * maintenance`
+  const maintFixI = c.maintainables.intersection(fixI);
+  const maint = maintFixI.empty ? null : labeler2(m.variables.get(`${c.name}-maintenance`), sns, fixI);
+  const isMaint = maintFixI.empty ? null : fixI.isin(maintFixI);
+  const alpha = maintFixI.empty ? null : staticValues(c, "maintenance_pu", fixI);
   const lower = (s, j) => {
     const k = s * nN + j;
     const inf = isinf(nom[j]);
@@ -85,21 +91,28 @@ export function define_operational_constraints_for_non_extendables(n, sns, compo
   };
   const dims = ["snapshot", "name"];
   const coords = [sns, fixI];
-  m.add_constraints(`${c.name}-fix-${attr}-lower`, dims, coords, (s, j) => {
+  const row = (s, j, bound, lossSign) => {
     const vars = withLoss ? [v(s, j), loss(s, j)] : [v(s, j)];
-    const coeffs = withLoss ? [1, -1] : [1];
+    const coeffs = withLoss ? [1, lossSign] : [1];
+    if (maint) {
+      vars.push(isMaint[j] ? maint(s, j) : -1);
+      coeffs.push(isMaint[j] ? bound * alpha[j] : NaN);
+    }
+    return [vars, coeffs];
+  };
+  m.add_constraints(`${c.name}-fix-${attr}-lower`, dims, coords, (s, j) => {
+    const [vars, coeffs] = row(s, j, lower(s, j), -1);
     return [vars, coeffs, ">=", r(0, lower(s, j)), act[s * nN + j]];
   });
   m.add_constraints(`${c.name}-fix-${attr}-upper`, dims, coords, (s, j) => {
-    const vars = withLoss ? [v(s, j), loss(s, j)] : [v(s, j)];
-    const coeffs = withLoss ? [1, 1] : [1];
+    const [vars, coeffs] = row(s, j, upper(s, j), 1);
     return [vars, coeffs, "<=", r(0, upper(s, j)), act[s * nN + j]];
   });
 }
 
 export function define_operational_constraints_for_extendables(n, sns, component, attr, transmissionLosses = false) {
   const c = n.c.get(component);
-  let extI = c.extendables.difference(c.inactive_assets);
+  let extI = c.extendables.intersection(c.active_assets);
   const comExtI = c.committables.intersection(extI);
   extI = extI.difference(comExtI);
   if (extI.empty) return;
@@ -111,38 +124,202 @@ export function define_operational_constraints_for_extendables(n, sns, component
   const withLoss = n.passive_branch_components.has(c.name) && transmissionLosses;
   const loss = withLoss ? labeler2(m.variables.get(`${c.name}-loss`), sns, extI) : null;
   const nN = extI.length;
+  // maintenance of extendables enters through z = p_nom * maintenance
+  const maintExtI = c.maintainables.intersection(extI);
+  const z = maintExtI.empty ? null : labeler2(m.variables.get(`${c.name}-maintenance_capacity`), sns, extI);
+  const isMaint = maintExtI.empty ? null : extI.isin(maintExtI);
+  const alpha = maintExtI.empty ? null : staticValues(c, "maintenance_pu", extI);
   const dims = ["snapshot", "name"];
   const coords = [sns, extI];
-  m.add_constraints(`${c.name}-ext-${attr}-lower`, dims, coords, (s, j) => {
-    const k = s * nN + j;
+  const row = (s, j, pu, lossSign) => {
     const vars = [v(s, j), cap(j)];
-    const coeffs = [1, -(minPu[k] * 1)];
+    const coeffs = [1, -(pu * 1)];
     if (withLoss) {
       vars.push(loss(s, j));
-      coeffs.push(-1);
+      coeffs.push(lossSign);
     }
+    if (z) {
+      vars.push(isMaint[j] ? z(s, j) : -1);
+      coeffs.push(isMaint[j] ? pu * alpha[j] : NaN);
+    }
+    return [vars, coeffs];
+  };
+  m.add_constraints(`${c.name}-ext-${attr}-lower`, dims, coords, (s, j) => {
+    const k = s * nN + j;
+    const [vars, coeffs] = row(s, j, minPu[k], -1);
     return [vars, coeffs, ">=", r(0, 0), act[k]];
   });
   m.add_constraints(`${c.name}-ext-${attr}-upper`, dims, coords, (s, j) => {
     const k = s * nN + j;
-    const vars = [v(s, j), cap(j)];
-    const coeffs = [1, -(maxPu[k] * 1)];
-    if (withLoss) {
-      vars.push(loss(s, j));
-      coeffs.push(1);
-    }
+    const [vars, coeffs] = row(s, j, maxPu[k], 1);
     return [vars, coeffs, "<=", r(0, 0), act[k]];
   });
 }
 
-/** Shift labels along snapshot by 1 (first row gets -1). */
-function prevLabel(lab, s, j) {
-  return s === 0 ? -1 : lab(s - 1, j);
+/**
+ * Maintenance scheduling (`define_maintenance_constraints`): event count,
+ * window coverage of each event (snapshots whose weightings sum to at least
+ * `maintenance_duration`), starts that cannot complete within the horizon,
+ * and McCormick bounds for `z = p_nom * maintenance` of extendables.
+ */
+export function define_maintenance_constraints(n, sns, component) {
+  const c = n.c.get(component);
+  const maintI = c.maintainables.intersection(c.active_assets);
+  if (maintI.empty) return;
+  const m = n.model;
+  const nS = sns.length;
+  const nN = maintI.length;
+  const w = weightings(n, "generators", sns);
+  const maint = labeler2(m.variables.get(`${c.name}-maintenance`), sns, maintI);
+  const start = labeler2(m.variables.get(`${c.name}-maintenance_start`), sns, maintI);
+  const act = activityMask(c, sns, maintI);
+  const duration = staticValues(c, "maintenance_duration", maintI);
+  const events = staticValues(c, "maintenance_events", maintI);
+  const dims = ["snapshot", "name"];
+
+  m.add_constraints(`${c.name}-maint-event-count`, ["name"], [maintI], (j) => {
+    const vars = [];
+    for (let s = 0; s < nS; s++) vars.push(start(s, j));
+    return [vars, vars.map(() => 1), "=", r(0, events[j])];
+  });
+
+  const cum = new Float64Array(nS);
+  for (let s = 0, acc = 0; s < nS; s++) cum[s] = acc += w[s];
+  const cumPrev = cum.map((x, s) => x - w[s]);
+  const searchsorted = (arr, v) => {
+    let lo = 0;
+    let hi = arr.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (arr[mid] < v) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  const windowEnd = [];
+  const valid = [];
+  const width = [];
+  for (let j = 0; j < nN; j++) {
+    const ends = new Int32Array(nS);
+    for (let s = 0; s < nS; s++) ends[s] = searchsorted(cum, duration[j] * (1 - 1e-6) + cumPrev[s]);
+    const inactiveCum = new Int32Array(nS);
+    for (let s = 0, acc = 0; s < nS; s++) inactiveCum[s] = acc += act[s * nN + j] ? 0 : 1;
+    const ok = new Uint8Array(nS);
+    for (let s = 0; s < nS; s++) {
+      const a = act[s * nN + j];
+      const windowInactive = inactiveCum[Math.min(ends[s], nS - 1)] - inactiveCum[s] + (a ? 0 : 1);
+      ok[s] = a && ends[s] < nS && windowInactive === 0 ? 1 : 0;
+    }
+    const wd = new Int32Array(nS);
+    const starts = new Int32Array(nS);
+    let maxWidth = -Infinity;
+    for (let s = 0; s < nS; s++) {
+      starts[s] = searchsorted(ends, s);
+      wd[s] = s - starts[s] + 1;
+      maxWidth = Math.max(maxWidth, wd[s]);
+    }
+    for (let s = 0; s < nS; s++) if (!(starts[s] > 0)) wd[s] = maxWidth;
+    windowEnd.push(ends);
+    valid.push(ok);
+    width.push(wd);
+  }
+  const widths = [...new Set(width.flatMap((wd) => [...wd]))].sort((a, b) => a - b);
+  // -maintenance + sum over widths of rolling(start, width) * (width == w)
+  m.add_constraints(`${c.name}-maint-window`, dims, [sns, maintI], (s, j) => {
+    const vars = [maint(s, j)];
+    const coeffs = [-1];
+    for (const wv of widths) {
+      const on = width[j][s] === wv ? 1 : 0;
+      for (let t = s - wv + 1; t <= s; t++) {
+        vars.push(t >= 0 ? start(t, j) : -1);
+        coeffs.push(t >= 0 ? on : NaN);
+      }
+    }
+    return [vars, coeffs, "=", r(0, 0), act[s * nN + j]];
+  });
+  const forbidden = (s, j) => act[s * nN + j] && !valid[j][s];
+  let anyForbidden = false;
+  for (let s = 0; s < nS && !anyForbidden; s++) for (let j = 0; j < nN; j++) if (forbidden(s, j)) anyForbidden = true;
+  if (anyForbidden) {
+    m.add_constraints(`${c.name}-maint-start-horizon`, dims, [sns, maintI], (s, j) => [[start(s, j)], [1], "=", r(0, 0), forbidden(s, j)]);
+  }
+
+  const extI = c.extendables.intersection(c.active_assets);
+  const modularCom = c.modulars.intersection(c.committables);
+  const maintExtI = maintI.intersection(extI).difference(modularCom);
+  if (!maintExtI.empty) {
+    const nomAttr = c._operational_attrs.nom;
+    const pNom = labeler1(m.variables.get(`${c.name}-${nomAttr}`), maintExtI);
+    const pMin = staticValues(c, `${nomAttr}_min`, maintExtI);
+    const pMax = staticValues(c, `${nomAttr}_max`, maintExtI);
+    const mm = labeler2(m.variables.get(`${c.name}-maintenance`), sns, maintExtI);
+    const z = labeler2(m.variables.get(`${c.name}-maintenance_capacity`), sns, maintExtI);
+    const actE = activityMask(c, sns, maintExtI);
+    const nE = maintExtI.length;
+    const coords = [sns, maintExtI];
+    m.add_constraints(`${c.name}-maintcap_upper`, dims, coords, (s, j) => [[z(s, j), pNom(j), mm(s, j)], [1, -1, -pMin[j]], "<=", r(pMin[j] - 0, 0), actE[s * nE + j]]);
+    m.add_constraints(`${c.name}-maintcap_upper_nommax`, dims, coords, (s, j) => [[z(s, j), mm(s, j)], [1, -pMax[j]], "<=", r(0, 0), actE[s * nE + j]]);
+    m.add_constraints(`${c.name}-maintcap_lower_nommax`, dims, coords, (s, j) => [[z(s, j), pNom(j), mm(s, j)], [1, -1, -pMax[j]], ">=", r(pMax[j] - 0, 0), actE[s * nE + j]]);
+    if (pMin.some((x) => x > 0)) {
+      m.add_constraints(`${c.name}-maintcap_lower_nommin`, dims, coords, (s, j) => [[z(s, j), mm(s, j)], [1, -pMin[j]], ">=", r(0, 0), actE[s * nE + j] && pMin[j] > 0]);
+    }
+  }
+}
+
+/** Position of the window's first snapshot in `n.snapshots`. */
+function windowStart(n, sns) {
+  return n.snapshots.getLoc(sns.at(0));
+}
+
+/**
+ * Commitment status at the `length` snapshots before the window
+ * (`_status_history`): `hist[lag - 1][j]`. Snapshots solved in previous runs
+ * are read from `status`; earlier ones follow `up_time_before` /
+ * `down_time_before`. Non-committable components are always on.
+ */
+export function statusHistory(n, c, idx, sns, length) {
+  const nN = idx.length;
+  const startI = windowStart(n, sns);
+  const st = c.dynamic.status;
+  const solved = st && !st.empty ? Math.min(startI, length) : 0;
+  const up = staticValues(c, "up_time_before", idx);
+  const down = staticValues(c, "down_time_before", idx);
+  const com = staticValues(c, "committable", idx);
+  const past = solved ? denseValues(c, "status", n.snapshots.slice(startI - solved, startI), idx) : null;
+  const hist = [];
+  for (let lag = 1; lag <= length; lag++) {
+    const row = new Float64Array(nN);
+    for (let j = 0; j < nN; j++) {
+      let v;
+      if (lag <= solved) v = past[(solved - lag) * nN + j];
+      else {
+        const rel = lag - solved;
+        v = down[j] > 0 ? (rel > down[j] ? 1 : 0) : rel <= up[j] ? 1 : 0;
+      }
+      row[j] = com[j] ? v : 1;
+    }
+    hist.push(row);
+  }
+  return hist;
+}
+
+/**
+ * Dispatch right before the window given the status at that time
+ * (`_dispatch_before`): the solved dispatch inside `n.snapshots`, else
+ * `p_init` (0 for units that were off).
+ */
+export function dispatchBefore(n, c, idx, sns, status) {
+  const attr = n.branch_components.has(c.name) ? "p0" : "p";
+  const startI = windowStart(n, sns);
+  const d = c.dynamic[attr];
+  if (startI && d && !d.empty) return denseValues(c, attr, n.snapshots.slice(startI - 1, startI), idx);
+  const pInit = staticValues(c, "p_init", idx);
+  return Float64Array.from(pInit, (v, j) => (status[j] > 0 ? v : 0));
 }
 
 export function define_operational_constraints_for_committables(n, sns, component) {
   const c = n.c.get(component);
-  const comI = c.committables.difference(c.inactive_assets);
+  const comI = c.committables.intersection(c.active_assets);
   if (comI.empty) return;
   const m = n.model;
   const statusV = m.variables.get(`${c.name}-status`);
@@ -153,9 +330,9 @@ export function define_operational_constraints_for_committables(n, sns, componen
   const act = activityMask(c, sns, comI);
   const nS = sns.length;
   const nN = comI.length;
-  const extI = c.extendables.difference(c.inactive_assets);
+  const extI = c.extendables.intersection(c.active_assets);
   const comExtI = comI.intersection(extI).difference(c.modulars);
-  const comFixI = comI.difference(extI);
+  const comFixI = comI.difference(extI).difference(c.modulars);
 
   const nomAttr = c._operational_attrs.nom;
   const nominal = staticValues(c, nomAttr, comI);
@@ -168,37 +345,13 @@ export function define_operational_constraints_for_committables(n, sns, componen
   const rampDown = denseValues(c, "ramp_limit_down", sns, comI).map((v, k) => nominal[k % nN] * (Number.isNaN(v) ? 1 : v));
   const rampStart = staticValues(c, "ramp_limit_start_up", comI).map((v, j) => nominal[j] * (Number.isNaN(v) ? 1 : v));
   const rampShut = staticValues(c, "ramp_limit_shut_down", comI).map((v, j) => nominal[j] * (Number.isNaN(v) ? 1 : v));
-  let upBefore = staticValues(c, "up_time_before", comI);
-  let downBefore = staticValues(c, "down_time_before", comI);
-  let initiallyUp = upBefore.map((v) => Boolean(v));
-  let initiallyDown = downBefore.map((v) => Boolean(v));
-
-  if (labelKeyEq(sns.at(0), n.snapshots.at(0)) === false) {
-    // rolling horizon: derive initial state from previous dispatch
-    const startI = n.snapshots.getLoc(sns.at(0));
-    const prevSns = n.snapshots.slice(0, startI).values.slice().reverse();
-    const st = c.dynamic.status;
-    upBefore = comI.values.map((g, j) => {
-      let cnt = 0;
-      for (let t = 0; t < prevSns.length; t++) {
-        const v = st.has(g) ? st.col(g)[n.snapshots.getLoc(prevSns[t])] : 1;
-        if (v) cnt++;
-        else break;
-      }
-      return Math.min(cnt, minUp[j]);
-    });
-    initiallyUp = upBefore.map((v) => Boolean(v));
-    downBefore = comI.values.map((g, j) => {
-      let cnt = 0;
-      for (let t = 0; t < prevSns.length; t++) {
-        const v = st.has(g) ? st.col(g)[n.snapshots.getLoc(prevSns[t])] : 1;
-        if (!v) cnt++;
-        else break;
-      }
-      return Math.min(cnt, minDown[j]);
-    });
-    initiallyDown = downBefore.map((v) => Boolean(v));
-  }
+  const maxTime = Math.max(Math.trunc(Math.max(...minUp)), Math.trunc(Math.max(...minDown)), 1);
+  const history = statusHistory(n, c, comI, sns, maxTime + 1);
+  const statusBefore = history[0];
+  // switches[lag - 1][j]: +1 if started up, -1 if shut down `lag` snapshots before
+  const switches = history.slice(0, maxTime).map((row, l) => row.map((v, j) => v - history[l + 1][j]));
+  const maintI = c.maintainables.intersection(c.active_assets);
+  const alphaOf = (names) => staticValues(c, "maintenance_pu", names);
 
   const dims = ["snapshot", "name"];
   if (!comExtI.empty) {
@@ -214,17 +367,27 @@ export function define_operational_constraints_for_committables(n, sns, componen
     const coords = [sns, comExtI];
     const actE = (s, j) => act[s * nN + colOf[j]];
     const minPuE = (s, j) => minPu[s * nN + colOf[j]];
+    // maintenance through z = p_nom * maintenance
+    const maintComExtI = comExtI.intersection(maintI);
+    const z = maintComExtI.empty ? null : labeler2(m.variables.get(`${c.name}-maintenance_capacity`), sns, comExtI);
+    const isMaintE = comExtI.isin(maintComExtI);
+    const alphaE = maintComExtI.empty ? null : alphaOf(comExtI);
+    const withZ = (vars, coeffs, s, j, pu) => {
+      if (z) {
+        vars.push(isMaintE[j] ? z(s, j) : -1);
+        coeffs.push(isMaintE[j] ? pu * alphaE[j] : NaN);
+      }
+      return [vars, coeffs];
+    };
     m.add_constraints(`${c.name}-com-ext-p-lower`, dims, coords, (s, j) => [
-      [pE(s, j), pn(j), stE(s, j)],
-      [1, -minPuE(s, j), -M[s * nE + j]],
+      ...withZ([pE(s, j), pn(j), stE(s, j)], [1, -minPuE(s, j), -M[s * nE + j]], s, j, minPuE(s, j)),
       ">=",
       r(0, -M[s * nE + j]),
       actE(s, j),
     ]);
     m.add_constraints(`${c.name}-com-ext-p-upper-bigM`, dims, coords, (s, j) => [[pE(s, j), stE(s, j)], [1, -M[s * nE + j]], "<=", r(0, 0), actE(s, j)]);
     m.add_constraints(`${c.name}-com-ext-p-upper-cap`, dims, coords, (s, j) => [
-      [pE(s, j), pn(j)],
-      [1, -maxPuExt[s * nE + j]],
+      ...withZ([pE(s, j), pn(j)], [1, -maxPuExt[s * nE + j]], s, j, maxPuExt[s * nE + j]),
       "<=",
       r(0, 0),
       actE(s, j),
@@ -241,25 +404,45 @@ export function define_operational_constraints_for_committables(n, sns, componen
     }
   }
 
+  // McCormick linearisation of w = status * maintenance (or modules in maintenance)
+  const maintStatusConstraints = (names, kind, modulesMax) => {
+    const pos = comI.getIndexer(names);
+    const u = labeler2(statusV, sns, names);
+    const mm = labeler2(m.variables.get(`${c.name}-maintenance`), sns, names);
+    const w = labeler2(m.variables.get(`${c.name}-maintenance_status`), sns, names);
+    const coords = [sns, names];
+    const a = (s, j) => act[s * nN + pos[j]];
+    const mx = (j) => (modulesMax ? modulesMax[j] : 1);
+    m.add_constraints(`${c.name}-maint-${kind}-le-status`, dims, coords, (s, j) => [[w(s, j), u(s, j)], [1, -1], "<=", r(0, 0), a(s, j)]);
+    m.add_constraints(`${c.name}-maint-${kind}-le-maint`, dims, coords, (s, j) => [[w(s, j), mm(s, j)], [1, -mx(j)], "<=", r(0, 0), a(s, j)]);
+    m.add_constraints(`${c.name}-maint-${kind}-lb`, dims, coords, (s, j) => [[w(s, j), u(s, j), mm(s, j)], [1, -1, -mx(j)], ">=", r(0, -mx(j)), a(s, j)]);
+  };
+  const withW = (names, maintNames) => {
+    if (maintNames.empty) return () => [[], []];
+    const w = labeler2(m.variables.get(`${c.name}-maintenance_status`), sns, names);
+    const isMaint = names.isin(maintNames);
+    const alpha = alphaOf(names);
+    return (s, j, bound) => (isMaint[j] ? [[w(s, j)], [bound * alpha[j]]] : [[-1], [NaN]]);
+  };
+
   if (!comFixI.empty) {
     const pos = comI.getIndexer(comFixI);
     const pF = labeler2(m.variables.get(`${c.name}-p`), sns, comFixI);
     const sF = labeler2(statusV, sns, comFixI);
     const coords = [sns, comFixI];
-    m.add_constraints(`${c.name}-com-p-lower`, dims, coords, (s, j) => [
-      [pF(s, j), sF(s, j)],
-      [1, -lowerP[s * nN + pos[j]]],
-      ">=",
-      r(0, 0),
-      act[s * nN + pos[j]],
-    ]);
-    m.add_constraints(`${c.name}-com-p-upper`, dims, coords, (s, j) => [
-      [pF(s, j), sF(s, j)],
-      [1, -upperP[s * nN + pos[j]]],
-      "<=",
-      r(0, 0),
-      act[s * nN + pos[j]],
-    ]);
+    const maintComFixI = comFixI.intersection(maintI);
+    if (!maintComFixI.empty) maintStatusConstraints(maintComFixI, "status", null);
+    const wTerm = withW(comFixI, maintComFixI);
+    m.add_constraints(`${c.name}-com-p-lower`, dims, coords, (s, j) => {
+      const lo = lowerP[s * nN + pos[j]];
+      const [wv, wc] = wTerm(s, j, lo);
+      return [[pF(s, j), sF(s, j), ...wv], [1, -lo, ...wc], ">=", r(0, 0), act[s * nN + pos[j]]];
+    });
+    m.add_constraints(`${c.name}-com-p-upper`, dims, coords, (s, j) => {
+      const up = upperP[s * nN + pos[j]];
+      const [wv, wc] = wTerm(s, j, up);
+      return [[pF(s, j), sF(s, j), ...wv], [1, -up, ...wc], "<=", r(0, 0), act[s * nN + pos[j]]];
+    });
   }
 
   const comModI = comI.intersection(c.modulars);
@@ -269,160 +452,137 @@ export function define_operational_constraints_for_committables(n, sns, componen
     const pM = labeler2(m.variables.get(`${c.name}-p`), sns, comModI);
     const sM = labeler2(statusV, sns, comModI);
     const coords = [sns, comModI];
-    m.add_constraints(`${c.name}-com-mod-p-lower`, dims, coords, (s, j) => [
-      [pM(s, j), sM(s, j)],
-      [1, -(minPu[s * nN + pos[j]] * nomMod[j])],
-      ">=",
-      r(0, 0),
-      act[s * nN + pos[j]],
-    ]);
-    m.add_constraints(`${c.name}-com-mod-p-upper`, dims, coords, (s, j) => [
-      [pM(s, j), sM(s, j)],
-      [1, -(maxPu[s * nN + pos[j]] * nomMod[j])],
-      "<=",
-      r(0, 0),
-      act[s * nN + pos[j]],
-    ]);
+    const maintComModI = comModI.intersection(maintI);
+    if (!maintComModI.empty) {
+      const nomMax = staticValues(c, `${nomAttr}_max`, maintComModI);
+      const modOf = staticValues(c, c._operational_attrs.nom_mod, maintComModI);
+      maintStatusConstraints(maintComModI, "modstatus", nomMax.map((x, j) => x / modOf[j]));
+    }
+    const wTerm = withW(comModI, maintComModI);
+    m.add_constraints(`${c.name}-com-mod-p-lower`, dims, coords, (s, j) => {
+      const lo = minPu[s * nN + pos[j]] * nomMod[j];
+      const [wv, wc] = wTerm(s, j, lo);
+      return [[pM(s, j), sM(s, j), ...wv], [1, -lo, ...wc], ">=", r(0, 0), act[s * nN + pos[j]]];
+    });
+    m.add_constraints(`${c.name}-com-mod-p-upper`, dims, coords, (s, j) => {
+      const up = maxPu[s * nN + pos[j]] * nomMod[j];
+      const [wv, wc] = wTerm(s, j, up);
+      return [[pM(s, j), sM(s, j), ...wv], [1, -up, ...wc], "<=", r(0, 0), act[s * nN + pos[j]]];
+    });
   }
 
-  // status transitions
+  // status transitions; the status before the window enters the first row
   const coordsAll = [sns, comI];
-  m.add_constraints(`${c.name}-com-transition-start-up`, dims, coordsAll, (s, j) => {
-    const rhs = s === 0 && initiallyUp[j] ? -1 : 0;
-    return [[startUp(s, j), status(s, j), prevLabel(status, s, j)], [1, -1, 1], ">=", r(0, rhs), act[s * nN + j]];
-  });
-  m.add_constraints(`${c.name}-com-transition-shut-down`, dims, coordsAll, (s, j) => {
-    const rhs = s === 0 && initiallyUp[j] ? 1 : 0;
-    return [[shutDown(s, j), status(s, j), prevLabel(status, s, j)], [1, 1, -1], ">=", r(0, rhs), act[s * nN + j]];
-  });
+  const prior = (s, j) => (s === 0 ? 1 : 0) * statusBefore[j];
+  const prev = (lab, s, j) => (s === 0 ? -1 : lab(s - 1, j));
+  m.add_constraints(`${c.name}-com-transition-start-up`, dims, coordsAll, (s, j) => [
+    [startUp(s, j), status(s, j), prev(status, s, j)],
+    [1, -1, 1],
+    ">=",
+    r(0, -prior(s, j)),
+    act[s * nN + j],
+  ]);
+  m.add_constraints(`${c.name}-com-transition-shut-down`, dims, coordsAll, (s, j) => [
+    [shutDown(s, j), status(s, j), prev(status, s, j)],
+    [1, 1, -1],
+    ">=",
+    r(0, prior(s, j)),
+    act[s * nN + j],
+  ]);
 
-  // minimum up time
-  const minUpI = comI.filter(minUp.map(Boolean));
-  if (!minUpI.empty) {
-    const pos = comI.getIndexer(minUpI);
-    const sns1 = sns.slice(1);
-    m.add_constraints(`${c.name}-com-up-time`, dims, [sns1, minUpI], (s1, j) => {
-      const s = s1 + 1;
-      const jj = pos[j];
-      const k = minUp[jj];
-      const vars = [status(s, jj)];
-      const coeffs = [-1];
-      for (let w = k - 1; w >= 0; w--) {
-        const t = s - w;
-        vars.push(t >= 0 ? startUp(t, jj) : -1);
-        coeffs.push(1);
+  // minimum up / down times incl. the switches before the window
+  for (const [kind, minTime, transition, sign, bound] of [
+    ["up", minUp, startUp, -1, 0],
+    ["down", minDown, shutDown, 1, 1],
+  ]) {
+    if (!minTime.some((v) => v > 0)) continue;
+    const K = Math.trunc(Math.max(...minTime));
+    m.add_constraints(`${c.name}-com-${kind}-time`, dims, coordsAll, (s, j) => {
+      const vars = [status(s, j)];
+      const coeffs = [sign];
+      for (let k = 0; k < K; k++) {
+        const present = k < minTime[j] && s - k >= 0;
+        vars.push(present ? transition(s - k, j) : -1);
+        coeffs.push(present ? 1 : NaN);
       }
-      return [vars, coeffs, "<=", r(0, 0), act[s * nN + jj]];
-    });
-  }
-  const minDownI = comI.filter(minDown.map(Boolean));
-  if (!minDownI.empty) {
-    const pos = comI.getIndexer(minDownI);
-    const sns1 = sns.slice(1);
-    m.add_constraints(`${c.name}-com-down-time`, dims, [sns1, minDownI], (s1, j) => {
-      const s = s1 + 1;
-      const jj = pos[j];
-      const k = minDown[jj];
-      const vars = [status(s, jj)];
-      const coeffs = [1];
-      for (let w = k - 1; w >= 0; w--) {
-        const t = s - w;
-        vars.push(t >= 0 ? shutDown(t, jj) : -1);
-        coeffs.push(1);
+      let past = 0;
+      for (let l = 0; l < maxTime; l++) {
+        const sw = Math.max(-sign * switches[l][j], 0);
+        if (l + 1 + s < minTime[j]) past += sw;
       }
-      return [vars, coeffs, "<=", r(0, 1), act[s * nN + jj]];
-    });
-  }
-
-  // initial up / down requirements
-  const statusCoords = statusV.coords;
-  const statusNames = statusCoords[1];
-  if (initiallyUp.some(Boolean)) {
-    const mustUp = comI.values.map((_, j) => Math.max(minUp[j] - upBefore[j], 0));
-    m.add_constraints(`${c.name}-com-status-min_up_time_must_stay_up`, dims, [statusCoords[0], statusNames], (s, j) => {
-      const jj = comI.getLoc(statusNames.at(j));
-      const sp = sns.getLoc(statusCoords[0].at(s));
-      const mask = mustUp[jj] >= sp + 1 && initiallyUp[jj] && act[sp * nN + jj];
-      return [[statusV.at(s, j)], [1], "=", r(0, 1), mask];
-    });
-  }
-  if (initiallyDown.some(Boolean)) {
-    const mustDown = comI.values.map((_, j) => Math.max(minDown[j] - downBefore[j], 0));
-    m.add_constraints(`${c.name}-com-status-min_down_time_must_stay_up`, dims, [statusCoords[0], statusNames], (s, j) => {
-      const jj = comI.getLoc(statusNames.at(j));
-      const sp = sns.getLoc(statusCoords[0].at(s));
-      const mask = mustDown[jj] >= sp + 1 && initiallyDown[jj] && act[sp * nN + jj];
-      return [[statusV.at(s, j)], [1], "=", r(0, 0), mask];
+      return [vars, coeffs, "<=", r(0, bound - past), act[s * nN + j] && minTime[j] > 0];
     });
   }
 
   // tightening for linearised unit commitment
-  const suCost = staticValues(c, "start_up_cost", comI);
-  const sdCost = staticValues(c, "shut_down_cost", comI);
-  const costEqual = suCost.map((v, j) => v === sdCost[j]);
-  if (n._linearized_uc && !costEqual.every(Boolean)) {
+  const suCost = denseValues(c, "start_up_cost", sns, comI);
+  const sdCost = denseValues(c, "shut_down_cost", sns, comI);
+  const costEqualAll = comI.values.map((_, j) => {
+    for (let s = 0; s < nS; s++) if (suCost[s * nN + j] !== sdCost[s * nN + j]) return false;
+    return true;
+  });
+  if (n._linearized_uc && !costEqualAll.every(Boolean)) {
     logger.warning(
-      "The linear relaxation of the unit commitment cannot be tightened for all generators since the start up costs are not equal to the shut down costs. Proceed with the linear relaxation without the tightening by additional constraints for these. This might result in a longer solving time.",
+      "The linear relaxation of the unit commitment cannot be tightened for all generators since the start up costs are not equal to the shut down costs in all snapshots. Proceed with the linear relaxation without the tightening by additional constraints for these. This might result in a longer solving time.",
     );
   }
+  // tightening is only valid for fixed-capacity committables
+  const isFix = comI.isin(comFixI);
+  const costEqual = costEqualAll.map((v, j) => v && isFix[j]);
   if (n._linearized_uc && costEqual.some(Boolean)) {
     const ceI = comI.filter(costEqual);
     const pos = comI.getIndexer(ceI);
-    const sns1 = sns.slice(1);
-    const coords = [sns1, ceI];
+    const coords = [sns, ceI];
     const K = (s, j) => s * nN + pos[j];
-    m.add_constraints(`${c.name}-com-p-before`, dims, coords, (s1, j) => {
-      const s = s1 + 1;
+    const sBefore = Array.from(pos, (jj) => statusBefore[jj]);
+    const pInit = dispatchBefore(n, c, ceI, sns, sBefore);
+    const pInitF = pInit.map((v) => (Number.isNaN(v) ? 0 : v));
+    const first = (s) => (s === 0 ? 1 : 0);
+    const actPrev = (s, j) => act[K(s, j)] && (s !== 0 || !Number.isNaN(pInit[j]));
+    const pPrev = (s, jj) => (s === 0 ? -1 : p(s - 1, jj));
+    const stPrev = (s, jj) => (s === 0 ? -1 : status(s - 1, jj));
+    m.add_constraints(`${c.name}-com-p-before`, dims, coords, (s, j) => {
       const jj = pos[j];
       const up = upperP[K(s, j)];
       const rsd = rampShut[jj];
-      return [
-        [p(s - 1, jj), status(s - 1, jj), status(s, jj), startUp(s, jj)],
-        [1, -rsd, -(up - rsd), up - rsd],
-        "<=",
-        r(0, 0),
-        act[K(s, j)],
-      ];
+      const lc = 0 + pInitF[j] * first(s) - rsd * (0 + sBefore[j] * first(s)) - (up - rsd) * 0;
+      return [[pPrev(s, jj), stPrev(s, jj), status(s, jj), startUp(s, jj)], [1, -rsd, -(up - rsd), up - rsd], "<=", r(lc, 0), actPrev(s, j)];
     });
-    m.add_constraints(`${c.name}-com-p-current`, dims, coords, (s1, j) => {
-      const s = s1 + 1;
+    m.add_constraints(`${c.name}-com-p-current`, dims, coords, (s, j) => {
       const jj = pos[j];
       const up = upperP[K(s, j)];
       return [[p(s, jj), status(s, jj), startUp(s, jj)], [1, -up, up - rampStart[jj]], "<=", r(0, 0), act[K(s, j)]];
     });
-    m.add_constraints(`${c.name}-com-partly-start-up`, dims, coords, (s1, j) => {
-      const s = s1 + 1;
+    m.add_constraints(`${c.name}-com-partly-start-up`, dims, coords, (s, j) => {
       const jj = pos[j];
       const lo = lowerP[K(s, j)];
       const ru = rampUp[K(s, j)];
+      const lc = 0 - (0 + pInitF[j] * first(s)) - (lo + ru) * 0 + lo * (0 + sBefore[j] * first(s)) + (lo + ru - rampStart[jj]) * 0;
       return [
-        [p(s, jj), p(s - 1, jj), status(s, jj), status(s - 1, jj), startUp(s, jj)],
+        [p(s, jj), pPrev(s, jj), status(s, jj), stPrev(s, jj), startUp(s, jj)],
         [1, -1, -(lo + ru), lo, lo + ru - rampStart[jj]],
         "<=",
-        r(0, 0),
-        act[K(s, j)],
+        r(lc, 0),
+        actPrev(s, j),
       ];
     });
-    m.add_constraints(`${c.name}-com-partly-shut-down`, dims, coords, (s1, j) => {
-      const s = s1 + 1;
+    m.add_constraints(`${c.name}-com-partly-shut-down`, dims, coords, (s, j) => {
       const jj = pos[j];
       const lo = lowerP[K(s, j)];
       const rd = rampDown[K(s, j)];
       const rsd = rampShut[jj];
+      const lc = 0 + pInitF[j] * first(s) - 0 - rsd * (0 + sBefore[j] * first(s)) + (rsd - rd) * 0 - (lo + rd - rsd) * 0;
       return [
-        [p(s - 1, jj), p(s, jj), status(s - 1, jj), status(s, jj), startUp(s, jj)],
+        [pPrev(s, jj), p(s, jj), stPrev(s, jj), status(s, jj), startUp(s, jj)],
         [1, -1, -rsd, rsd - rd, -(lo + rd - rsd)],
         "<=",
-        r(0, 0),
-        act[K(s, j)],
+        r(lc, 0),
+        actPrev(s, j),
       ];
     });
   }
 }
 
-function labelKeyEq(a, b) {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
 
 /** Big-M values (snapshot-major Float64Array) for committable extendables. */
 export function bigMValues(c, names, sns, maxPu = null, committableBigM = null) {
@@ -449,7 +609,7 @@ export function bigMValues(c, names, sns, maxPu = null, committableBigM = null) 
 
 export function define_nominal_constraints_for_extendables(n, component, attr) {
   const c = n.c.get(component);
-  const extI = c.extendables.difference(c.inactive_assets);
+  const extI = c.extendables.intersection(c.active_assets);
   if (extI.empty) return;
   const m = n.model;
   const v = m.variables.get(`${c.name}-${attr}`);
@@ -557,18 +717,14 @@ export function define_ramp_limit_constraints(n, sns, component, attr) {
   const m = n.model;
   const c = n.c.get(component);
   const nomAttr = c._operational_attrs?.nom;
-  const histAttr = n.branch_components.has(component) ? "p0" : "p";
   if (!c.static.has("ramp_limit_up") && !c.static.has("ramp_limit_down")) return;
   if (c.static.index.length === 0) return;
-  const idx = c.static.index;
+  const idx = c.active_assets;
   const nN = idx.length;
   const nS = sns.length;
-  const ext = c.extendables;
-  const com = c.committables;
-  const mod = c.modulars;
-  const isExt = idx.isin(ext);
-  const isCom = idx.isin(com);
-  const isMod = idx.isin(mod);
+  const isExt = idx.isin(c.extendables);
+  const isCom = idx.isin(c.committables);
+  const isMod = idx.isin(c.modulars);
   const isComExt = isCom.map((v, j) => v && isExt[j] && !isMod[j]);
   const isComExtMod = isCom.map((v, j) => v && isExt[j] && isMod[j]);
   const isComFix = isCom.map((v, j) => v && !isComExt[j]);
@@ -595,8 +751,6 @@ export function define_ramp_limit_constraints(n, sns, component, attr) {
   const limitDown = limitDown0.map(f1);
   const limitStart = limitStart0.map(f1);
   const limitShut = limitShut0.map(f1);
-
-  const isRollingHorizon = !labelKeyEq(sns.at(0), n.snapshots.at(0)) && c.dynamic[histAttr] && c.dynamic[histAttr].columns.length > 0 && c.dynamic[histAttr].index.length > 0;
   const filterFirst = (s) => (s === 0 ? 1 : 0);
 
   const nomVals = staticValues(c, nomAttr, idx);
@@ -615,35 +769,16 @@ export function define_ramp_limit_constraints(n, sns, component, attr) {
   const statusLab = hasComFix ? labeler2(m.variables.get(`${c.name}-status`), sns, comMainNames) : null;
   const comPos = new Map(comMainNames.values.map((nm, k) => [nm, k]));
 
-  let pInit;
-  let sInit;
-  let startI = -1;
-  if (isRollingHorizon) {
-    startI = n.snapshots.getLoc(sns.at(0)) - 1;
-    pInit = idx.values.map((nm) => {
-      const d = c.dynamic[histAttr];
-      return d.has(nm) ? d.col(nm)[startI] : NaN;
-    });
-    sInit = idx.values.map((nm) => {
-      const d = c.dynamic.status;
-      const v = d && d.has(nm) ? d.col(nm)[startI] : NaN;
-      return Number.isNaN(v) ? 1 : v;
-    });
-  } else {
-    const upb = staticValues(c, "up_time_before", idx);
-    const initiallyUp = upb.map((v) => v > 0);
-    const pi = staticValues(c, "p_init", idx);
-    pInit = pi.map((v, j) => (initiallyUp[j] ? v : 0));
-    sInit = initiallyUp.map((v) => (v ? 1 : 0));
-    for (let j = 0; j < nN; j++) mask[j] = Number.isNaN(pInit[j]) ? 0 : 1;
-  }
+  const sInit = statusHistory(n, c, idx, sns, 1)[0];
+  const pInit = dispatchBefore(n, c, idx, sns, sInit);
+  for (let j = 0; j < nN; j++) mask[j] = Number.isNaN(pInit[j]) ? 0 : 1;
+  // skip starts of periods except the first where p_init is used
   const boundary = periodStartMask(sns);
   boundary[0] = false;
   for (let s = 0; s < nS; s++) if (boundary[s]) for (let j = 0; j < nN; j++) mask[s * nN + j] = 0;
 
   const p = labeler2(m.variables.get(`${c.name}-p`), sns, idx);
   const pInitF = pInit.map((v) => (Number.isNaN(v) ? 0 : v));
-  const sInitF = sInit.map((v) => (Number.isNaN(v) ? 0 : v));
 
   // Scalar expression algebra mirroring the linopy expressions of PyPSA.
   const status = (s, j) =>
@@ -653,29 +788,13 @@ export function define_ramp_limit_constraints(n, sns, component, attr) {
   const statusShifted = (s, j) => {
     if (s === 0) {
       const z = status(0, j);
-      const e = E(z.vars.map(() => -1), z.coeffs.map(() => NaN), NaN);
-      if (!hasComFix) e.const = 0; // fillna(0) on the numeric status
-      return e;
+      return E(z.vars.map(() => -1), z.coeffs.map(() => NaN), 0);
     }
     return status(s - 1, j);
   };
-  const statusPrev = (s, j) => add(statusShifted(s, j), E([], [], sInitF[j] * filterFirst(s)));
+  const statusPrev = (s, j) => add(statusShifted(s, j), E([], [], sInit[j] * filterFirst(s)));
 
-  let sInitExt = null;
-  if (pNomExt) {
-    if (isRollingHorizon) {
-      sInitExt = extMainNames.values.map((nm) => {
-        const d = c.dynamic.status;
-        const v = d && d.has(nm) ? d.col(nm)[startI] : NaN;
-        return Number.isNaN(v) ? 1 : v;
-      });
-    } else {
-      const upb = staticValues(c, "up_time_before", extMainNames);
-      sInitExt = upb.map((v) => (v > 0 ? 1 : 0) * 1.0);
-    }
-  }
-
-  const lhsExpr = (s, j) => E([p(s, j), s === 0 ? -1 : p(s - 1, j)], [1, -1], 0 - pInitF[j] * filterFirst(s));
+  const lhsExpr = (s, j) => E([p(s, j), s === 0 ? -1 : p(s - 1, j)], [1, -1], 0 - (0 + pInitF[j] * filterFirst(s)));
   const dims = ["snapshot", "name"];
   const coords = [sns, idx];
   m.add_constraints(`${c.name}-${attr}-ramp_limit_up`, dims, coords, (s, j) => {
@@ -683,15 +802,7 @@ export function define_ramp_limit_constraints(n, sns, component, attr) {
     const sp = statusPrev(s, j);
     let rhs = scale(sp, limitUp[k] * pNom[j]);
     if (hasComFix) rhs = add(rhs, scale(sub(status(s, j), sp), limitStart[j] * pNom[j]));
-    if (pNomExt && isExtMain[j]) {
-      const e = extPos.get(idx.at(j));
-      const spExt = 1 - filterFirst(s) + sInitExt[e] * filterFirst(s);
-      rhs = add(rhs, E([pNomExt(e)], [limitUp[k] * spExt], 0));
-      if (hasComFix) {
-        const dsExt = filterFirst(s) * (1 - sInitExt[e]);
-        rhs = add(rhs, E([pNomExt(e)], [limitStart[j] * dsExt], 0));
-      }
-    }
+    if (pNomExt) rhs = add(rhs, E([isExtMain[j] ? pNomExt(extPos.get(idx.at(j))) : -1], [isExtMain[j] ? limitUp[k] : NaN], 0));
     const lhs = sub(lhsExpr(s, j), rhs);
     const active = mask[k] && !noUp[k] && !isComExt[j];
     return [lhs.vars, lhs.coeffs, "<=", r(lhs.const, 0), active];
@@ -700,14 +811,7 @@ export function define_ramp_limit_constraints(n, sns, component, attr) {
     const k = s * nN + j;
     let rhs = scale(status(s, j), -limitDown[k] * pNom[j]);
     if (hasComFix) rhs = sub(rhs, scale(sub(statusPrev(s, j), status(s, j)), limitShut[j] * pNom[j]));
-    if (pNomExt && isExtMain[j]) {
-      const e = extPos.get(idx.at(j));
-      rhs = sub(rhs, E([pNomExt(e)], [limitDown[k]], 0));
-      if (hasComFix) {
-        const dsExt = filterFirst(s) * (1 - sInitExt[e]);
-        rhs = add(rhs, E([pNomExt(e)], [limitShut[j] * dsExt], 0));
-      }
-    }
+    if (pNomExt) rhs = add(rhs, E([isExtMain[j] ? pNomExt(extPos.get(idx.at(j))) : -1], [isExtMain[j] ? -limitDown[k] : NaN], 0));
     const lhs = sub(lhsExpr(s, j), rhs);
     const active = mask[k] && !noDown[k] && !isComExt[j];
     return [lhs.vars, lhs.coeffs, ">=", r(lhs.const, 0), active];
@@ -721,8 +825,6 @@ export function define_ramp_limit_constraints(n, sns, component, attr) {
 function defineRampLimitBigM(n, sns, c, attr, names, ctx) {
   const m = n.model;
   const nomAttr = c._operational_attrs.nom;
-  const histAttr = n.branch_components.has(c.name) ? "p0" : "p";
-  const isRollingHorizon = !labelKeyEq(sns.at(0), n.snapshots.at(0)) && c.dynamic[histAttr] && c.dynamic[histAttr].columns.length > 0;
   const M = bigMValues(c, names, sns, null, n._committable_big_m);
   const p = labeler2(m.variables.get(`${c.name}-p`), sns, names);
   const pNom = labeler1(m.variables.get(`${c.name}-${nomAttr}`), names);
@@ -732,23 +834,9 @@ function defineRampLimitBigM(n, sns, c, attr, names, ctx) {
   const nN = names.length;
   const pos = ctx.idx.getIndexer(names);
   const nAll = ctx.idx.length;
-  let pInit;
-  let sInit;
-  if (isRollingHorizon) {
-    const startI = n.snapshots.getLoc(sns.at(0)) - 1;
-    pInit = names.values.map((nm) => c.dynamic[histAttr].col(nm)[startI]);
-    sInit = names.values.map((nm) => {
-      const v = c.dynamic.status?.has(nm) ? c.dynamic.status.col(nm)[startI] : NaN;
-      return Number.isNaN(v) ? 1 : v;
-    });
-  } else {
-    const upb = staticValues(c, "up_time_before", names);
-    const pi = staticValues(c, "p_init", names);
-    pInit = pi.map((v, j) => (upb[j] > 0 ? v : 0));
-    sInit = upb.map((v) => (v > 0 ? 1 : 0));
-  }
+  const sInit = statusHistory(n, c, names, sns, 1)[0];
+  const pInit = dispatchBefore(n, c, names, sns, sInit);
   const pInitF = pInit.map((v) => (Number.isNaN(v) ? 0 : v));
-  const sInitF = sInit.map((v) => (Number.isNaN(v) ? 0 : v));
   const ff = (s) => (s === 0 ? 1 : 0);
   const dims = ["snapshot", "name"];
   const coords = [sns, names];
@@ -756,7 +844,7 @@ function defineRampLimitBigM(n, sns, c, attr, names, ctx) {
   const maskUp = (s, j) => ctx.mask[K(s, j)] && !ctx.noUp[K(s, j)];
   const maskDown = (s, j) => ctx.mask[K(s, j)] && !ctx.noDown[K(s, j)];
   // lhs_delta = p - p_prev, p_prev = p.shift(1) + p_init*filter
-  const delta = (s, j) => [[p(s, j), s === 0 ? -1 : p(s - 1, j)], [1, -1], 0 - pInitF[j] * ff(s)];
+  const delta = (s, j) => [[p(s, j), s === 0 ? -1 : p(s - 1, j)], [1, -1], 0 - (0 + pInitF[j] * ff(s))];
   // status_prev = status.shift(1) + s_init*filter
   m.add_constraints(`${c.name}-${attr}-ramp_limit_up-run-bigM`, dims, coords, (s, j) => {
     const [vars, coeffs, lc] = delta(s, j);
@@ -765,8 +853,7 @@ function defineRampLimitBigM(n, sns, c, attr, names, ctx) {
     // rhs = lu*p_nom + M*(1 - status_prev)
     vars.push(pNom(j), s === 0 ? -1 : status(s - 1, j));
     coeffs.push(-lu, -(-Mv));
-    const rc = Mv * (1 - sInitF[j] * ff(s));
-    return [vars, coeffs, "<=", r(lc, s === 0 ? rc : Mv), maskUp(s, j)];
+    return [vars, coeffs, "<=", r(lc, Mv * (1 - (0 + sInit[j] * ff(s)))), maskUp(s, j)];
   });
   m.add_constraints(`${c.name}-${attr}-ramp_limit_up-start-bigM`, dims, coords, (s, j) => {
     const [vars, coeffs, lc] = delta(s, j);
@@ -849,17 +936,19 @@ function iterBalanceArgs(c, sns) {
       const [db, cb] = b.split("|").map(Number);
       return da - db || ca - cb;
     });
+    const delayGroups = [];
     for (const key of keys) {
       const g = groups.get(key);
       const names = new Index(g.names, "name").intersection(active);
       if (names.empty) continue;
-      out.push({ busCol: `bus${port}`, coeffAttr: `${c._coefficient_attr}${suffix}`, names, delay: g.delay, cyclic: g.cyclic });
+      delayGroups.push({ names, delay: g.delay, cyclic: g.cyclic });
     }
+    out.push({ busCol: `bus${port}`, coeffAttr: `${c._coefficient_attr}${suffix}`, names: active, delayGroups });
   }
   return out;
 }
 
-export function define_nodal_balance_constraints(n, sns, { transmissionLosses = false, buses = null, suffix = "" } = {}) {
+export function define_nodal_balance_constraints(n, sns, { transmissionLosses = false, buses = null, suffix = "", piecewiseOptions = [] } = {}) {
   const m = n.model;
   const busI = buses ?? n.c.buses.names;
   const nS = sns.length;
@@ -879,12 +968,7 @@ export function define_nodal_balance_constraints(n, sns, { transmissionLosses = 
   }
   // blocks: each is Map(bus -> array of members {lab:(s)=>label, coef:(s)=>number}), maxSize
   const blocks = [];
-  // linopy: `sign * var` with a `sign` array over all (incl. inactive) assets
-  // outer-joins the name coordinate and moves it first; merge() then keeps
-  // the dimension order of the first expression.
-  let busMajor = null;
-  const pushBlock = (members, transposed = false) => {
-    if (busMajor === null) busMajor = transposed;
+  const pushBlock = (members) => {
     // members: [{bus, lab, coef}] in member order; groups sorted by bus
     const byBus = new Map();
     for (const mbr of members) {
@@ -910,29 +994,55 @@ export function define_nodal_balance_constraints(n, sns, { transmissionLosses = 
       members.push({ bus, lab: (s) => v(s, j), coef: () => coef });
     });
     if (!members.length) continue;
-    pushBlock(members, signAttr !== null && c.static.index.length !== names.length);
+    pushBlock(members);
   }
   for (const component of ["Process", "Link"]) {
     const c = n.c.get(component);
-    for (const { busCol, coeffAttr, names, delay, cyclic } of iterBalanceArgs(c, sns)) {
-      const coeff = denseValues(c, coeffAttr, sns, names);
-      const v = labeler2(m.variables.get(`${c.name}-p`), sns, names);
-      let src = null;
-      let valid = null;
-      if (delay > 0) {
-        [src, valid] = getDelaySourceIndexer(sns, weightings(n, "generators", sns), delay, cyclic);
+    for (const { busCol, coeffAttr, names: portNames, delayGroups } of iterBalanceArgs(c, sns)) {
+      const portBuses = staticValues(c, busCol, portNames);
+      if (!portBuses.some((b) => busI.has(b) && b !== "")) continue;
+
+      let pw = null;
+      if (c._piecewise_schema(coeffAttr)) {
+        const status = c.committables.intersection(portNames).empty ? null : m.variables.get(`${c.name}-status`);
+        pw = define_piecewise(n, c, {
+          xVar: m.variables.get(`${c.name}-p`),
+          sns,
+          pwAttr: coeffAttr,
+          auxVarName: c._piecewise_aux_var(coeffAttr),
+          activeNames: portNames,
+          sign: "=",
+          cumulativeAttr: false,
+          extraOptions: optionsFor(piecewiseOptions, c.name, coeffAttr),
+          status,
+        });
       }
-      const busVals = staticValues(c, busCol, names);
-      const nN = names.length;
-      const members = [];
-      names.values.forEach((nm, j) => {
-        const bus = busVals[j];
-        if (!busI.has(bus) || bus === "") return;
-        if (delay <= 0) members.push({ bus, lab: (s) => v(s, j), coef: (s) => coeff[s * nN + j] });
-        else members.push({ bus, lab: (s) => v(src[s], j), coef: (s) => coeff[s * nN + j] * (valid[s] ? 1 : 0) });
-      });
-      if (!members.length) continue;
-      pushBlock(members);
+
+      for (const { names: dNames, delay, cyclic } of delayGroups) {
+        const groups = pw ? [[dNames.difference(pw.names), false], [dNames.intersection(pw.names), true]] : [[dNames, false]];
+        let src = null;
+        let valid = null;
+        if (delay > 0) {
+          [src, valid] = getDelaySourceIndexer(sns, weightings(n, "generators", sns), delay, cyclic);
+        }
+        for (const [gNames, isPw] of groups) {
+          // `cbuses.indexes["name"].intersection(group_names)`: port order
+          const names = portNames.filter(portBuses.map((b) => busI.has(b) && b !== "")).intersection(gNames);
+          if (names.empty) continue;
+          const nN = names.length;
+          const coeff = isPw ? null : denseValues(c, coeffAttr, sns, names);
+          const v = labeler2(isPw ? pw.variable : m.variables.get(`${c.name}-p`), sns, names);
+          const busVals = staticValues(c, busCol, names);
+          const members = [];
+          names.values.forEach((nm, j) => {
+            const bus = busVals[j];
+            const cf = isPw ? () => 1 : (s) => coeff[s * nN + j];
+            if (delay <= 0) members.push({ bus, lab: (s) => v(s, j), coef: cf });
+            else members.push({ bus, lab: (s) => v(src[s], j), coef: (s) => cf(s) * (valid[s] ? 1 : 0) });
+          });
+          pushBlock(members);
+        }
+      }
     }
   }
   // rhs from loads
@@ -993,18 +1103,25 @@ export function define_nodal_balance_constraints(n, sns, { transmissionLosses = 
     if (empty && rv !== 0) throw new Error("Empty LHS with non-zero RHS in nodal balance constraint.");
     return [vars, coeffs.map((x) => (Number.isNaN(x) ? 0 : x)), "=", r(0, rv), anyEmpty ? !empty : true];
   };
-  if (busMajor) m.add_constraints(name, ["name", "snapshot"], [busI, sns], (j, s) => row(s, j));
-  else m.add_constraints(name, ["snapshot", "name"], [sns, busI], row);
+  m.add_constraints(name, ["snapshot", "name"], [sns, busI], row);
 }
 
-export function define_kirchhoff_voltage_constraints(n, sns) {
+const DEG2RAD = Math.PI / 180.0;
+
+/** Names of transformers with an optimised phase shift. */
+function optimisedPhaseShifts(m) {
+  const v = m.variables.get("Transformer-phase_shift");
+  return v ? v.coords[1] : new Index([], "name");
+}
+
+export function define_kirchhoff_voltage_constraints(n, sns, cycle_basis_method = "bfs-refined") {
   const m = n.model;
   n.calculate_dependent_values();
   const periods = n._multi_invest ? sns.uniqueLevel(0).values : [null];
   const parts = [];
   for (const period of periods) {
     const snapshots = period === null ? sns : sns.filter(sns.values.map((t) => t[0] === period));
-    const C = n.cycle_matrix({ investment_period: period, apply_weights: true });
+    const C = n.cycle_matrix({ investment_period: period, apply_weights: true, cycle_basis_method });
     if (C.empty) continue;
     const types = [];
     for (const [t] of C.index.values) if (!types.includes(t)) types.push(t);
@@ -1012,12 +1129,27 @@ export function define_kirchhoff_voltage_constraints(n, sns) {
     for (const t of types) {
       const rows = C.index.values.map((lab, i) => [lab, i]).filter(([lab]) => lab[0] === t);
       const names = new Index(rows.map(([lab]) => lab[1]), "name");
-      const flowNames = names.difference(n.c.get(t).inactive_assets);
+      const flowNames = names.intersection(n.c.get(t).active_assets);
       const rowOf = new Map(rows.map(([lab, i]) => [lab[1], i]));
       const v = labeler2(m.variables.get(`${t}-s`), snapshots, flowNames);
       typeTerms.push({ flowNames, rowOf, v });
     }
-    parts.push({ snapshots, typeTerms, C });
+    // transformer phase shifts: a constant when fixed, a variable when optimised
+    let shift = null;
+    if (types.includes("Transformer")) {
+      const Cplain = n.cycle_matrix({ investment_period: period, apply_weights: false, cycle_basis_method });
+      const tr = n.c.get("Transformer");
+      const trRows = Cplain.index.values.map((lab, i) => [lab, i]).filter(([lab]) => lab[0] === "Transformer");
+      const rowOf = new Map(trRows.map(([lab, i]) => [lab[1], i]));
+      const names = new Index(trRows.map(([lab]) => lab[1]), "name").intersection(tr.active_assets);
+      const optimised = names.isin(optimisedPhaseShifts(m));
+      const fixedNames = names.filter(optimised.map((o) => !o));
+      const optNames = names.filter(optimised);
+      const ps = denseValues(tr, "phase_shift", snapshots, fixedNames);
+      const psVar = optNames.empty ? null : labeler2(m.variables.get("Transformer-phase_shift"), snapshots, optNames);
+      shift = { Cplain, rowOf, fixedNames, ps, optNames, psVar };
+    }
+    parts.push({ snapshots, typeTerms, C, shift });
   }
   if (!parts.length) return;
   const allSns = parts.length === 1 ? parts[0].snapshots : new Index(parts.flatMap((p) => p.snapshots.values), sns.names);
@@ -1041,10 +1173,78 @@ export function define_kirchhoff_voltage_constraints(n, sns) {
         coeffs.push(col[rowOf.get(flowNames.at(j))] * 1e5);
       }
     }
-    return [vars, coeffs, "=", r(0, 0)];
+    let lc = 0;
+    if (p.shift) {
+      const { Cplain, rowOf, fixedNames, ps, optNames, psVar } = p.shift;
+      const pcol = Cplain.col(cyc);
+      // (phase_shift @ C) * deg2rad * 1e5
+      let dot = 0;
+      const nF = fixedNames.length;
+      for (let j = 0; j < nF; j++) dot += ps[s * nF + j] * pcol[rowOf.get(fixedNames.at(j))];
+      lc = lc + dot * DEG2RAD * 1e5;
+      for (let j = 0; j < optNames.length; j++) {
+        vars.push(psVar(s, j));
+        coeffs.push(pcol[rowOf.get(optNames.at(j))] * DEG2RAD * 1e5);
+      }
+    }
+    return [vars, coeffs, "=", r(lc, 0)];
   };
   if (aligned) m.add_constraints("Kirchhoff-Voltage-Law", ["snapshot", "cycle"], [allSns, cycleIdx], row);
   else m.add_constraints("Kirchhoff-Voltage-Law", ["cycle", "snapshot"], [cycleIdx, allSns], (cyc, si) => row(si, cyc));
+}
+
+/**
+ * Voltage angle difference limits (`v_ang_max`, degrees) for AC lines and
+ * transformers: |x_pu_eff * s + phase_shift| <= v_ang_max.
+ */
+export function define_voltage_angle_constraints(n, sns) {
+  const m = n.model;
+  const dims = ["snapshot", "name"];
+  for (const cName of ["Line", "Transformer"]) {
+    const c = n.c.get(cName);
+    const st = c.static;
+    if (st.col("v_ang_min").some((x) => Number.isFinite(x))) {
+      logger.warning(`The \`v_ang_min\` attribute of ${cName} is deprecated and ignored. \`v_ang_max\` applies symmetrically as an absolute voltage angle difference limit.`);
+    }
+    const vmax = st.col("v_ang_max");
+    let assets = new Index(
+      st.index.values.filter((_, i) => Number.isFinite(vmax[i])),
+      "name",
+    )
+      .unique()
+      .intersection(c.active_assets);
+    if (cName === "Line") assets = assets.filter(staticValues(c, "carrier", assets).map((x) => x === "AC"));
+    if (assets.empty) continue;
+    const x = staticValues(c, "x_pu_eff", assets);
+    const cap = staticValues(c, "v_ang_max", assets).map((v, j) => (v * DEG2RAD) / x[j]);
+    const sv = labeler2(m.variables.get(`${cName}-s`), sns, assets);
+    const act = activityMask(c, sns, assets);
+    const nN = assets.length;
+    const on = (s, j) => act[s * nN + j] && Number.isFinite(cap[j]);
+    if (cName === "Line") {
+      m.add_constraints("Line-v_ang-lower", dims, [sns, assets], (s, j) => [[sv(s, j)], [1], ">=", r(0, -cap[j]), on(s, j)]);
+      m.add_constraints("Line-v_ang-upper", dims, [sns, assets], (s, j) => [[sv(s, j)], [1], "<=", r(0, cap[j]), on(s, j)]);
+      continue;
+    }
+    const varying = assets.isin(optimisedPhaseShifts(m));
+    const fixedI = assets.filter(varying.map((v) => !v));
+    const varI = assets.filter(varying);
+    if (!fixedI.empty) {
+      const pos = assets.getIndexer(fixedI);
+      const ps = denseValues(c, "phase_shift", sns, fixedI);
+      const nF = fixedI.length;
+      const offset = (s, j) => (DEG2RAD * ps[s * nF + j]) / x[pos[j]];
+      m.add_constraints("Transformer-v_ang-lower", dims, [sns, fixedI], (s, j) => [[sv(s, pos[j])], [1], ">=", r(0, -cap[pos[j]] - offset(s, j)), on(s, pos[j])]);
+      m.add_constraints("Transformer-v_ang-upper", dims, [sns, fixedI], (s, j) => [[sv(s, pos[j])], [1], "<=", r(0, cap[pos[j]] - offset(s, j)), on(s, pos[j])]);
+    }
+    if (!varI.empty) {
+      const pos = assets.getIndexer(varI);
+      const psV = labeler2(m.variables.get("Transformer-phase_shift"), sns, varI);
+      const row = (s, j) => [[sv(s, pos[j]), psV(s, j)], [1, DEG2RAD / x[pos[j]]]];
+      m.add_constraints("Transformer-v_ang-var-lower", dims, [sns, varI], (s, j) => [...row(s, j), ">=", r(0, -cap[pos[j]]), on(s, pos[j])]);
+      m.add_constraints("Transformer-v_ang-var-upper", dims, [sns, varI], (s, j) => [...row(s, j), "<=", r(0, cap[pos[j]]), on(s, pos[j])]);
+    }
+  }
 }
 
 // ----------------------------------------------------------------------
@@ -1054,7 +1254,7 @@ export function define_kirchhoff_voltage_constraints(n, sns) {
 /**
  * Previous-state label (mirrors `var.where(active).ffill().roll(1).ffill().where(include)`).
  */
-function previousLabels(lab, act, nS, nN, include) {
+function previousLabels(lab, act, nS, nN) {
   const out = new Int32Array(nS * nN).fill(-1);
   for (let j = 0; j < nN; j++) {
     const col = new Int32Array(nS);
@@ -1065,7 +1265,7 @@ function previousLabels(lab, act, nS, nN, include) {
     const rolled = new Int32Array(nS);
     for (let s = 0; s < nS; s++) rolled[s] = col[(s - 1 + nS) % nS];
     for (let s = 1; s < nS; s++) if (rolled[s] === -1) rolled[s] = rolled[s - 1];
-    for (let s = 0; s < nS; s++) out[s * nN + j] = include[s * nN + j] ? rolled[s] : -1;
+    for (let s = 0; s < nS; s++) out[s * nN + j] = rolled[s];
   }
   return out;
 }
@@ -1119,7 +1319,7 @@ export function define_storage_unit_constraints(n, sns) {
       include[k] = cyclic[j] ? 1 : cum !== 1 ? 1 : 0;
     }
   }
-  let prev = previousLabels(soc, act, nS, nN, include);
+  const prev = previousLabels(soc, act, nS, nN);
   if (n._multi_invest) {
     const cpp = staticValues(c, "cyclic_state_of_charge_per_period", names);
     const ipp = staticValues(c, "state_of_charge_initial_per_period", names);
@@ -1131,7 +1331,7 @@ export function define_storage_unit_constraints(n, sns) {
         const k = s * nN + j;
         const inclPP = act[k] && (!starts[s] || cpp[j]);
         if (perPeriod[j]) {
-          prev[k] = inclPP ? prevPP[k] : -1;
+          prev[k] = prevPP[k];
           include[k] = inclPP ? 1 : 0;
         }
       }
@@ -1146,14 +1346,13 @@ export function define_storage_unit_constraints(n, sns) {
   }
   m.add_constraints("StorageUnit-energy_balance", ["snapshot", "name"], [sns, names], (s, j) => {
     const k = s * nN + j;
-    const vars = [soc(s, j), pd(s, j), ps(s, j)];
-    const coeffs = [-1, (-1 / effDispatch[k]) * eh[s], effStore[k] * eh[s]];
+    // the previous state of charge is included through its coefficient
+    const vars = [soc(s, j), pd(s, j), ps(s, j), prev[k]];
+    const coeffs = [-1, (-1 / effDispatch[k]) * eh[s], effStore[k] * eh[s], effStand[k] * include[k]];
     if (spill) {
       vars.push(spill(s, j));
       coeffs.push(-eh[s]);
     }
-    vars.push(prev[k]);
-    coeffs.push(effStand[k]);
     let rhs = -inflow[k] * eh[s];
     if (!include[k]) rhs = rhs - socInit[j];
     return [vars, coeffs, "=", r(0, rhs), act[k]];
@@ -1184,7 +1383,7 @@ export function define_store_constraints(n, sns) {
       include[k] = cyclic[j] ? 1 : cum !== 1 ? 1 : 0;
     }
   }
-  const prev = previousLabels(e, act, nS, nN, include);
+  const prev = previousLabels(e, act, nS, nN);
   if (n._multi_invest) {
     const cpp = staticValues(c, "e_cyclic_per_period", names);
     const ipp = staticValues(c, "e_initial_per_period", names);
@@ -1196,7 +1395,7 @@ export function define_store_constraints(n, sns) {
         const k = s * nN + j;
         const inclPP = act[k] && (!starts[s] || cpp[j]);
         if (perPeriod[j]) {
-          prev[k] = inclPP ? prevPP[k] : -1;
+          prev[k] = prevPP[k];
           include[k] = inclPP ? 1 : 0;
         }
       }
@@ -1211,7 +1410,7 @@ export function define_store_constraints(n, sns) {
   m.add_constraints("Store-energy_balance", ["snapshot", "name"], [sns, names], (s, j) => {
     const k = s * nN + j;
     const vars = [e(s, j), p(s, j), prev[k]];
-    const coeffs = [-1, -eh[s], effStand[k]];
+    const coeffs = [-1, -eh[s], effStand[k] * include[k]];
     const rhs = -(include[k] ? 0 : eInit[j]);
     return [vars, coeffs, "=", r(0, rhs), act[k]];
   });
