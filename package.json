@@ -1,0 +1,25 @@
+{
+  "name": "psa.js",
+  "version": "0.1.0",
+  "description": "PSA.js - a JavaScript port of PyPSA (Python for Power System Analysis)",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "examples"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.3"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "highs": "1.15.3",
+    "papaparse": "5.5.3"
+  }
+}
