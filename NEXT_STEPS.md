@@ -1,24 +1,21 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 26 parity scenarios plus
-IO tests). Reference PyPSA commit: `1eb9db0` (post v1.2.4).
+State at hand-off: all PSA.js tests pass (`npm test`: 32 parity scenarios plus
+IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
 
-## 1. Housekeeping (do first)
+## 1. Housekeeping
 
-- [ ] **Regenerate every fixture in one go** with the final runners
-      (`run_scenarios.py` with no arguments, `gen_networks.py`, `gen_io.py`) and
-      confirm `npm test` still passes. Some fixtures predate later runner fixes
-      (pinned `PYTHONHASHSEED=0`, datetime/tuple value serialisation, the
-      pandas copy-on-write workaround).
-- [ ] Add `scripts/parity/generate_all.sh` (the test error message refers to it).
-- [ ] Decide whether to track PyPSA v1.4.0: the fork's `master` moved to v1.4.0
-      (352 files changed). Diff `1eb9db0..master`, update
-      `src/data/definitions.js` via `scripts/generate_definitions.py`, bump
-      `PYPSA_VERSION`, regenerate fixtures and fix what changes.
-- [ ] The reference checkout reports `pypsa.__version__ == "0.0"` (no git tags);
-      `git fetch --tags` in the PyPSA checkout would make exported
-      `pypsa_version` meaningful (the IO test currently masks it).
-- [ ] Add a CI workflow (GitHub Actions) running `npm test` on Node 22.
+- [x] Regenerate every fixture in one go (`scripts/parity/generate_all.sh`);
+      regeneration is deterministic and leaves the tree clean.
+- [x] Add `scripts/parity/generate_all.sh`.
+- [x] Track PyPSA v1.4.0: definitions regenerated, `PYPSA_VERSION` 1.4.0, all
+      fixtures regenerated, behaviour changes ported (bfs-refined cycle basis,
+      UC status history, maintenance, phase shifters, voltage angle limits,
+      time-varying start-up/shut-down costs, seasonal ratings, SCLOPF per
+      period, piecewise linear costs/efficiencies).
+- [x] PyPSA release tags: `pypsa.__version__` resolves to 1.4.0 (the IO test no
+      longer masks the exported version).
+- [x] CI workflow (`.github/workflows/test.yml`, Node 22 and 24).
 
 ## 2. Features not yet ported
 
@@ -26,6 +23,9 @@ IO tests). Reference PyPSA commit: `1eb9db0` (post v1.2.4).
       components, scenario-weighted objective, CVaR / `set_risk_preference`,
       stochastic statistics. Currently `set_scenarios` throws.
 - [ ] **NetworkCollection** (multi-network statistics).
+- [ ] **`n.optimize.expressions`** (statistic expressions on the linopy model,
+      incl. `_split_piecewise` / `_direct_piecewise`).
+- [ ] Piecewise data on stochastic networks (PyPSA raises too).
 - [ ] **IO formats**: Excel (`import_from_excel`/`export_to_excel`, e.g. via
       SheetJS), HDF5 (pandas HDFStore layout), `import_from_pypower_ppc`,
       `import_from_pandapower_net` (likely out of scope without Python).
@@ -61,6 +61,24 @@ IO tests). Reference PyPSA commit: `1eb9db0` (post v1.2.4).
       previous run; on a fresh network (s_nom_opt = 0) this yields x = 0 and
       fails in PyPSA too. The scenario seeds `s_nom_opt`; consider reporting
       upstream.
+- [ ] PyPSA v1.4.0 piecewise bugs found while porting (PSA.js mirrors 1, 3
+      and 4; consider reporting upstream):
+      1. `_normalize_breakpoints` concatenates the per-name `groupby().apply()`
+         results with a label-based column union, so breakpoint rows are
+         aligned across components: sorting one curve re-orders the rows of
+         every other curve (they can end up unsorted or rejected as not
+         starting at x=0, e.g. shuffled MultiIndex input).
+      2. netCDF export of piecewise data with different breakpoint counts
+         truncates the longer curves (all `<list>_pw_<attr>` variables share
+         one `breakpoint` dimension aligned to the first one written), so the
+         file fails to re-import. PSA.js pads with NaN rows instead; PyPSA
+         reads those files correctly.
+      3. `_get_breakpoints` raises "Breakpoints must have same size" when the
+         piecewise frame has more rows than every selected curve (e.g. a
+         longer capital cost curve on a non-extendable component).
+      4. `meshed_thresholds` that put the output buses of piecewise links in
+         different bus groups define `Link-p1_piecewise` twice ("already
+         assigned to model").
 - [ ] PyPSA bugs/quirks observed (mirrored or worked around in fixtures):
       clustering crashes under pandas 3 copy-on-write (runner patches
       `determine_network_topology`), loss variable order depends on Python's
