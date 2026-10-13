@@ -20,7 +20,7 @@ for (const fn of readdirSync(dir).filter((f) => f.endsWith(".json")).sort()) {
     await runScenario(scenario, (key, value) => {
       const expected = fixture.records[key];
       if (!expected) throw new Error(`fixture has no record ${key}`);
-      const t = { ...tol, ...(scenario.record_tolerance?.[key] ?? {}) };
+      const t = { ...tol, ...(scenario.record_tolerance?.[key] ?? {}), path_tolerance: scenario.path_tolerance ?? {} };
       assertRecordMatches(value, expected, { ...t, path: key });
     });
   });

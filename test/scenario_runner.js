@@ -128,6 +128,7 @@ export async function runScenario(scenario, onRecord = null) {
         if (what === "network") records[key] = n;
         else if (what === "result") records[key] = results[op[3]];
         else if (what === "path") records[key] = await getPath(n, op[3]);
+        else if (what === "lp") records[key] = { $lp: n.optimize.create_model(decodeValue(op[3] ?? {}, n)).to_lp() };
         else throw new Error(`unknown record ${what}`);
         if (onRecord) onRecord(key, records[key]);
         break;
@@ -177,6 +178,9 @@ export function assertRecordMatches(actual, expected, opts) {
       });
       break;
     }
+    case "lp":
+      assertLpMatches(actual.$lp, expected.text, opts);
+      break;
     case "dict":
       for (const [k, v] of Object.entries(expected.items)) {
         const a = actual instanceof Map ? actual.get(k) : actual[k];
@@ -188,5 +192,35 @@ export function assertRecordMatches(actual, expected, opts) {
       break;
     default:
       throw new Error(`unknown record type ${expected.$type}`);
+  }
+}
+
+function parseNum(t) {
+  if (t === "inf" || t === "+inf") return Infinity;
+  if (t === "-inf") return -Infinity;
+  if (!/^[+-]?(\d|\.\d)/.test(t)) return null;
+  const v = Number(t);
+  return Number.isNaN(v) ? null : v;
+}
+
+/** Compare LP texts: identical structure, numbers equal within tolerance. */
+export function assertLpMatches(actual, expected, { lpRtol = 1e-12, path: where = "lp" } = {}) {
+  if (actual === expected) return;
+  const a = actual.split("\n");
+  const b = expected.split("\n");
+  assert.equal(a.length, b.length, `${where}: LP line count differs (PSA.js ${a.length}, PyPSA ${b.length})`);
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === b[i]) continue;
+    const ta = a[i].split(" ");
+    const tb = b[i].split(" ");
+    const fail = () => assert.fail(`${where}: line ${i + 1} differs:\n  PSA.js: ${a[i]}\n  PyPSA:  ${b[i]}`);
+    if (ta.length !== tb.length) fail();
+    for (let k = 0; k < ta.length; k++) {
+      if (ta[k] === tb[k]) continue;
+      const x = parseNum(ta[k]);
+      const y = parseNum(tb[k]);
+      if (x === null || y === null) fail();
+      if (!(Math.abs(x - y) <= lpRtol * Math.max(Math.abs(x), Math.abs(y)))) fail();
+    }
   }
 }

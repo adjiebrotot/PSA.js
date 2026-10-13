@@ -1,0 +1,13 @@
+{
+  "description": "Linear optimal power flow / capacity expansion of the model-energy example (default options).",
+  "ops": [
+    ["load_example", "model-energy"],
+    
+    ["call", "optimize", [], {}, "status"],
+    ["record", "status", "result", "status"],
+    ["record", "objective", "path", ["objective"]],
+    ["record", "objective_constant", "path", ["objective_constant"]],
+    ["record", "network", "network"]
+  ],
+  "tolerance": {"rtol": 1e-6, "atol": 1e-6}
+}

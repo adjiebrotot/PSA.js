@@ -24,6 +24,7 @@ from common import EXAMPLES, ROOT, dump_network, frame, index_json, series, valu
 
 logging.disable(logging.WARNING)
 warnings.filterwarnings("ignore")
+pypsa.options.params.optimize.log_to_console = False
 
 SCENARIOS = ROOT / "test" / "scenarios"
 
@@ -143,6 +144,14 @@ def run(scenario: dict) -> dict:
                 records[key] = to_json(results[op[3]])
             elif what == "path":
                 records[key] = to_json(get_path(n, op[3]))
+            elif what == "lp":
+                import tempfile, os
+                kwargs = decode(op[3] if len(op) > 3 else {}, n)
+                m = n.optimize.create_model(**kwargs)
+                with tempfile.TemporaryDirectory() as d:
+                    fn = os.path.join(d, "model.lp")
+                    m.to_file(fn, io_api="lp", progress=False)
+                    records[key] = {"$type": "lp", "text": open(fn).read()}
             else:
                 raise ValueError(f"unknown record {what}")
         else:

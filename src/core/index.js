@@ -218,6 +218,11 @@ export class Index {
   /** Pandas-like difference (sorted by default like `sort=None`). */
   difference(other, sort = null) {
     const o = other instanceof Index ? other : new Index(other);
+    // pandas does not sort when `other` is empty (GH#24959)
+    if (o.length === 0) {
+      const u = this.unique();
+      return sort === true ? u.sortValues() : u;
+    }
     const seen = new Set();
     const out = [];
     for (const v of this.values) {
