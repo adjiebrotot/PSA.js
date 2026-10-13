@@ -9,7 +9,7 @@
 import { Index } from "../core/index.js";
 import { logger } from "../logger.js";
 import { as_index } from "../common.js";
-import { NOMINAL_ATTRS } from "./common.js";
+import { NOMINAL_ATTRS, npSum } from "./common.js";
 
 /** Python float modulo (result has the sign of the divisor). */
 function pyMod(a, b) {
@@ -83,7 +83,7 @@ export function installAbstract(Accessor) {
     const n = this._n;
     const lines = () => n.c.lines.static;
     lines().set("carrier", mapCol(n, lines(), "bus0", "Bus", "carrier"));
-    const extI = n.c.lines.extendables.difference(n.c.lines.inactive_assets);
+    const extI = n.c.lines.extendables.intersection(n.c.lines.active_assets);
     const typedI = indexWhere(lines(), (i) => lines().col("type")[i] !== "");
     const extUntypedI = extI.difference(typedI);
     const extTypedI = extI.intersection(typedI);
@@ -146,7 +146,7 @@ export function installAbstract(Accessor) {
         logger.info(`Iteration ${iteration} beyond max_iterations ${max_iterations}. Stopping ...`);
         break;
       }
-      const sNomPrev = Float64Array.from(lines().col("s_nom_opt"));
+      const sNomPrev = Float64Array.from(lines().col(iteration > 1 ? "s_nom_opt" : "s_nom"));
       const [status, condition] = await n.optimize({ snapshots, ...kwargs });
       if (status !== "ok") throw new Error(`Optimization failed with status ${status} and termination ${condition}`);
       if (track_iterations) saveOptimalCapacities(iteration, status);
@@ -207,14 +207,18 @@ export function installAbstract(Accessor) {
       links.setAt(nm, "p_nom_extendable", true);
     }
 
-    let objLinks = 0;
-    for (const nm of fixLinks) objLinks += links.at(nm, "capital_cost") * (links.at(nm, "p_nom_opt") - links.at(nm, "p_nom_min"));
-    let objLines = 0;
-    const ls = lines();
-    ls.index.values.forEach((_, i) => {
-      const v = ls.col("capital_cost")[i] * (ls.col("s_nom_opt")[i] - ls.col("s_nom_min")[i]);
-      if (!Number.isNaN(v)) objLines += v;
+    // pandas `.sum()` (skipna) of periodized cost times added capacity
+    const pcLinks = n.c.links.periodized_cost;
+    const fixLinkSet = new Set(fixLinks.values);
+    const linkTerms = [];
+    links.index.values.forEach((nm, i) => {
+      const v = pcLinks[i] * (links.col("p_nom_opt")[i] - links.col("p_nom_min")[i]);
+      if (fixLinkSet.has(nm) && !Number.isNaN(v)) linkTerms.push(v);
     });
+    const objLinks = npSum(linkTerms);
+    const ls = lines();
+    const pcLines = n.c.lines.periodized_cost;
+    const objLines = npSum(ls.index.values.map((_, i) => pcLines[i] * (ls.col("s_nom_opt")[i] - ls.col("s_nom_min")[i])).filter((v) => !Number.isNaN(v)));
     n._objective += objLinks + objLines;
     n._objective_constant -= objLinks + objLines;
     return [status, condition];

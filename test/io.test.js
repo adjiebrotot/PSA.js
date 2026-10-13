@@ -43,8 +43,6 @@ function assertCsvMatches(actual, expected, where, rtol = 0) {
 function assertExportMatches(n, expected, where, rtol = 0) {
   const folder = n.export_to_csv_folder(new MemoryFolder());
   const files = folder.toObject();
-  // the reference PyPSA checkout reports version "0.0" (no git tags available)
-  files["network.csv"] = files["network.csv"].replace(/,(\d+\.\d+\.\d+)(,\d+\n)$/, ",0.0$2");
   assert.deepEqual(Object.keys(files).sort(), Object.keys(expected).sort(), `${where}: exported file set differs`);
   for (const [name, text] of Object.entries(expected)) assertCsvMatches(files[name], text, `${where}/${name}`, rtol);
 }

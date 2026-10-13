@@ -261,9 +261,9 @@ export function check_big_m_exceeded(n, strict = false) {
   for (const cName of ["Generator", "Link"]) {
     const c = n.c.get(cName);
     if (c.static.empty) continue;
-    const comI = c.committables.difference(c.inactive_assets);
+    const comI = c.committables.intersection(c.active_assets);
     if (comI.empty) continue;
-    const comExt = comI.intersection(c.extendables.difference(c.inactive_assets));
+    const comExt = comI.intersection(c.extendables.intersection(c.active_assets));
     if (comExt.empty) continue;
     const attr = NOMINAL_ATTRS[cName];
     const st = c.static;

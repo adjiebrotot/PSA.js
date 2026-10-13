@@ -4,7 +4,7 @@
  */
 
 import { Components, RE_PORTS_GE_2 } from "../components/components.js";
-import { componentTypes, getComponentType, allStandardAttrs, typToDtype } from "../components/types.js";
+import { componentTypes, getComponentType, allStandardAttrs, typToDtype, PYPSA_VERSION } from "../components/types.js";
 import { DataFrame, Series, isNumberArray, makeFilled } from "../core/frame.js";
 import { Index, asIndex, labelKey } from "../core/index.js";
 import { pyFloatRepr } from "../core/csv.js";
@@ -131,7 +131,7 @@ export class Network {
   constructor(opts = {}) {
     if (typeof opts === "string") opts = { import_name: opts };
     const { name = "Unnamed Network", ignore_standard_types = false, import_name = null, ...rest } = opts;
-    this._pypsa_version = getComponentType("Bus") ? "1.x (PSA.js)" : "";
+    this._pypsa_version = PYPSA_VERSION;
     this._name = name;
     this._meta = {};
     this._crs = { _crs: null, epsg: DEFAULT_EPSG };

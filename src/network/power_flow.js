@@ -9,7 +9,7 @@ import { DataFrame, Series } from "../core/frame.js";
 import { Index, labelKey } from "../core/index.js";
 import { CSC, diag, sparseLU, normInf } from "../linalg/sparse.js";
 import { Network, updatePortsComponentAttrs } from "./network.js";
-import { GraphMixin, connectedComponents, cycleBasis } from "./graph.js";
+import { GraphMixin, connectedComponents, cycleBasis, bfsRefinedCycleBasis } from "./graph.js";
 import { as_index, isOptions } from "../common.js";
 import { logger } from "../logger.js";
 
@@ -637,13 +637,16 @@ function cmatvec(Y, vr, vi) {
 // cycles
 // ----------------------------------------------------------------------
 
-export function find_cycles(sub, weight = "x_pu") {
+export function find_cycles(sub, weight = "x_pu", cycle_basis_method = "bfs-refined") {
+  if (cycle_basis_method !== "bfs-refined" && cycle_basis_method !== "paton") {
+    throw new Error('cycle_basis_method must be one of "bfs-refined" or "paton"');
+  }
   const branches = sub.branches();
   const bus0 = branches.index.length ? branches.col("bus0") : [];
   const branchesI = branches.index;
-  const mgraph = sub.graph({ weight, inf_weight: false });
+  const mgraph = sub.graph({ weight, inf_weight: false, include_inactive: false });
   const graph = mgraph.toSimple();
-  const cycles = cycleBasis(graph);
+  const cycles = cycle_basis_method === "paton" ? cycleBasis(graph) : bfsRefinedCycleBasis(graph);
   let numSimpleEdges = 0;
   for (const _ of graph.edges()) numSimpleEdges++;
   const numMulti = mgraph.numberOfEdges - numSimpleEdges;
@@ -692,7 +695,7 @@ export function find_cycles(sub, weight = "x_pu") {
 // Network topology
 // ----------------------------------------------------------------------
 
-function determine_network_topology({ investment_period = null, skip_isolated_buses = false } = {}) {
+function determine_network_topology({ investment_period = null, skip_isolated_buses = false, cycle_basis_method = "bfs-refined" } = {}) {
   const n = this;
   const buses = n.c.buses.static.index;
   const adj = n.adjacency_matrix({ branch_components: n.passive_branch_components, investment_period, return_dataframe: false });
@@ -716,7 +719,7 @@ function determine_network_topology({ investment_period = null, skip_isolated_bu
     const carrier = carriers[members[0]];
     if (carrier !== "AC" && carrier !== "DC" && members.length > 1) {
       logger.warning(
-        `Warning, sub network ${i} is not electric but contains multiple buses\nand branches. Passive flows are not allowed for non-electric networks!`,
+        `Warning, sub network ${i} is not electric but contains multiple buses\nand branches. Passive flows are not allowed for non-electric networks! Use "AC" or "DC" as carrier ("electricity" will not work).`,
       );
     }
     if (members.some((k) => carriers[k] !== carrier)) {
@@ -759,16 +762,16 @@ function determine_network_topology({ investment_period = null, skip_isolated_bu
     }
   }
   for (const sub of sn.static.col("obj")) {
-    find_cycles(sub);
+    find_cycles(sub, "x_pu", cycle_basis_method);
     sub.find_bus_controls();
   }
   return n;
 }
 
 /** Cycle matrix of passive branches (branches x cycles) as DataFrame. */
-function cycle_matrix({ investment_period = null, apply_weights = false } = {}) {
+function cycle_matrix({ investment_period = null, apply_weights = false, cycle_basis_method = "bfs-refined" } = {}) {
   const n = this;
-  n.determine_network_topology({ investment_period, skip_isolated_buses: true });
+  n.determine_network_topology({ investment_period, skip_isolated_buses: true, cycle_basis_method });
   n.calculate_dependent_values();
   const blocks = [];
   for (const sub of n.c.sub_networks.static.col("obj")) {
@@ -809,7 +812,7 @@ function cycle_matrix({ investment_period = null, apply_weights = false } = {}) 
       const i = allBranches.index.getLoc(lab);
       return subCarrier.getOr(sns[i], NaN) === "AC" ? xe[i] : re[i];
     });
-    for (const col of colData) for (let r = 0; r < col.length; r++) col[r] = col[r] * w[r];
+    for (const col of colData) for (let r = 0; r < col.length; r++) if (col[r] !== 0) col[r] = col[r] * w[r];
   }
   colData.forEach((a, j) => data.set(j, a));
   return new DataFrame({ index: rowsIdx, columns: new Index([...data.keys()], "cycle"), data });

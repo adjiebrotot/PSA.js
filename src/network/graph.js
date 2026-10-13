@@ -8,6 +8,7 @@
 import { DataFrame } from "../core/frame.js";
 import { Index, labelKey } from "../core/index.js";
 import { CSC } from "../linalg/sparse.js";
+import { PySet, FrozenSet } from "../core/pyset.js";
 
 /** Insertion-ordered undirected multigraph (like networkx.MultiGraph). */
 export class MultiGraph {
@@ -180,6 +181,201 @@ export function cycleBasis(G) {
     }
     for (const k of pred.keys()) gnodes.delete(k);
     root = null;
+  }
+  return cycles;
+}
+
+// ----------------------------------------------------------------------
+// BFS-refined cycle basis (pypsa.network.graph.bfs_refined_cycle_basis)
+// ----------------------------------------------------------------------
+//
+// PyPSA iterates over Python sets of nodes, edges (frozensets) and cycle
+// indices here, so the resulting basis depends on CPython's hashing. The sets
+// are emulated with `PySet`/`FrozenSet` (hash seed 0, as used for the parity
+// fixtures) so that the basis, cycle orientation and order match PyPSA.
+
+/** Node iteration order of `G.subgraph(nodes)` (networkx `FilterAtlas`). */
+function subgraphNodes(G, nodeSet) {
+  const nodes = new PySet();
+  for (const v of nodeSet) nodes.add(v);
+  if (2 * nodes.size < G._nodes.size) return [...nodes];
+  return [...G._nodes.values()].filter((v) => nodes.has(v));
+}
+
+/** `networkx.connected_components` with `_plain_bfs` (yields PySets). */
+function* connectedComponentSets(G) {
+  const seen = new Set();
+  const total = G._nodes.size;
+  for (const v of G._nodes.values()) {
+    if (seen.has(labelKey(v))) continue;
+    const n = total - seen.size;
+    const comp = new PySet([v]);
+    let nextlevel = [v];
+    outer: while (nextlevel.length) {
+      const thislevel = nextlevel;
+      nextlevel = [];
+      for (const u of thislevel) {
+        for (const w of G.neighbors(u)) {
+          if (!comp.has(w)) {
+            comp.add(w);
+            nextlevel.push(w);
+          }
+        }
+        if (comp.size === n) break outer;
+      }
+    }
+    for (const w of comp) seen.add(labelKey(w));
+    yield comp;
+  }
+}
+
+/** Fundamental cycles of a breadth-first spanning tree grown from `root`. */
+function bfsFundamentalCycles(G, nodes, inSub, root) {
+  const parent = new Map([[labelKey(root), root]]);
+  const tree = new Set();
+  const edgeKey = (u, v) => {
+    const a = labelKey(u);
+    const b = labelKey(v);
+    return a < b ? `${a}\u0002${b}` : `${b}\u0002${a}`;
+  };
+  let level = [root];
+  while (level.length) {
+    const next = [];
+    for (const p of level) {
+      for (const c of G.neighbors(p)) {
+        if (!inSub.has(labelKey(c)) || parent.has(labelKey(c))) continue;
+        parent.set(labelKey(c), p);
+        tree.add(edgeKey(p, c));
+        next.push(c);
+      }
+    }
+    level = next;
+  }
+  const cycles = [];
+  const rootKey = labelKey(root);
+  for (const [u, v] of subgraphEdges(G, nodes, inSub)) {
+    if (tree.has(edgeKey(u, v))) continue;
+    const ancestors = new Set([labelKey(u)]);
+    let current = u;
+    while (labelKey(current) !== rootKey) {
+      current = parent.get(labelKey(current));
+      ancestors.add(labelKey(current));
+    }
+    const left = [v];
+    current = v;
+    while (!ancestors.has(labelKey(current))) {
+      current = parent.get(labelKey(current));
+      left.push(current);
+    }
+    const lca = labelKey(current);
+    const right = [u];
+    while (labelKey(right[right.length - 1]) !== lca) right.push(parent.get(labelKey(right[right.length - 1])));
+    cycles.push([...right, ...left.slice(0, -1).reverse()]);
+  }
+  return cycles;
+}
+
+/** Edges of a subgraph view in networkx order. */
+function* subgraphEdges(G, nodes, inSub) {
+  const seen = new Set();
+  for (const u of nodes) {
+    const ku = labelKey(u);
+    for (const v of G.neighbors(u)) {
+      const kv = labelKey(v);
+      if (inSub.has(kv) && !seen.has(kv)) yield [u, v];
+    }
+    seen.add(ku);
+  }
+}
+
+function bfsCycleBasis(G, numRoots = 5) {
+  const cycles = [];
+  for (const comp of connectedComponentSets(G)) {
+    const nodes = subgraphNodes(G, comp);
+    const inSub = new Set(nodes.map(labelKey));
+    const degree = (v) => {
+      let d = 0;
+      for (const w of G.neighbors(v)) if (inSub.has(labelKey(w))) d += labelKey(w) === labelKey(v) ? 2 : 1;
+      return d;
+    };
+    const roots = nodes
+      .map((v) => [v, degree(v)])
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, numRoots)
+      .map(([v]) => v);
+    let best = null;
+    let bestKey = null;
+    for (const root of roots) {
+      const cand = bfsFundamentalCycles(G, nodes, inSub, root);
+      const key = [cand.reduce((m, c) => Math.max(m, c.length), 0), cand.reduce((s, c) => s + c.length, 0)];
+      if (best === null || key[0] < bestKey[0] || (key[0] === bestKey[0] && key[1] < bestKey[1])) {
+        best = cand;
+        bestKey = key;
+      }
+    }
+    if (best) cycles.push(...best);
+  }
+  return cycles;
+}
+
+/** Cyclic node ordering if the frozenset edges form exactly one simple cycle. */
+function edgeSetToCycle(edges) {
+  const adjacency = new Map();
+  for (const edge of edges) {
+    const [u, v] = [...edge];
+    if (v === undefined) throw new Error("not enough values to unpack (expected 2, got 1)");
+    if (!adjacency.has(u)) adjacency.set(u, []);
+    adjacency.get(u).push(v);
+    if (!adjacency.has(v)) adjacency.set(v, []);
+    adjacency.get(v).push(u);
+  }
+  if (!adjacency.size || [...adjacency.values()].some((nb) => nb.length !== 2)) return null;
+  const start = adjacency.keys().next().value;
+  const order = [start];
+  let previous = null;
+  let current = start;
+  for (;;) {
+    const [left, right] = adjacency.get(current);
+    const following = left === previous ? right : left;
+    if (following === start) return order.length === edges.size ? order : null;
+    order.push(following);
+    previous = current;
+    current = following;
+  }
+}
+
+/** Port of `pypsa.network.graph.bfs_refined_cycle_basis` for string node labels. */
+export function bfsRefinedCycleBasis(G, maxPasses = 50) {
+  const cycles = bfsCycleBasis(G);
+  const edgeSet = (cycle) => new PySet(cycle.map((_, i) => new FrozenSet([cycle[i], cycle[(i + 1) % cycle.length]])));
+  const edgeSets = cycles.map(edgeSet);
+  for (let pass = 0; pass < maxPasses; pass++) {
+    const edgeToCycles = new Map();
+    edgeSets.forEach((edges, index) => {
+      for (const e of edges) {
+        if (!edgeToCycles.has(e.key)) edgeToCycles.set(e.key, []);
+        edgeToCycles.get(e.key).push(index);
+      }
+    });
+    let swaps = 0;
+    const order = cycles.map((_, i) => i).sort((a, b) => cycles[b].length - cycles[a].length);
+    for (const left of order) {
+      const candidates = new PySet();
+      for (const e of edgeSets[left]) for (const index of edgeToCycles.get(e.key)) candidates.add(index);
+      candidates.discard(left);
+      for (const right of candidates) {
+        if (cycles[right].length >= cycles[left].length) continue;
+        const replacementEdges = edgeSets[left].symmetricDifference(edgeSets[right]);
+        if (replacementEdges.size >= cycles[left].length) continue;
+        const replacement = edgeSetToCycle(replacementEdges);
+        if (replacement === null) continue;
+        cycles[left] = replacement;
+        edgeSets[left] = replacementEdges;
+        swaps++;
+        break;
+      }
+    }
+    if (!swaps) break;
   }
   return cycles;
 }

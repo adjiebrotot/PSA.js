@@ -11,7 +11,9 @@ import { Network } from "../network/network.js";
 import { as_index, isOptions } from "../common.js";
 import { getDelaySourceIndexer } from "../components/components.js";
 import { Model } from "./linopy.js";
-import { NOMINAL_ATTRS, LOOKUP, lookupQuery, activityMask, denseValues, staticValues, objectiveWeighting, getBusCounts, weightings } from "./common.js";
+import { NOMINAL_ATTRS, LOOKUP, lookupQuery, activityMask, denseValues, staticValues, objectiveWeighting, getBusCounts, weightings, npSum } from "./common.js";
+
+export { npSum };
 import { labeler1, labeler2 } from "./variables.js";
 import * as V from "./variables.js";
 import * as C from "./constraints.js";
@@ -71,22 +73,32 @@ export function define_objective(n, sns, includeObjectiveConstant) {
     periodWeighting = periods.map((p) => n.investment_period_weightings.at(p, "objective"));
   }
 
+  // per-period activity weights `(c.da.active.groupby("period").any() * period_weight)`
+  const periodActiveWeights = (c, names) =>
+    periods.map((p, pi) => {
+      const active = anyActive(c, names, null, p);
+      return active.map((a) => (a ? 1 : 0) * periodWeighting[pi]);
+    });
+
   if (includeObjectiveConstant) {
     let constant = 0;
     const terms = [];
     for (const [cName, attr] of Object.entries(NOMINAL_ATTRS)) {
       const c = n.c.get(cName);
-      const extI = c.extendables.difference(c.inactive_assets);
+      const extI = c.extendables.intersection(c.active_assets);
       if (extI.empty) continue;
       const pc = periodizedCostFor(c, extI);
       if (!pc.length) continue;
       const nominal = staticValues(c, attr, extI);
+      let weighted;
       if (n._multi_invest) {
-        // PyPSA does not add the objective constant for multi-investment models
+        const pw = periodActiveWeights(c, extI);
+        weighted = extI.values.map((_, j) => npSum(pw.map((w) => w[j])) * pc[j]);
       } else {
         const active = anyActive(c, extI, null);
-        terms.push(npSum(extI.values.map((_, j) => (active[j] ? 1 : 0) * pc[j] * nominal[j])));
+        weighted = extI.values.map((_, j) => (active[j] ? 1 : 0) * pc[j]);
       }
+      terms.push(npSum(extI.values.map((_, j) => weighted[j] * nominal[j])));
     }
     for (const t of terms) constant += t;
     n._objective_constant = constant;
@@ -126,7 +138,7 @@ export function define_objective(n, sns, includeObjectiveConstant) {
   for (const [cName, attr] of lookupQuery((r) => r.marginal_cost_quadratic)) {
     const c = n.c.get(cName);
     if (c.static.index.length === 0 || !c.static.has("marginal_cost_quadratic")) continue;
-    const names = c.static.index;
+    const names = c.active_assets;
     const cost = denseValues(c, "marginal_cost_quadratic", sns, names);
     if (cost.length === 0 || cost.every((x) => x === 0)) continue;
     const nN = names.length;
@@ -144,7 +156,7 @@ export function define_objective(n, sns, includeObjectiveConstant) {
 
   for (const cName of ["Generator", "Link", "Process"]) {
     const c = n.c.get(cName);
-    const comI = c.committables.difference(c.inactive_assets);
+    const comI = c.committables.intersection(c.active_assets);
     if (comI.empty) continue;
     const cost = denseValues(c, "stand_by_cost", sns, comI);
     if (cost.length === 0 || cost.every((x) => x === 0)) continue;
@@ -163,16 +175,21 @@ export function define_objective(n, sns, includeObjectiveConstant) {
 
   for (const [cName, attr] of Object.entries(NOMINAL_ATTRS)) {
     const c = n.c.get(cName);
-    const extI = c.extendables.difference(c.inactive_assets);
+    const extI = c.extendables.intersection(c.active_assets);
     if (extI.empty) continue;
     const pc = periodizedCostFor(c, extI);
     if (pc.length === 0 || pc.every((x) => x === 0)) continue;
     let weighted;
     if (n._multi_invest) {
-      weighted = extI.values.map(() => 0);
-      periods.forEach((p, pi) => {
-        const active = anyActive(c, extI, null, p);
-        weighted = weighted.map((w, j) => w + (active[j] ? 1 : 0) * pc[j] * periodWeighting[pi]);
+      // one term per (name, period); the LP writer sums the non-zero ones
+      const pw = periodActiveWeights(c, extI);
+      weighted = extI.values.map((_, j) => {
+        let acc = null;
+        for (const w of pw) {
+          const t = w[j] * pc[j];
+          if (t !== 0) acc = acc === null ? t : acc + t;
+        }
+        return acc ?? 0;
       });
     } else {
       const active = anyActive(c, extI, sns);
@@ -184,17 +201,20 @@ export function define_objective(n, sns, includeObjectiveConstant) {
 
   for (const [cName, attr] of LOOKUP.filter((r) => r.variable === "start_up" || r.variable === "shut_down").map((r) => [r.component, r.variable])) {
     const c = n.c.get(cName);
-    const comI = c.committables.difference(c.inactive_assets);
+    const comI = c.committables.intersection(c.active_assets);
     if (comI.empty) continue;
-    const cost = staticValues(c, `${attr}_cost`, comI);
-    if (cost.length === 0 || cost.reduce((a, b) => a + b, 0) === 0) continue;
+    // start-up / shut-down costs may be time-varying
+    const varying = c.dynamic[`${attr}_cost`]?.columns.length > 0;
+    const cost = varying ? denseValues(c, `${attr}_cost`, sns, comI) : Float64Array.from(staticValues(c, `${attr}_cost`, comI));
+    if (cost.length === 0 || npSum(cost) === 0) continue;
+    const nN = comI.length;
     const lab = labeler2(m.variables.get(`${c.name}-${attr}`), sns, comI);
     const vars = [];
     const coeffs = [];
-    for (let j = 0; j < comI.length; j++) {
+    for (let j = 0; j < nN; j++) {
       for (let s = 0; s < sns.length; s++) {
         vars.push(lab(s, j));
-        coeffs.push(cost[j]);
+        coeffs.push(varying ? cost[s * nN + j] : cost[j]);
       }
     }
     opexTerms.push([vars, coeffs]);
@@ -213,30 +233,6 @@ export function define_objective(n, sns, includeObjectiveConstant) {
     for (const [v, c] of opexTerms) m.add_objective_terms(v, c);
   }
   for (const [v1, v2, c] of quadTerms) m.add_quadratic_objective_terms(v1, v2, c);
-}
-
-/** numpy-like pairwise summation (matches `np.sum` for float64 arrays). */
-export function npSum(arr) {
-  const a = Float64Array.from(arr);
-  const rec = (off, n) => {
-    if (n < 8) {
-      let res = 0;
-      for (let i = 0; i < n; i++) res += a[off + i];
-      return res;
-    }
-    if (n <= 128) {
-      const r = [a[off], a[off + 1], a[off + 2], a[off + 3], a[off + 4], a[off + 5], a[off + 6], a[off + 7]];
-      let i;
-      for (i = 8; i < n - (n % 8); i += 8) for (let j = 0; j < 8; j++) r[j] += a[off + i + j];
-      let res = r[0] + r[1] + (r[2] + r[3]) + (r[4] + r[5] + (r[6] + r[7]));
-      for (; i < n; i++) res += a[off + i];
-      return res;
-    }
-    let n2 = Math.floor(n / 2);
-    n2 -= n2 % 8;
-    return rec(off, n2) + rec(off + n2, n - n2);
-  };
-  return rec(0, a.length);
 }
 
 // ----------------------------------------------------------------------
@@ -435,6 +431,10 @@ function applyDelayShift(portDf, c, delayCol, cyclicCol, sns, n) {
 export function assign_solution(n) {
   const m = n.model;
   const sns = m.parameters.snapshots;
+  if (!n.c.transformers.empty) {
+    const setpoint = n.get_switchable_as_dense("Transformer", "phase_shift", sns);
+    setDynamicData(n, "Transformer", "phase_shift_opt", setpoint);
+  }
   for (const [name, v] of m.variables) {
     if (name === "objective_constant" || name.startsWith("CVaR")) continue;
     if (!name.includes("-")) continue;
@@ -448,6 +448,8 @@ export function assign_solution(n) {
       if (n.passive_branch_components.has(c.name) && attr === "s") {
         setDynamicData(n, c.name, "p0", df);
         setDynamicData(n, c.name, "p1", negFrame(df));
+      } else if (c.name === "Transformer" && attr === "phase_shift") {
+        setDynamicData(n, c.name, "phase_shift_opt", df);
       } else if (c.name === "Link" && attr === "p") {
         setDynamicData(n, c.name, "p", df);
         setDynamicData(n, c.name, "p0", df);
@@ -492,7 +494,8 @@ export function assign_solution(n) {
       const a = st.col(col);
       v.coords[0].values.forEach((nm, j) => {
         const val = v.solution[j];
-        if (!Number.isNaN(val)) a[st.index.getLoc(nm)] = val;
+        // `df.replace(-0.0, 0.0)`
+        if (!Number.isNaN(val)) a[st.index.getLoc(nm)] = val === 0 ? 0 : val;
       });
     }
   }
@@ -805,7 +808,7 @@ export class OptimizationAccessor {
     const n = this._n;
     for (const [cName, attr] of Object.entries(NOMINAL_ATTRS)) {
       const c = n.c.get(cName);
-      const extI = c.extendables.difference(c.inactive_assets);
+      const extI = c.extendables.intersection(c.active_assets);
       const st = c.static;
       for (const nm of extI) st.setAt(nm, attr, st.at(nm, `${attr}_opt`));
       st.set(`${attr}_extendable`, st.index.values.map(() => false));

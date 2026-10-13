@@ -286,8 +286,7 @@ export class Components {
   }
 
   get inactive_assets() {
-    const a = this.get_active_assets();
-    return this.static.index.filter(a.values.map((x) => !x)).unique();
+    return this.static.index.unique().difference(this.active_assets);
   }
 
   filter_by_active_assets(data, investment_period = null) {

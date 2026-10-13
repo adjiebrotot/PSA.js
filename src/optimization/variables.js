@@ -28,7 +28,7 @@ export function define_operational_variables(n, sns, cName, attr) {
 
 function defineCommitmentVariable(n, sns, cName, isLinearized, suffix) {
   const c = n.c.get(cName);
-  const comI = c.committables.difference(c.inactive_assets);
+  const comI = c.committables.intersection(c.active_assets);
   if (comI.empty) return;
   const mask = activityMask(c, sns, comI);
   const hasModular = comI.intersection(c.modulars).length > 0;
@@ -67,14 +67,14 @@ export function define_shut_down_variables(n, sns, cName, isLinearized = false) 
 
 export function define_nominal_variables(n, cName, attr) {
   const c = n.c.get(cName);
-  const extI = c.extendables.difference(c.inactive_assets);
+  const extI = c.extendables.intersection(c.active_assets);
   if (extI.empty) return;
   n.model.add_variables({ name: `${c.name}-${attr}`, dims: ["name"], coords: [new Index(extI.values, "name")] });
 }
 
 export function define_modular_variables(n, cName, attr) {
   const c = n.c.get(cName);
-  const modI = c.extendables.intersection(c.modulars).difference(c.inactive_assets);
+  const modI = c.extendables.intersection(c.modulars).intersection(c.active_assets);
   if (modI.empty) return;
   n.model.add_variables({ name: `${c.name}-n_mod`, dims: ["name"], coords: [new Index(modI.values, "name")], lower: 0, integer: true });
 }
