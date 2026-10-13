@@ -1,0 +1,28 @@
+{
+  "description": "Consistency checks (warnings / strict errors), sanitize and carrier colours.",
+  "ops": [
+    ["new_network"],
+    ["set_snapshots", [0, 1, 2]],
+    ["add", "Bus", ["a", "b"], {"carrier": "AC"}],
+    ["add", "Generator", ["g1", "g2"], {"bus": ["a", "c"], "carrier": ["wind", "gas"], "p_nom": 10, "p_max_pu": 0.5, "p_min_pu": 0.8}],
+    ["add", "Load", "l", {"bus": "a", "p_set": 5, "carrier": "electricity"}],
+    ["add", "Line", "ab", {"bus0": "a", "bus1": "b", "x": 0, "r": 0.1}],
+    ["add", "Transformer", "t", {"bus0": "a", "bus1": "b", "x": 0.1, "s_nom": 0}],
+    ["add", "Bus", "lonely"],
+    ["call", "consistency_check"],
+    ["expect_error", "strict_buses", ["call", "consistency_check", [], {"strict": ["unknown_buses"]}]],
+    ["expect_error", "strict_carriers", ["call", "consistency_check", [], {"strict": ["unknown_carriers"]}]],
+    ["expect_error", "strict_impedance", ["call", "consistency_check", [], {"strict": ["zero_impedances"]}]],
+    ["expect_error", "strict_s_nom", ["call", "consistency_check", [], {"strict": ["zero_s_nom"]}]],
+    ["expect_error", "strict_disconnected", ["call", "consistency_check", [], {"strict": ["disconnected_buses"]}]],
+    ["expect_error", "strict_ts_power", ["call", "consistency_check", [], {"strict": ["time_series_power_attrs"]}]],
+    ["expect_error", "strict_static_power", ["call", "consistency_check", [], {"strict": ["static_power_attrs"]}]],
+    ["expect_error", "strict_invalid", ["call", "consistency_check", [], {"strict": ["nonsense"]}]],
+    ["call", "sanitize"],
+    ["record", "sanitized", "network"],
+    ["expect_error", "after_sanitize", ["call", "consistency_check", [], {"strict": ["unknown_buses", "unknown_carriers"]}]],
+    ["call", "c.carriers.assign_colors", [], {"overwrite": true, "palette": "tab20"}],
+    ["record", "colors", "path", ["c", "carriers", "static", "color"]]
+  ],
+  "tolerance": {"rtol": 1e-09, "atol": 1e-09}
+}

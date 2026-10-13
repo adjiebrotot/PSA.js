@@ -82,7 +82,7 @@ export async function runScenario(scenario, onRecord = null) {
   let n = null;
   const records = {};
   const results = {};
-  for (const op of scenario.ops) {
+  const runOp = async (op) => {
     const kind = op[0];
     switch (kind) {
       case "load_example":
@@ -202,6 +202,20 @@ export async function runScenario(scenario, onRecord = null) {
       default:
         throw new Error(`unknown op ${kind}`);
     }
+  };
+  for (const op of scenario.ops) {
+    if (op[0] === "expect_error") {
+      let raised = false;
+      try {
+        await runOp(op[2]);
+      } catch {
+        raised = true;
+      }
+      records[op[1]] = raised;
+      if (onRecord) onRecord(op[1], raised);
+      continue;
+    }
+    await runOp(op);
   }
   return { network: n, records };
 }

@@ -95,10 +95,25 @@ def get_path(n, path):
 
 
 def run(scenario: dict) -> dict:
-    n = None
+    state = {"n": None}
     records = {}
     results = {}
     for op in scenario["ops"]:
+        if op[0] == "expect_error":
+            try:
+                _run_op(op[2], state, records, results)
+                raised = False
+            except Exception:
+                raised = True
+            records[op[1]] = {"$type": "value", "value": raised}
+            continue
+        _run_op(op, state, records, results)
+    return records
+
+
+def _run_op(op, state, records, results):
+    n = state["n"]
+    if True:
         kind = op[0]
         if kind == "load_example":
             n = pypsa.Network(EXAMPLES / op[1] / op[1])
@@ -191,7 +206,7 @@ def run(scenario: dict) -> dict:
                 raise ValueError(f"unknown record {what}")
         else:
             raise ValueError(f"unknown op {kind}")
-    return records
+    state["n"] = n
 
 
 def main(names):

@@ -8,6 +8,7 @@ import { DataFrame, Series, isNumberArray } from "../core/frame.js";
 import { Index, asIndex, labelKey } from "../core/index.js";
 import { annuity, periodizedCost } from "../costs.js";
 import { typToDtype } from "./types.js";
+import { logger } from "../logger.js";
 
 export const RE_PORTS = /^bus(\d*)$/;
 export const RE_PORTS_GE_2 = /^bus((?:[2-9]|[1-9]\d+))$/;
@@ -589,6 +590,28 @@ export class Components {
     const missing = [...all].filter((c) => !existing.has(c)).sort();
     if (!missing.length) return new Index([], "name");
     return this.add(missing, kwargs, { return_names: true });
+  }
+
+  /**
+   * Assign palette colours to carriers without a colour (or all with
+   * `overwrite`), in sorted carrier order like PyPSA.
+   */
+  assign_colors({ carriers = null, palette = "tab10", overwrite = false } = {}) {
+    if (this.name !== "Carrier") throw new Error("assign_colors is only defined for carriers");
+    const st = this.static;
+    let target;
+    if (carriers === null) {
+      target = overwrite ? this.names.values : st.index.values.filter((_, i) => st.col("color")[i] === "" || st.col("color")[i] === null || Number.isNaN(st.col("color")[i]));
+    } else {
+      target = typeof carriers === "string" ? [carriers] : [...carriers];
+      const unknown = target.filter((c) => !this.names.has(c));
+      if (unknown.length) throw new Error(`Cannot assign colors to unknown carriers: ${unknown}`);
+    }
+    if (!target.length) return;
+    target = [...target].sort();
+    const colors = Components._generateColors(target.length, palette);
+    target.forEach((c, i) => st.setAt(c, "color", colors[i]));
+    logger.info(`Assigned colors to ${target.length} carriers using '${palette}' palette.`);
   }
 
   /** Line lengths from bus coordinates via haversine (km). */
