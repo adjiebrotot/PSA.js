@@ -879,7 +879,12 @@ export function define_nodal_balance_constraints(n, sns, { transmissionLosses = 
   }
   // blocks: each is Map(bus -> array of members {lab:(s)=>label, coef:(s)=>number}), maxSize
   const blocks = [];
-  const pushBlock = (members) => {
+  // linopy: `sign * var` with a `sign` array over all (incl. inactive) assets
+  // outer-joins the name coordinate and moves it first; merge() then keeps
+  // the dimension order of the first expression.
+  let busMajor = null;
+  const pushBlock = (members, transposed = false) => {
+    if (busMajor === null) busMajor = transposed;
     // members: [{bus, lab, coef}] in member order; groups sorted by bus
     const byBus = new Map();
     for (const mbr of members) {
@@ -905,7 +910,7 @@ export function define_nodal_balance_constraints(n, sns, { transmissionLosses = 
       members.push({ bus, lab: (s) => v(s, j), coef: () => coef });
     });
     if (!members.length) continue;
-    pushBlock(members);
+    pushBlock(members, signAttr !== null && c.static.index.length !== names.length);
   }
   for (const component of ["Process", "Link"]) {
     const c = n.c.get(component);
@@ -980,14 +985,16 @@ export function define_nodal_balance_constraints(n, sns, { transmissionLosses = 
       }
     }
   }
-  m.add_constraints(name, ["snapshot", "name"], [sns, busI], (s, j) => {
+  const row = (s, j) => {
     const b = busI.at(j);
     const [vars, coeffs] = rowTerms(s, b);
     const rv = rhs.get(b)[s];
     const empty = vars.every((x) => x === -1);
     if (empty && rv !== 0) throw new Error("Empty LHS with non-zero RHS in nodal balance constraint.");
     return [vars, coeffs.map((x) => (Number.isNaN(x) ? 0 : x)), "=", r(0, rv), anyEmpty ? !empty : true];
-  });
+  };
+  if (busMajor) m.add_constraints(name, ["name", "snapshot"], [busI, sns], (j, s) => row(s, j));
+  else m.add_constraints(name, ["snapshot", "name"], [sns, busI], row);
 }
 
 export function define_kirchhoff_voltage_constraints(n, sns) {

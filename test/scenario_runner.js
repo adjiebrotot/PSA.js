@@ -14,6 +14,7 @@ export function decodeValue(v, n) {
     if ("$float" in v) return v.$float === "inf" ? Infinity : v.$float === "-inf" ? -Infinity : NaN;
     if ("$ts" in v) return v.$ts;
     if ("$slice" in v) return n.snapshots.slice(...v.$slice);
+    if ("$multiindex" in v) return new Index(v.$multiindex, v.$multiindex[0].map(() => null));
     if ("$path" in v) return getPathSync(n, v.$path);
     if ("$tuple" in v) return v.$tuple.map((x) => decodeValue(x, n));
     if ("$frame" in v) {
@@ -113,12 +114,22 @@ export async function runScenario(scenario, onRecord = null) {
         for (const [k, v] of Object.entries(mapping)) n.c.get(listName).static.setAt(k, attr, decodeValue(v, n));
         break;
       }
+      case "set_static_where": {
+        const [, listName, attr, col, match, v] = op;
+        const st = n.c.get(listName).static;
+        const val = decodeValue(v, n);
+        st.index.values.forEach((nm, i) => {
+          if (st.col(col)[i] === match) st.setAt(nm, attr, val);
+        });
+        break;
+      }
       case "set_static_all": {
         const [, listName, attr, v] = op;
         const st = n.c.get(listName).static;
         const val = decodeValue(v, n);
         const prev = st.colOr(attr, null);
-        if (Array.isArray(val)) st.set(attr, prev instanceof Float64Array ? Float64Array.from(val) : val);
+        if (val instanceof Series) st.set(attr, prev instanceof Float64Array ? Float64Array.from(val.reindex(st.index).values) : val);
+        else if (Array.isArray(val)) st.set(attr, prev instanceof Float64Array ? Float64Array.from(val) : val);
         else if (typeof val === "number" && (prev === null || prev instanceof Float64Array)) st.set(attr, new Float64Array(st.index.length).fill(val));
         else st.set(attr, st.index.values.map(() => val));
         break;
@@ -128,7 +139,8 @@ export async function runScenario(scenario, onRecord = null) {
         const c = n.c.get(listName);
         for (const [k, v] of Object.entries(mapping)) {
           const df = c.dynamic[attr];
-          df.set(k, Float64Array.from(decodeValue(v, n)));
+          const val = decodeValue(v, n);
+          df.set(k, typeof val === "number" ? new Float64Array(df.index.length).fill(val) : Float64Array.from(val));
         }
         break;
       }

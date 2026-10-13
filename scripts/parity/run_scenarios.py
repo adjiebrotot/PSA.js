@@ -38,6 +38,8 @@ def decode(v, n):
             return pd.Timestamp(v["$ts"])
         if "$path" in v:
             return get_path(n, v["$path"])
+        if "$multiindex" in v:
+            return pd.MultiIndex.from_tuples([tuple(x) for x in v["$multiindex"]])
         if "$slice" in v:
             return n.snapshots[slice(*v["$slice"])]
         if "$tuple" in v:
@@ -119,6 +121,10 @@ def run(scenario: dict) -> dict:
             _, list_name, attr, mapping = op
             for k, v in mapping.items():
                 n.c[list_name].static.loc[k, attr] = decode(v, n)
+        elif kind == "set_static_where":
+            _, list_name, attr, col, match, v = op
+            st = n.c[list_name].static
+            st.loc[st[col] == match, attr] = decode(v, n)
         elif kind == "set_static_all":
             _, list_name, attr, v = op
             n.c[list_name].static[attr] = decode(v, n)
