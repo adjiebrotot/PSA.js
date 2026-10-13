@@ -1,0 +1,16 @@
+{
+  "description": "Non-linear Newton-Raphson power flow on SciGrid-DE with optimised set points.",
+  "ops": [
+    ["load_network", "scigrid-pf"],
+    ["call", "pf", [], {}, "pf"],
+    ["record", "pf_result", "result", "pf"],
+    ["record", "network", "network"],
+    ["load_network", "scigrid-pf"],
+    ["call", "pf", [], {"distribute_slack": true, "slack_weights": "p_set"}, "pf_ds"],
+    ["record", "network_ds_pset", "network"],
+    ["call", "pf", [], {"distribute_slack": true, "slack_weights": "p_nom"}],
+    ["record", "network_ds_pnom", "network"]
+  ],
+  "tolerance": {"rtol": 1e-6, "atol": 1e-6},
+  "record_tolerance": {"pf_result": {"rtol": 1, "atol": 1e100}}
+}

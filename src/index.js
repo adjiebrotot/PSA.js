@@ -5,6 +5,8 @@
 
 export { Network } from "./network/network.js";
 import "./network/io.js";
+import "./network/power_flow.js";
+export { SubNetwork } from "./network/power_flow.js";
 
 export { Index } from "./core/index.js";
 export { DataFrame, Series } from "./core/frame.js";

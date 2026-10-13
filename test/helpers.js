@@ -99,17 +99,18 @@ export function assertSeriesClose(actual, expected, { rtol = 1e-9, atol = 1e-9, 
 
 /** Compare a full network dump. */
 export function assertNetworkMatches(n, expected, opts = {}) {
+  const pre = opts.path ? `${opts.path}: ` : "";
   assert.equal(n.name, expected.name);
-  assert.deepEqual(n.snapshots.values.map(fmtLabel), expected.snapshots.values.map(fmtLabel), "snapshots differ");
-  assertFrameClose(n.snapshot_weightings, expected.snapshot_weightings, { ...opts, path: "snapshot_weightings" });
+  assert.deepEqual(n.snapshots.values.map(fmtLabel), expected.snapshots.values.map(fmtLabel), `${pre}snapshots differ`);
+  assertFrameClose(n.snapshot_weightings, expected.snapshot_weightings, { ...opts, path: `${pre}snapshot_weightings` });
   for (const [listName, comp] of Object.entries(expected.components)) {
     const c = n.c.get(listName);
     const st = c.static.has("obj") ? c.static.dropCols(["obj"]) : c.static;
-    assertFrameClose(st, comp.static, { ...opts, path: `${listName}.static` });
+    assertFrameClose(st, comp.static, { ...opts, path: `${pre}${listName}.static` });
     if (comp.dynamic) {
       for (const [attr, df] of Object.entries(comp.dynamic)) {
-        assert.ok(attr in c.dynamic, `${listName}.dynamic missing ${attr}`);
-        assertFrameClose(c.dynamic[attr], df, { ...opts, path: `${listName}.dynamic.${attr}` });
+        assert.ok(attr in c.dynamic, `${pre}${listName}.dynamic missing ${attr}`);
+        assertFrameClose(c.dynamic[attr], df, { ...opts, path: `${pre}${listName}.dynamic.${attr}` });
       }
     }
   }

@@ -1,0 +1,472 @@
+{
+ "description": "Small AC/DC power flows incl. sub-networks without transformers (PyPSA issue 1698).",
+ "ops": [
+  [
+   "new_network"
+  ],
+  [
+   "add",
+   "Bus",
+   [
+    "a",
+    "c",
+    "d"
+   ],
+   {
+    "v_nom": 110
+   }
+  ],
+  [
+   "add",
+   "Bus",
+   "b",
+   {
+    "v_nom": 220
+   }
+  ],
+  [
+   "add",
+   "Transformer",
+   "t",
+   {
+    "bus0": "a",
+    "bus1": "b",
+    "x": 0.1,
+    "s_nom": 100
+   }
+  ],
+  [
+   "add",
+   "Line",
+   "l",
+   {
+    "bus0": "c",
+    "bus1": "d",
+    "x": 0.1,
+    "s_nom": 100
+   }
+  ],
+  [
+   "add",
+   "Generator",
+   [
+    "ga",
+    "gc"
+   ],
+   {
+    "bus": [
+     "a",
+     "c"
+    ],
+    "control": "Slack"
+   }
+  ],
+  [
+   "add",
+   "Load",
+   [
+    "lb",
+    "ld"
+   ],
+   {
+    "bus": [
+     "b",
+     "d"
+    ],
+    "p_set": 10
+   }
+  ],
+  [
+   "call",
+   "determine_network_topology"
+  ],
+  [
+   "call",
+   "lpf"
+  ],
+  [
+   "record",
+   "lpf",
+   "network"
+  ],
+  [
+   "call",
+   "pf"
+  ],
+  [
+   "record",
+   "pf",
+   "network"
+  ],
+  [
+   "new_network"
+  ],
+  [
+   "set_snapshots",
+   [
+    "s0",
+    "s1"
+   ]
+  ],
+  [
+   "add",
+   "Bus",
+   [
+    "b0",
+    "b1",
+    "b2",
+    "b3"
+   ],
+   {
+    "v_nom": 20
+   }
+  ],
+  [
+   "add",
+   "Bus",
+   [
+    "d0",
+    "d1"
+   ],
+   {
+    "v_nom": 200,
+    "carrier": "DC"
+   }
+  ],
+  [
+   "add",
+   "Line",
+   [
+    "l01",
+    "l12",
+    "l20",
+    "l23",
+    "l23b"
+   ],
+   {
+    "bus0": [
+     "b0",
+     "b1",
+     "b2",
+     "b2",
+     "b2"
+    ],
+    "bus1": [
+     "b1",
+     "b2",
+     "b0",
+     "b3",
+     "b3"
+    ],
+    "x": [
+     0.5,
+     0.4,
+     0.3,
+     0.2,
+     0.25
+    ],
+    "r": [
+     0.05,
+     0.04,
+     0.03,
+     0.02,
+     0.01
+    ],
+    "b": 1e-05
+   }
+  ],
+  [
+   "add",
+   "Line",
+   "dcline",
+   {
+    "bus0": "d0",
+    "bus1": "d1",
+    "r": 0.5,
+    "x": 0
+   }
+  ],
+  [
+   "add",
+   "Link",
+   "conv",
+   {
+    "bus0": "b3",
+    "bus1": "d0",
+    "p_set": [
+     2,
+     -1
+    ],
+    "efficiency": 0.98
+   }
+  ],
+  [
+   "add",
+   "Generator",
+   "slack",
+   {
+    "bus": "b0",
+    "control": "Slack"
+   }
+  ],
+  [
+   "add",
+   "Generator",
+   "pv",
+   {
+    "bus": "b1",
+    "control": "PV",
+    "p_set": [
+     3,
+     4
+    ]
+   }
+  ],
+  [
+   "add",
+   "Generator",
+   "dcgen",
+   {
+    "bus": "d1",
+    "p_set": [
+     1,
+     1
+    ]
+   }
+  ],
+  [
+   "add",
+   "Load",
+   [
+    "L2",
+    "L3",
+    "Ld"
+   ],
+   {
+    "bus": [
+     "b2",
+     "b3",
+     "d0"
+    ],
+    "p_set": [
+     5,
+     3,
+     0.5
+    ],
+    "q_set": [
+     1,
+     0.5,
+     0
+    ]
+   }
+  ],
+  [
+   "add",
+   "ShuntImpedance",
+   "sh",
+   {
+    "bus": "b2",
+    "g": 0.001,
+    "b": 0.002
+   }
+  ],
+  [
+   "add",
+   "Transformer",
+   "tr",
+   {
+    "bus0": "b3",
+    "bus1": "b1",
+    "x": 0.08,
+    "r": 0.01,
+    "s_nom": 40,
+    "tap_ratio": 1.02,
+    "phase_shift": 5
+   }
+  ],
+  [
+   "call",
+   "lpf"
+  ],
+  [
+   "record",
+   "lpf2",
+   "network"
+  ],
+  [
+   "new_network"
+  ],
+  [
+   "set_snapshots",
+   [
+    "s0",
+    "s1"
+   ]
+  ],
+  [
+   "add",
+   "Bus",
+   [
+    "b0",
+    "b1",
+    "b2",
+    "b3"
+   ],
+   {
+    "v_nom": 20
+   }
+  ],
+  [
+   "add",
+   "Line",
+   [
+    "l01",
+    "l12",
+    "l20",
+    "l23",
+    "l23b"
+   ],
+   {
+    "bus0": [
+     "b0",
+     "b1",
+     "b2",
+     "b2",
+     "b2"
+    ],
+    "bus1": [
+     "b1",
+     "b2",
+     "b0",
+     "b3",
+     "b3"
+    ],
+    "x": [
+     0.5,
+     0.4,
+     0.3,
+     0.2,
+     0.25
+    ],
+    "r": [
+     0.05,
+     0.04,
+     0.03,
+     0.02,
+     0.01
+    ],
+    "b": 1e-05
+   }
+  ],
+  [
+   "add",
+   "Generator",
+   "slack",
+   {
+    "bus": "b0",
+    "control": "Slack"
+   }
+  ],
+  [
+   "add",
+   "Generator",
+   "pv",
+   {
+    "bus": "b1",
+    "control": "PV",
+    "p_set": [
+     3,
+     4
+    ]
+   }
+  ],
+  [
+   "add",
+   "Load",
+   [
+    "L2",
+    "L3"
+   ],
+   {
+    "bus": [
+     "b2",
+     "b3"
+    ],
+    "p_set": [
+     5,
+     3
+    ],
+    "q_set": [
+     1,
+     0.5
+    ]
+   }
+  ],
+  [
+   "add",
+   "ShuntImpedance",
+   "sh",
+   {
+    "bus": "b2",
+    "g": 0.001,
+    "b": 0.002
+   }
+  ],
+  [
+   "add",
+   "Transformer",
+   "tr",
+   {
+    "bus0": "b3",
+    "bus1": "b1",
+    "x": 0.08,
+    "r": 0.01,
+    "s_nom": 40,
+    "tap_ratio": 1.02,
+    "phase_shift": 5
+   }
+  ],
+  [
+   "call",
+   "pf",
+   [],
+   {},
+   "pf2res"
+  ],
+  [
+   "record",
+   "pf2",
+   "network"
+  ],
+  [
+   "record",
+   "pf2res",
+   "result",
+   "pf2res"
+  ],
+  [
+   "call",
+   "pf",
+   [],
+   {
+    "distribute_slack": true
+   },
+   "pf3res"
+  ],
+  [
+   "record",
+   "pf3",
+   "network"
+  ]
+ ],
+ "tolerance": {
+  "rtol": 1e-08,
+  "atol": 1e-08
+ },
+ "record_tolerance": {
+  "pf2res": {
+   "rtol": 1,
+   "atol": 1e+100
+  }
+ }
+}

@@ -325,6 +325,18 @@ export class DataFrame {
     return this.loc(null, null);
   }
 
+  /** pandas-like `drop({columns, index})`. */
+  drop({ columns = null, index = null, errors = "raise" } = {}) {
+    let df = this;
+    if (columns !== null) {
+      const cols = asIndex(columns);
+      if (errors === "raise") for (const c of cols) if (!df.has(c)) throw new Error(`KeyError: column ${c} not found`);
+      df = df.dropCols(cols);
+    }
+    if (index !== null) df = df.dropRows(index);
+    return df === this ? this.copy() : df;
+  }
+
   renameIndex(mapper) {
     const df = this.copy();
     df.index = new Index(

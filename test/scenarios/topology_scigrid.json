@@ -1,0 +1,14 @@
+{
+  "description": "Network topology, dependent values and cycle matrix on SciGrid-DE.",
+  "ops": [
+    ["load_example", "scigrid-de"],
+    ["call", "determine_network_topology"],
+    ["call", "calculate_dependent_values"],
+    ["record", "buses", "path", ["c", "buses", "static"]],
+    ["record", "sub_networks", "path", ["c", "sub_networks", "static", ["drop", [], {"columns": ["obj"]}]]],
+    ["record", "lines", "path", ["c", "lines", "static"]],
+    ["record", "transformers", "path", ["c", "transformers", "static"]],
+    ["record", "generators", "path", ["c", "generators", "static"]],
+    ["record", "cycles", "path", [["cycle_matrix", [], {"apply_weights": true}]]]
+  ]
+}
