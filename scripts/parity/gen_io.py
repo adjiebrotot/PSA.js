@@ -65,4 +65,15 @@ n.export_to_netcdf(NETCDF / "piecewise.nc")
 m = pypsa.Network(NETCDF / "piecewise.nc")
 write_fixture("io_piecewise", {"network_nc": dump_network(m), "export": export_csv(n),
                                "piecewise": dump_piecewise(n), "piecewise_nc": dump_piecewise(m)})
+# solved stochastic network (scenario coordinate, (scenario, name) data)
+n = pypsa.Network(EXAMPLES / "ac-dc-meshed" / "ac-dc-meshed")
+n.set_snapshots(n.snapshots[:4])
+n.set_scenarios({"low": 0.3, "high": 0.7})
+n.c.generators.static.loc[("high", "Manchester Gas"), "marginal_cost"] = 40
+n.c.generators.dynamic.p_max_pu.loc[:, ("high", "Manchester Wind")] = [0.1, 0.2, 0.3, 0.4]
+n.c.loads.dynamic.p_set.loc[:, ("low", "London")] = [100, 200, 300, 400]
+n.optimize(include_objective_constant=False)
+n.model.solver_model = None
+n.export_to_netcdf(NETCDF / "stochastic.nc")
+write_fixture("io_stochastic", {"network": dump_network(n), "network_nc": dump_network(pypsa.Network(NETCDF / "stochastic.nc"))})
 print("wrote netcdf fixtures")

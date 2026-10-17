@@ -138,3 +138,58 @@ test("piecewise data: netCDF and CSV import/export", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/** A network dump without what an exporter skips: empty components and all-default time series. */
+function withoutDefaultSeries(expected, n) {
+  const out = structuredClone(expected);
+  for (const [listName, comp] of Object.entries(out.components)) {
+    if (comp.static.index.values.length === 0) {
+      delete out.components[listName];
+      continue;
+    }
+    const defaults = n.c.get(listName).defaults;
+    for (const [attr, df] of Object.entries(comp.dynamic ?? {})) {
+      const def = defaults.get(attr)?.default;
+      if (def === undefined) continue;
+      if (Object.values(df.data).every((col) => col.every((v) => v === def))) delete comp.dynamic[attr];
+    }
+  }
+  return out;
+}
+
+/** The stochastic network of `gen_io.py`, built and solved with PSA.js. */
+async function stochasticNetwork() {
+  const n = Network.from_csv_folder(examplePath("ac-dc-meshed"));
+  n.set_snapshots(n.snapshots.slice(0, 4));
+  n.set_scenarios({ low: 0.3, high: 0.7 });
+  n.c.generators.static.setAt(["high", "Manchester Gas"], "marginal_cost", 40);
+  n.c.generators.dynamic.p_max_pu.set(["high", "Manchester Wind"], Float64Array.of(0.1, 0.2, 0.3, 0.4));
+  n.c.loads.dynamic.p_set.set(["low", "London"], Float64Array.of(100, 200, 300, 400));
+  await n.optimize({ include_objective_constant: false });
+  return n;
+}
+
+test("stochastic network: netCDF import, export and round trip", async () => {
+  const fx = loadFixture("io_stochastic");
+  // PyPSA's export sorts the scenario and component coordinates of this
+  // network (xarray aligns them to the sorted MultiIndex levels); importing
+  // follows the file
+  const n = await Network.from_netcdf(ncPath("stochastic"));
+  assert.deepEqual(n.scenarios.values, ["high", "low"]);
+  assert.deepEqual(Array.from(n.scenario_weightings.col("weight")), [0.7, 0.3]);
+  assertNetworkMatches(n, fx.network_nc, { rtol: 0, atol: 0 });
+  // solving in PSA.js gives PyPSA's network within solver tolerance; PSA.js
+  // writes the network in its own order, so the round trip preserves it
+  const m = await stochasticNetwork();
+  assertNetworkMatches(m, fx.network, { rtol: 1e-6, atol: 1e-6 });
+  const dir = mkdtempSync(path.join(os.tmpdir(), "psajs-sc-"));
+  try {
+    await m.export_to_netcdf(path.join(dir, "stochastic.nc"));
+    const k = await Network.from_netcdf(path.join(dir, "stochastic.nc"));
+    // the series names are written sorted (as PyPSA does)
+    assertNetworkMatches(k, withoutDefaultSeries(fx.network, k), { rtol: 1e-6, atol: 1e-6, columnOrder: false });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  assert.throws(() => m.export_to_csv_folder(new MemoryFolder()), /not supported in the CSV exporter/);
+});

@@ -145,6 +145,18 @@ class ImporterNetCDF {
     return this.getStatic("investment_periods", "investment_periods");
   }
 
+  /** Scenario weightings of stochastic networks (`scenario_weight`), or null. */
+  getScenarios() {
+    const w = this.vars.get("scenario_weight");
+    if (!w) return null;
+    const names = this.vars.get("scenario").value.map(String);
+    return new DataFrame({ index: new Index(names, "scenario"), columns: ["weight"], data: { weight: Float64Array.from(w.value) } });
+  }
+
+  get _scenarios() {
+    return this.vars.has("scenario_weight") ? this.vars.get("scenario").value.map(String) : null;
+  }
+
   _isCoordinate(name) {
     const v = this.vars.get(name);
     return v.isScale || name.endsWith("_i");
@@ -155,7 +167,16 @@ class ImporterNetCDF {
     const idx = this.vars.get(idxName);
     if (!idx) return null;
     const t = `${listName}_`;
-    const df = new DataFrame({ index: new Index(idx.value.map((x) => (typeof x === "number" || typeof x === "string" ? x : String(x))), "name") });
+    const names = idx.value.map((x) => (typeof x === "number" || typeof x === "string" ? x : String(x)));
+    // stochastic networks: (scenario, <list>_i) variables, stacked scenario-major
+    // (sub-networks are not broadcast to the scenarios)
+    let scenarios = indexName === null ? this._scenarios : null;
+    if (scenarios) {
+      const own = [...this.vars].filter(([name]) => name.startsWith(t) && !name.slice(t.length).startsWith("t_") && !name.slice(t.length).startsWith("pw_") && name !== idxName && !this._isCoordinate(name));
+      if (own.length && own.every(([, v]) => v.shape.length === 1)) scenarios = null;
+    }
+    const index = scenarios ? new Index(scenarios.flatMap((sc) => names.map((nm) => [sc, nm])), ["scenario", "name"]) : new Index(names, "name");
+    const df = new DataFrame({ index });
     for (const [name, v] of this.vars) {
       const rest = name.slice(t.length, t.length + 3);
       if (!name.startsWith(t) || rest.startsWith("t_") || rest === "pw_" || name === idxName || this._isCoordinate(name)) continue;
@@ -172,8 +193,25 @@ class ImporterNetCDF {
       if (!name.startsWith(t) || this._isCoordinate(name)) continue;
       const attr = name.slice(t.length);
       const cols = this.vars.get(`${name}_i`)?.value ?? [];
-      const [nS, nC] = v.shape;
+      const nS = v.shape[0];
       const df = new DataFrame({ index: new Index(Array.from({ length: nS }, (_, i) => i)) });
+      if (v.shape.length === 3) {
+        // (snapshots, scenario, name): columns stacked over (scenario, name)
+        const scenarios = this.vars.get("scenario").value.map(String);
+        const [, nSc, nC] = v.shape;
+        const tuples = [];
+        const data = new Map();
+        scenarios.forEach((sc, k) => {
+          cols.forEach((c, j) => {
+            const tup = [sc, String(c)];
+            tuples.push(tup);
+            data.set(tup, Float64Array.from({ length: nS }, (_, i) => v.value[(i * nSc + k) * nC + j]));
+          });
+        });
+        yield [attr, new DataFrame({ index: df.index, columns: new Index(tuples, ["scenario", "name"]), data })];
+        continue;
+      }
+      const nC = v.shape[1];
       cols.forEach((c, j) => {
         df.set(
           String(c),
@@ -296,8 +334,28 @@ async function exportToNetCDF(n, path, { export_standard_types = false, compress
       w.dimension("investment_periods", ex.periods.index.values);
       for (const col of ex.periods.columns) w.variable(`investment_periods_${col}`, ["investment_periods"], Array.from(ex.periods.col(col)), true);
     }
+    // stochastic networks: scenario coordinate and weights
+    const scenarios = n.has_scenarios ? n.scenarios.values.map(String) : null;
+    if (scenarios) {
+      w.dimension("scenario", scenarios);
+      w.variable("scenario_weight", ["scenario"], Array.from(n.scenario_weightings.col("weight")), true);
+    }
     for (const { listName, df } of ex.statics) {
       const dim = `${listName}_i`;
+      if (df.index.isMulti) {
+        // `df.to_xarray()` over (scenario, name)
+        const names = df.index.uniqueLevel("name").values.map(String);
+        w.dimension(dim, names);
+        const pos = df.index.values.map(([sc, nm]) => scenarios.indexOf(String(sc)) * names.length + names.indexOf(String(nm)));
+        for (const col of df.columns) {
+          const src = df.col(col);
+          const numeric = src instanceof Float64Array;
+          const grid = new Array(scenarios.length * names.length).fill(numeric ? NaN : "");
+          pos.forEach((p, i) => (grid[p] = src[i]));
+          w.variable(`${listName}_${col}`, ["scenario", dim], numeric ? toFloat(grid) : grid, isFloatCol(df, col));
+        }
+        continue;
+      }
       w.dimension(dim, df.index.values.map(String));
       for (const col of df.columns) {
         let vals = Array.from(df.col(col));
@@ -307,6 +365,22 @@ async function exportToNetCDF(n, path, { export_standard_types = false, compress
     }
     for (const { listName, attr, df } of ex.series) {
       const name = `${listName}_t_${attr}`;
+      if (df.columns.isMulti) {
+        // sorted names on a (scenario, name) grid, aligned to the scenario coordinate
+        const names = [...new Set(df.columns.values.map((t) => String(t[1])))].sort();
+        w.dimension(`${name}_i`, names);
+        const nS = df.index.length;
+        const nSc = scenarios.length;
+        const flat = new Array(nS * nSc * names.length).fill(NaN);
+        for (const t of df.columns.values) {
+          const k = scenarios.indexOf(String(t[0]));
+          const j = names.indexOf(String(t[1]));
+          const a = df.col(t);
+          for (let i = 0; i < nS; i++) flat[(i * nSc + k) * names.length + j] = Number(a[i]);
+        }
+        w.variable(name, ["snapshots", "scenario", `${name}_i`], float32 ? Array.from(Float32Array.from(flat)) : flat, true);
+        continue;
+      }
       w.dimension(`${name}_i`, df.columns.values.map(String));
       const nS = df.index.length;
       const cols = df.columns.values;
@@ -353,7 +427,6 @@ Object.assign(Network.prototype, {
     const h5 = await getH5();
     const f = new h5.File(String(path), "r");
     try {
-      if (f.keys().includes("scenario_weight")) throw new Error("NotImplementedError: Importing stochastic networks from netCDF is not yet supported by PSA.js.");
       importFromImporter(this, new ImporterNetCDF(f), skip_time);
     } finally {
       f.close();
@@ -363,7 +436,6 @@ Object.assign(Network.prototype, {
 
   /** Export to a netCDF file readable by PyPSA / xarray (async). */
   async export_to_netcdf(path, opts = {}) {
-    if (this.has_scenarios) throw new Error("NotImplementedError: Exporting stochastic networks to netCDF is not yet supported by PSA.js.");
     await exportToNetCDF(this, String(path), opts);
     return path;
   },

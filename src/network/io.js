@@ -279,6 +279,9 @@ function importFromImporter(n, importer, skipTime = false) {
     n._investment_periods_data = periods.reindex({ index: n.investment_periods });
   }
 
+  const scenarios = typeof importer.getScenarios === "function" ? importer.getScenarios() : null;
+  if (scenarios !== null) n.set_scenarios(scenarios);
+
   const imported = [];
   const others = [...n.all_components].filter((c) => c !== "Bus" && c !== "Carrier").sort();
   for (const component of ["Bus", "Carrier", ...others]) {
@@ -396,7 +399,11 @@ export function collectExport(n, { export_standard_types = false } = {}) {
     const defaults = c.defaults;
     let st = c.static;
     if (!export_standard_types && n.standard_type_components.has(component)) {
-      st = st.dropRows(c.standard_types.index);
+      if (st.index.isMulti) {
+        // `static.drop(standard_types.index, level="name")`
+        const std = c.standard_types.index;
+        st = st.takeRows(st.index.values.map((t, i) => [t[1], i]).filter(([nm]) => !std.has(nm)).map(([, i]) => i));
+      } else st = st.dropRows(c.standard_types.index);
     }
     const colExport = [];
     for (const col of st.columns) {
@@ -417,7 +424,7 @@ export function collectExport(n, { export_standard_types = false } = {}) {
     }
     const out = st.loc(null, colExport);
     if (colExport.includes("obj") && component === "SubNetwork") out.set("obj", new Float64Array(out.index.length).fill(NaN));
-    out.index = new Index(out.index.values, "name");
+    out.index = new Index(out.index.values, out.index.isMulti ? ["scenario", "name"] : "name");
     statics.push({ component, listName, df: out });
 
     for (const [attr, df] of Object.entries(c.dynamic)) {
@@ -428,6 +435,7 @@ export function collectExport(n, { export_standard_types = false } = {}) {
       else cols = df.columns.values.filter((cc) => Array.from(df.col(cc)).some((v) => v !== def.default));
       if (cols.length > 0 && df.index.length > 0) {
         const sdf = df.loc(null, cols);
+        if (df.columns.isMulti) sdf.columns = new Index(sdf.columns.values, df.columns.names);
         sdf.index = new Index(Array.from({ length: df.index.length }, (_, i) => i));
         for (const cc of cols) sdf.dtypes[cc] = "float";
         series.push({ listName, attr, df: sdf });
