@@ -16,6 +16,7 @@ import { NOMINAL_ATTRS } from "../components/components.js";
 import { LOOKUP } from "../optimization/common.js";
 import { logger } from "../logger.js";
 import { Tab, KeyError, isKeyError, groupRows, groupByLevels, concatRows, roundTo } from "./table.js";
+import { scenarioView } from "../network/scenarios.js";
 
 export const statisticsOptions = { nice_names: true, drop_zero: true, round: 5 };
 
@@ -273,7 +274,7 @@ export function get_transmission_branches(n, bus_carrier = null) {
   if (typeof carriers === "string") carriers = [carriers];
   else if (carriers === null || carriers === undefined) carriers = [...new Set(bc.col("carrier"))];
   const out = [];
-  for (const c of [...n.branch_components].sort()) {
+  for (const c of n.branch_components) {
     const st = n.c.get(c).static;
     const busCols = st.columns.values.filter((col) => String(col).includes("bus"));
     const res = new Set();
@@ -487,41 +488,33 @@ export class StatisticsAccessor {
    */
   _aggregate_components(func, opts = {}) {
     const n = this._n;
-    let { components = null, agg = "sum", groupby = "carrier", aggregate_across_components = false, at_port = null, bus_carrier = null, carrier = null, nice_names = null, drop_zero = null, round = null } = opts;
-    const d = [];
+    let { components = null, agg = "sum", groupby = "carrier", aggregate_across_components = false, drop_zero = null, round = null } = opts;
     const isOne = typeof components === "string";
-    if (isOne) components = [components];
-    if (components === null || components === undefined) components = [...new Set([...n.branch_components, ...n.one_port_components])].sort();
-    if (nice_names === null || nice_names === undefined) nice_names = statisticsOptions.nice_names;
-    if (nice_names) {
-      bus_carrier = normalizeCarrierNiceNames(n, bus_carrier);
-      carrier = normalizeCarrierNiceNames(n, carrier);
-    }
-    at_port = resolve_at_port(at_port, bus_carrier);
-    for (const cn of components) {
-      const c = n.c.get(cn);
-      if (c.static.empty || c.static.index.length === 0) continue;
-      const values = [];
-      for (const port of c._as_ports(at_port)) {
-        const portSuffix = c.ports[port];
-        if (portSuffix === undefined) continue;
-        let vals = wrapKeyError(() => func(n, cn, portSuffix));
-        if (vals.empty) continue;
-        vals = this._filter_active_assets(cn, vals);
-        vals = this._filter_bus_carrier(cn, portSuffix, bus_carrier, vals);
-        vals = this._filter_carrier(cn, carrier, vals);
-        if (vals.empty) continue;
-        if (groupby !== false) {
-          const grouping = this._get_grouping(cn, groupby, portSuffix, nice_names);
-          vals = this._aggregate_components_groupby(vals, grouping, agg, cn);
-        } else vals = vals.renameIndex("name");
-        values.push(vals);
-      }
-      if (!values.length) continue;
-      let df = values.length > 1 ? concatRows(values) : values[0];
-      if (!df.index.isUnique) df = groupByLevels(df, agg);
-      d.push([cn, df]);
-    }
+    let d;
+    if (n.has_scenarios) {
+      // statistics of stochastic networks: evaluate every scenario on its own
+      // and add a `scenario` level after `component` (grouped results are
+      // sorted by scenario, ungrouped ones keep the network's order)
+      // the values of each port cover all scenarios; grouped values are
+      // sorted by scenario
+      const views = n.scenarios.values.map((sc) => scenarioView(n, sc));
+      const perView = views.map((v) => new Map(v.statistics._accessor._component_port_tabs(func, opts)));
+      let order = n.scenarios.values.map((sc, s) => [sc, s]);
+      if (groupby !== false) order = order.sort((a, b) => compareLabels(a[0], b[0]));
+      const comps = [];
+      for (const m of perView) for (const cn of m.keys()) if (!comps.includes(cn)) comps.push(cn);
+      d = comps.map((cn) => {
+        const ports = [];
+        for (const m of perView) for (const [port] of m.get(cn) ?? []) if (!ports.includes(port)) ports.push(port);
+        const values = ports.map((port) => {
+          const parts = order
+            .map(([sc, s]) => [sc, perView[s].get(cn)?.find(([q]) => q === port)?.[1]])
+            .filter(([, t]) => t !== undefined);
+          return concatRows(parts.map(([, t]) => t), parts.map(([sc]) => sc), ["scenario", ...parts[0][1].index.names]);
+        });
+        return [cn, this._combine_ports(values, opts.agg ?? "sum")];
+      });
+    } else d = this._component_tabs(func, opts);
     let df;
     if (!d.length) df = new Tab(new Index([], ["component", "name"]), null, []);
     else if (isOne) df = d[0][1];
@@ -550,6 +543,62 @@ export class StatisticsAccessor {
       );
     }
     return df;
+  }
+
+  /** Per-component results `[[component, Tab]]` (filtered and grouped). */
+  _component_tabs(func, opts = {}) {
+    return this._component_port_tabs(func, opts).map(([cn, ports]) => [
+      cn,
+      this._combine_ports(
+        ports.map(([, t]) => t),
+        opts.agg ?? "sum",
+      ),
+    ]);
+  }
+
+  /** Concatenate the values of the ports of a component (grouped if not unique). */
+  _combine_ports(values, agg) {
+    let df = values.length > 1 ? concatRows(values) : values[0];
+    if (!df.index.isUnique) df = groupByLevels(df, agg);
+    return df;
+  }
+
+  /** Per-component, per-port results `[[component, [[port, Tab], ...]]]`. */
+  _component_port_tabs(func, opts = {}) {
+    const n = this._n;
+    let { components = null, agg = "sum", groupby = "carrier", at_port = null, bus_carrier = null, carrier = null, nice_names = null } = opts;
+    const d = [];
+    if (typeof components === "string") components = [components];
+    if (components === null || components === undefined) components = [...new Set([...n.branch_components, ...n.one_port_components])].sort();
+    if (nice_names === null || nice_names === undefined) nice_names = statisticsOptions.nice_names;
+    if (nice_names) {
+      bus_carrier = normalizeCarrierNiceNames(n, bus_carrier);
+      carrier = normalizeCarrierNiceNames(n, carrier);
+    }
+    at_port = resolve_at_port(at_port, bus_carrier);
+    for (const cn of components) {
+      const c = n.c.get(cn);
+      if (c.static.empty || c.static.index.length === 0) continue;
+      const values = [];
+      for (const port of c._as_ports(at_port)) {
+        const portSuffix = c.ports[port];
+        if (portSuffix === undefined) continue;
+        let vals = wrapKeyError(() => func(n, cn, portSuffix));
+        if (vals.empty) continue;
+        vals = this._filter_active_assets(cn, vals);
+        vals = this._filter_bus_carrier(cn, portSuffix, bus_carrier, vals);
+        vals = this._filter_carrier(cn, carrier, vals);
+        if (vals.empty) continue;
+        if (groupby !== false) {
+          const grouping = this._get_grouping(cn, groupby, portSuffix, nice_names);
+          vals = this._aggregate_components_groupby(vals, grouping, agg, cn);
+        } else vals = vals.renameIndex("name");
+        values.push([portSuffix, vals]);
+      }
+      if (!values.length) continue;
+      d.push([cn, values]);
+    }
+    return d;
   }
 
   _finalize(tab, name, unit) {
@@ -808,9 +857,13 @@ export class StatisticsAccessor {
   transmission(opts = {}) {
     const o = { ...DEFAULTS, groupby_time: "sum", at_port: "bus0", ...opts };
     const n = this._n;
-    if (o.components === null) o.components = [...n.branch_components].sort();
-    const branches = get_transmission_branches(n, o.bus_carrier);
+    // PyPSA passes `n.branch_components` (Python set iteration order)
+    if (o.components === null) o.components = [...n.branch_components];
+    // per network evaluated (the scenario views of stochastic networks)
+    const branchesOf = new Map();
     const func = (nn, c, port) => {
+      if (!branchesOf.has(nn)) branchesOf.set(nn, get_transmission_branches(nn, o.bus_carrier));
+      const branches = branchesOf.get(nn);
       const names = branches.values.filter((b) => b[0] === c).map((b) => b[1]);
       if (!names.length && !branches.values.some((b) => b[0] === c)) throw new KeyError(c);
       const p = selectColumns(dynamic(nn.c.get(c), `p${port}`), names);
@@ -1019,7 +1072,22 @@ export class StatisticsAccessor {
       ["revenue", "Revenue"],
       ["market_value", "Market Value"],
     ];
-    const res = funcs.map(([f, name]) => [name, this[f]({ groupby: "carrier", ...opts })]);
+    // PyPSA passes every argument explicitly, so e.g. `at_port=None` replaces
+    // the defaults of the individual statistics
+    const args = {
+      components: null,
+      groupby_method: "sum",
+      aggregate_across_components: false,
+      groupby: "carrier",
+      at_port: null,
+      carrier: null,
+      bus_carrier: null,
+      nice_names: null,
+      drop_zero: null,
+      round: null,
+      ...opts,
+    };
+    const res = funcs.map(([f, name]) => [name, this[f](args)]);
     const keys = new Map();
     for (const [, s] of res) for (const l of s.index.values) keys.set(labelKey(l), l);
     const labels = [...keys.values()].sort(compareLabels);
@@ -1088,12 +1156,29 @@ function addFill(a, b) {
 }
 
 /** Install `n.statistics` (callable, with statistic methods). */
+// keyword arguments deprecated in PyPSA 1.0 (`deprecated_kwargs`)
+const DEPRECATED_KWARGS = { comps: "components", aggregate_groups: "groupby_method", aggregate_time: "groupby_time" };
+
+function renameDeprecatedKwargs(name, opts) {
+  if (!opts || typeof opts !== "object") return opts;
+  let out = opts;
+  for (const [old, neu] of Object.entries(DEPRECATED_KWARGS)) {
+    if (!(old in opts)) continue;
+    if (neu in opts) throw new Error(`TypeError: ${name} received both ${old} and ${neu}`);
+    logger.warning(`\`${old}\` is deprecated as an argument to \`${name}\`; use \`${neu}\` instead. Deprecated in version 1.0 and will be removed in version 2.0.`);
+    out = out === opts ? { ...opts } : out;
+    out[neu] = out[old];
+    delete out[old];
+  }
+  return out;
+}
+
 Network._accessorInitialisers.push((n) => {
   const acc = new StatisticsAccessor(n);
-  const fn = (opts = {}) => acc.call(opts);
+  const fn = (opts = {}) => acc.call(renameDeprecatedKwargs("__call__", opts));
   for (const name of Object.getOwnPropertyNames(StatisticsAccessor.prototype)) {
     if (name === "constructor" || name.startsWith("_") || name === "is_multi_indexed") continue;
-    fn[name] = acc[name].bind(acc);
+    fn[name] = (opts, ...rest) => acc[name](renameDeprecatedKwargs(name, opts), ...rest);
   }
   fn.groupers = groupers;
   fn._accessor = acc;

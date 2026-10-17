@@ -12,16 +12,48 @@ import { ComponentsStore, installStoreAccessors } from "./store.js";
 import { NOMINAL_ATTRS } from "../components/components.js";
 import { importPiecewiseFromDf, piecewiseFromAddValue } from "../components/piecewise.js";
 import { broadcastStatic, broadcastDynamic } from "./scenario_frames.js";
+import { PySet } from "../core/pyset.js";
 import { logger } from "../logger.js";
 
 export const DEFAULT_TIMESTAMP = "now";
 export const HOURS_PER_YEAR = 8760.0;
 export const DEFAULT_EPSG = 4326;
 
-const PASSIVE_BRANCH = ["Line", "Transformer"];
+// Set literals as written in `pypsa.network.components`; PyPSA iterates them
+// (and their unions) in CPython's hash table order, which `pySetOrder`
+// reproduces for the fixtures' PYTHONHASHSEED=0.
+const PASSIVE_BRANCH = ["Transformer", "Line"];
 const CONTROLLABLE_BRANCH = ["Link", "Process"];
 const PASSIVE_ONE_PORT = ["ShuntImpedance"];
-const CONTROLLABLE_ONE_PORT = ["Generator", "Load", "StorageUnit", "Store"];
+const CONTROLLABLE_ONE_PORT = ["StorageUnit", "Store", "Generator", "Load"];
+
+/**
+ * A set literal as CPython builds it: literals of three or more constants are
+ * compiled to a frozenset constant, which marshal stores sorted by the
+ * serialized elements (short ASCII strings: by length, then content) and the
+ * set copies (`SET_UPDATE`); shorter literals insert in source order.
+ */
+function pySetLiteral(items) {
+  if (items.length < 3) return new PySet(items);
+  const stored = [...items].sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0));
+  return new PySet(new PySet(stored));
+}
+
+/** Iteration order of `literal_0 | literal_1 | ...` in CPython. */
+function pySetOrder(...literals) {
+  const out = pySetLiteral(literals[0]);
+  // `set_merge`: resizes for the other set's size before inserting its entries
+  for (const lit of literals.slice(1)) out._merge(pySetLiteral(lit));
+  return [...out];
+}
+const ORDER = {
+  passive_branch: pySetOrder(PASSIVE_BRANCH),
+  controllable_branch: pySetOrder(CONTROLLABLE_BRANCH),
+  passive_one_port: pySetOrder(PASSIVE_ONE_PORT),
+  controllable_one_port: pySetOrder(CONTROLLABLE_ONE_PORT),
+  one_port: pySetOrder(PASSIVE_ONE_PORT, CONTROLLABLE_ONE_PORT),
+  branch: pySetOrder(PASSIVE_BRANCH, CONTROLLABLE_BRANCH),
+};
 const STANDARD_TYPES = ["LineType", "TransformerType"];
 const ALL_COMPONENTS = [
   "Carrier",
@@ -199,19 +231,19 @@ export class Network {
   }
 
   get passive_branch_components() {
-    return new Set(PASSIVE_BRANCH);
+    return new Set(ORDER.passive_branch);
   }
 
   get controllable_branch_components() {
-    return new Set(CONTROLLABLE_BRANCH);
+    return new Set(ORDER.controllable_branch);
   }
 
   get passive_one_port_components() {
-    return new Set(PASSIVE_ONE_PORT);
+    return new Set(ORDER.passive_one_port);
   }
 
   get controllable_one_port_components() {
-    return new Set(CONTROLLABLE_ONE_PORT);
+    return new Set(ORDER.controllable_one_port);
   }
 
   get standard_type_components() {
@@ -219,11 +251,11 @@ export class Network {
   }
 
   get one_port_components() {
-    return new Set([...PASSIVE_ONE_PORT, ...CONTROLLABLE_ONE_PORT]);
+    return new Set(ORDER.one_port);
   }
 
   get branch_components() {
-    return new Set([...PASSIVE_BRANCH, ...CONTROLLABLE_BRANCH]);
+    return new Set(ORDER.branch);
   }
 
   get all_components() {
