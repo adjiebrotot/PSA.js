@@ -56,6 +56,11 @@ def decode(v, n):
             return get_path(n, v["$path"])
         if "$date_range" in v:
             return pd.date_range(**v["$date_range"])
+        if "$index" in v:
+            return pd.Index(v["$index"]["values"], name=v["$index"].get("name"))
+        if "$multiindex_named" in v:
+            spec = v["$multiindex_named"]
+            return pd.MultiIndex.from_tuples([tuple(x) for x in spec["tuples"]], names=spec["names"])
         if "$multiindex" in v:
             return pd.MultiIndex.from_tuples([tuple(x) for x in v["$multiindex"]])
         if "$slice" in v:
@@ -222,6 +227,14 @@ def _run_op(op, state, records, results):
             n = res.n if hasattr(res, "n") and not isinstance(res, pypsa.Network) else res
         elif kind == "copy":
             n = n.copy(**(op[1] if len(op) > 1 else {}))
+        elif kind == "set_attr":
+            setattr(n, op[1], decode(op[2], n))
+        elif kind == "save_network":
+            state.setdefault("saved", {})[op[1]] = n
+        elif kind == "make_collection":
+            nets = [state["saved"][k] for k in op[1]]
+            kw = decode(op[2] if len(op) > 2 else {}, n)
+            n = pypsa.NetworkCollection(nets, **kw)
         elif kind == "record":
             key, what = op[1], op[2]
             if what == "network":

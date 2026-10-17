@@ -5,7 +5,7 @@
  */
 
 import assert from "node:assert/strict";
-import { Network, DataFrame, Series, Index } from "../src/index.js";
+import { Network, NetworkCollection, DataFrame, Series, Index } from "../src/index.js";
 import path from "node:path";
 import { ROOT, examplePath, decode as decodeFixture, assertFrameClose, assertSeriesClose, assertNetworkMatches, isClose, fmtLabel } from "./helpers.js";
 
@@ -29,6 +29,8 @@ export function decodeValue(v, n) {
     if ("$ts" in v) return v.$ts;
     if ("$slice" in v) return n.snapshots.slice(...v.$slice);
     if ("$date_range" in v) return dateRange(v.$date_range);
+    if ("$index" in v) return new Index(v.$index.values, v.$index.name ?? null);
+    if ("$multiindex_named" in v) return new Index(v.$multiindex_named.tuples, v.$multiindex_named.names);
     if ("$multiindex" in v) return new Index(v.$multiindex, v.$multiindex[0].map(() => null));
     if ("$path" in v) return getPathSync(n, v.$path);
     if ("$tuple" in v) return v.$tuple.map((x) => decodeValue(x, n));
@@ -104,6 +106,7 @@ export async function getPath(n, path) {
 export async function runScenario(scenario, onRecord = null) {
   let n = null;
   const records = {};
+  const saved = {};
   const results = {};
   const runOp = async (op) => {
     const kind = op[0];
@@ -229,6 +232,17 @@ export async function runScenario(scenario, onRecord = null) {
         const res = await callWithKwargs(target, parts[parts.length - 1], decodeValue(op[2] ?? [], n), decodeValue(op[3] ?? {}, n));
         if (op[4]) results[op[4]] = res;
         n = res instanceof Network ? res : res.n ?? res;
+        break;
+      }
+      case "set_attr":
+        n[op[1]] = decodeValue(op[2], n);
+        break;
+      case "save_network":
+        saved[op[1]] = n;
+        break;
+      case "make_collection": {
+        const kw = decodeValue(op[2] ?? {}, n);
+        n = new NetworkCollection(op[1].map((k) => saved[k]), kw);
         break;
       }
       case "copy":

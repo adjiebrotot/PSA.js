@@ -4,6 +4,7 @@
  */
 
 export { Network } from "./network/network.js";
+export { NetworkCollection } from "./collection.js";
 import "./network/io.js";
 import "./network/scenarios.js";
 import "./network/power_flow.js";

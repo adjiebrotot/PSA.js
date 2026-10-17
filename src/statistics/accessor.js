@@ -318,8 +318,9 @@ export class StatisticsAccessor {
   }
 
   // -------------------------------------------------------------- time
-  _weights(column) {
-    const w = this._n.snapshot_weightings;
+  /** Snapshot weightings column of `n` (the member network evaluated by a statistic). */
+  _weights(column, n = this._n) {
+    const w = n.snapshot_weightings;
     return Float64Array.from(w.col(column));
   }
 
@@ -491,26 +492,22 @@ export class StatisticsAccessor {
     let { components = null, agg = "sum", groupby = "carrier", aggregate_across_components = false, drop_zero = null, round = null } = opts;
     const isOne = typeof components === "string";
     let d;
-    if (n.has_scenarios) {
-      // statistics of stochastic networks: evaluate every scenario on its own
-      // and add a `scenario` level after `component` (grouped results are
-      // sorted by scenario, ungrouped ones keep the network's order)
-      // the values of each port cover all scenarios; grouped values are
-      // sorted by scenario
-      const views = n.scenarios.values.map((sc) => scenarioView(n, sc));
-      const perView = views.map((v) => new Map(v.statistics._accessor._component_port_tabs(func, opts)));
-      let order = n.scenarios.values.map((sc, s) => [sc, s]);
+    const members = this._members();
+    if (members) {
+      // stochastic networks and network collections: evaluate each member and
+      // add its key levels after `component`; the values of each port cover
+      // all members, grouped values are sorted by the member keys
+      const perMember = members.items.map(([, m]) => new Map(m.statistics._accessor._component_port_tabs(func, opts)));
+      let order = members.items.map(([key], s) => [key, s]);
       if (groupby !== false) order = order.sort((a, b) => compareLabels(a[0], b[0]));
       const comps = [];
-      for (const m of perView) for (const cn of m.keys()) if (!comps.includes(cn)) comps.push(cn);
+      for (const m of perMember) for (const cn of m.keys()) if (!comps.includes(cn)) comps.push(cn);
       d = comps.map((cn) => {
         const ports = [];
-        for (const m of perView) for (const [port] of m.get(cn) ?? []) if (!ports.includes(port)) ports.push(port);
+        for (const m of perMember) for (const [port] of m.get(cn) ?? []) if (!ports.includes(port)) ports.push(port);
         const values = ports.map((port) => {
-          const parts = order
-            .map(([sc, s]) => [sc, perView[s].get(cn)?.find(([q]) => q === port)?.[1]])
-            .filter(([, t]) => t !== undefined);
-          return concatRows(parts.map(([, t]) => t), parts.map(([sc]) => sc), ["scenario", ...parts[0][1].index.names]);
+          const parts = order.map(([key, s]) => [key, perMember[s].get(cn)?.find(([q]) => q === port)?.[1]]).filter(([, t]) => t !== undefined);
+          return prefixRows(parts, members.names);
         });
         return [cn, this._combine_ports(values, opts.agg ?? "sum")];
       });
@@ -543,6 +540,17 @@ export class StatisticsAccessor {
       );
     }
     return df;
+  }
+
+  /**
+   * Members evaluated separately: the scenarios of a stochastic network (as
+   * views) or the networks of a collection, with their key level names.
+   */
+  _members() {
+    const n = this._n;
+    if (n.is_collection) return { items: n._members(), names: n._index_names };
+    if (n.has_scenarios) return { items: n.scenarios.values.map((sc) => [sc, scenarioView(n, sc)]), names: ["scenario"] };
+    return null;
   }
 
   /** Per-component results `[[component, Tab]]` (filtered and grouped). */
@@ -763,7 +771,7 @@ export class StatisticsAccessor {
     else if (typeof costTypes === "string") costTypes = [costTypes];
     const func = (n, c, port) => {
       const comp = n.c.get(c);
-      const weights = this._weights("objective");
+      const weights = this._weights("objective", n);
       const ones = new Float64Array(weights.length).fill(1);
       const comI = comp.committables;
       const result = [];
@@ -817,7 +825,7 @@ export class StatisticsAccessor {
     const n = this._n;
     const func = (nn, c, port) => {
       const comp = nn.c.get(c);
-      const weights = this._weights("generators");
+      const weights = this._weights("generators", nn);
       const p0 = dynamic(comp, `p${port}`);
       let p;
       if (nn.branch_components.has(c)) p = frameMap(p0, (x) => -1.0 * x);
@@ -867,7 +875,7 @@ export class StatisticsAccessor {
       const names = branches.values.filter((b) => b[0] === c).map((b) => b[1]);
       if (!names.length && !branches.values.some((b) => b[0] === c)) throw new KeyError(c);
       const p = selectColumns(dynamic(nn.c.get(c), `p${port}`), names);
-      return this._aggregate_timeseries(p, this._weights("generators"), o.groupby_time);
+      return this._aggregate_timeseries(p, this._weights("generators", nn), o.groupby_time);
     };
     const tab = this._aggregate_components(func, { ...o, agg: o.groupby_method });
     return this._finalize(tab, "Transmission", "carrier dependent");
@@ -881,7 +889,7 @@ export class StatisticsAccessor {
       if (!comp.static.has("p_max_pu")) throw new KeyError("p_max_pu");
       const avail = frameSeriesOp(n.get_switchable_as_dense(c, "p_max_pu"), comp.static.index, staticCol(comp, "p_nom_opt"), (x, v) => x * v);
       const p = frameMap(frameOp(avail, dynamic(comp, "p"), (a, b) => a - b), (x) => (x < 0 ? 0 : x));
-      return this._aggregate_timeseries(p, this._weights("generators"), o.groupby_time);
+      return this._aggregate_timeseries(p, this._weights("generators", n), o.groupby_time);
     };
     const tab = this._aggregate_components(func, { ...o, agg: o.groupby_method });
     return this._finalize(tab, "Curtailment", "MWh");
@@ -890,7 +898,7 @@ export class StatisticsAccessor {
   _operationTab(o) {
     const func = (n, c) => {
       const p = frameMap(get_operation(n, c), Math.abs);
-      return this._aggregate_timeseries(p, this._weights("generators"), o.groupby_time);
+      return this._aggregate_timeseries(p, this._weights("generators", n), o.groupby_time);
     };
     return this._aggregate_components(func, { ...o, agg: o.groupby_method });
   }
@@ -931,7 +939,7 @@ export class StatisticsAccessor {
           Float64Array.from(df.col(nm), (x, t) => x * (price ? price[t] : 0)),
         );
       }
-      return this._aggregate_timeseries(rev, this._weights("objective"), o.groupby_time);
+      return this._aggregate_timeseries(rev, this._weights("objective", n), o.groupby_time);
     };
     return this._aggregate_components(func, { ...o, agg: o.groupby_method });
   }
@@ -956,6 +964,7 @@ export class StatisticsAccessor {
 
   /** Average marginal prices per bus (load or time weighted). */
   prices(opts = {}) {
+    if (this._n.is_collection) return this._collection_prices(opts);
     const { groupby = false, weighting = "load", groupby_time = true, bus_carrier = null, drop_zero = null, round = null } = opts;
     const n = this._n;
     const sw = this._weights("objective");
@@ -1056,6 +1065,87 @@ export class StatisticsAccessor {
     return this._finalize(tab, "Prices", "currency / MWh");
   }
 
+  /**
+   * Prices of a network collection. As in PyPSA v1.4.0 the load weights are
+   * grouped by bus name across the networks and do not align with the
+   * `(network, name)` price columns, so every bus is weighted by the
+   * snapshot weightings only; grouped prices pool the networks.
+   */
+  _collection_prices(opts = {}) {
+    const { groupby = false, weighting = "load", groupby_time = true, bus_carrier = null, drop_zero = null, round = null } = opts;
+    const nc = this._n;
+    if (weighting !== "load" && weighting !== "time") throw new Error(`Weighting '${weighting}' is not supported. Use 'load' or 'time'.`);
+    let keys;
+    if (groupby === false) keys = [];
+    else if (typeof groupby === "string") keys = [groupby];
+    else if (Array.isArray(groupby)) keys = groupby;
+    else throw new Error(`Grouping prices by ${groupby} is not supported.`);
+    const tuple = (k) => (Array.isArray(k) ? k : [k]);
+    const rows = [];
+    for (const [key, n] of nc._members()) {
+      const buses = n.c.buses.static;
+      const prices = n.c.buses.dynamic.marginal_price;
+      const carriers = buses.has("carrier") ? buses.col("carrier") : null;
+      const sw = this._weights("objective", n);
+      for (const b of prices.columns.values) {
+        const i = buses.index.getLoc(b);
+        if (bus_carrier !== null) {
+          const bcs = typeof bus_carrier === "string" ? [bus_carrier] : bus_carrier;
+          if (!(i >= 0 && bcs.includes(carriers[i]))) continue;
+        }
+        const groupKeys = keys.map((k) => {
+          const col = k === "bus_carrier" ? "carrier" : k;
+          if (col === "name") return b;
+          if (!buses.has(col)) throw new Error(`Grouping prices by '${k}' is not supported. Use 'name', 'bus_carrier' or a static bus attribute.`);
+          return i < 0 ? NaN : buses.col(col)[i];
+        });
+        rows.push({ key: tuple(key), bus: b, groupKeys, series: Float64Array.from(prices.col(b)), sw });
+      }
+    }
+    const names = nc._index_names;
+    if (!groupby_time) {
+      const index = keys.length
+        ? new Index(rows.map((r) => [...r.key, ...r.groupKeys]), [...names, ...keys])
+        : new Index(rows.map((r) => [...r.key, r.bus]), [...names, "name"]);
+      return new Tab(index, nc.snapshots, rows.map((r) => r.series)).toPandas();
+    }
+    for (const r of rows) {
+      let a = 0;
+      let b = 0;
+      r.series.forEach((x, t) => {
+        a += r.sw[t] * x;
+        b += r.sw[t];
+      });
+      r.value = a / b;
+      r.weight = b;
+    }
+    let tab;
+    if (!keys.length) {
+      tab = Tab.series(new Index(rows.map((r) => [...r.key, r.bus]), [...names, "name"]), Float64Array.from(rows, (r) => r.value));
+    } else {
+      // `df.groupby(groupers).apply(weighted mean)` over all networks
+      const groups = new Map();
+      for (const r of rows) {
+        const label = keys.length > 1 ? r.groupKeys : r.groupKeys[0];
+        const k = labelKey(label);
+        if (!groups.has(k)) groups.set(k, { label, a: 0, b: 0 });
+        const g = groups.get(k);
+        g.a += r.value * r.weight;
+        g.b += r.weight;
+      }
+      const sorted = [...groups.values()].sort((x, y) => compareLabels(x.label, y.label));
+      tab = Tab.series(
+        new Index(
+          sorted.map((g) => g.label),
+          keys.length > 1 ? keys : keys[0],
+        ),
+        Float64Array.from(sorted, (g) => g.a / g.b),
+      );
+    }
+    tab = this._apply_option_kwargs(tab, { drop_zero, round });
+    return this._finalize(tab, "Prices", "currency / MWh");
+  }
+
   /** Overview table of the main statistics (deprecated in PyPSA but kept). */
   call(opts = {}) {
     const funcs = [
@@ -1104,6 +1194,19 @@ export class StatisticsAccessor {
     }
     return df;
   }
+}
+
+/** Concatenate `[[key, Tab]]` with the (scalar or tuple) keys as leading levels. */
+function prefixRows(parts, names) {
+  const tuple = (k) => (Array.isArray(k) ? k : [k]);
+  const tabs = parts.map(([, t]) => t);
+  const merged = concatRows(tabs);
+  const labels = [];
+  parts.forEach(([key, t]) => {
+    for (const l of t.index.values) labels.push([...tuple(key), ...(t.index.isMulti ? l : [l])]);
+  });
+  const inner = tabs[0].index.isMulti ? tabs[0].index.names : [tabs[0].index.name];
+  return new Tab(new Index(labels, [...names, ...inner]), merged.cols, merged.rows);
 }
 
 function aggregateArr(a, agg) {
@@ -1173,7 +1276,8 @@ function renameDeprecatedKwargs(name, opts) {
   return out;
 }
 
-Network._accessorInitialisers.push((n) => {
+/** The callable `statistics` accessor of a network or collection. */
+export function makeStatisticsAccessor(n) {
   const acc = new StatisticsAccessor(n);
   const fn = (opts = {}) => acc.call(renameDeprecatedKwargs("__call__", opts));
   for (const name of Object.getOwnPropertyNames(StatisticsAccessor.prototype)) {
@@ -1182,5 +1286,10 @@ Network._accessorInitialisers.push((n) => {
   }
   fn.groupers = groupers;
   fn._accessor = acc;
+  return fn;
+}
+
+Network._accessorInitialisers.push((n) => {
+  const fn = makeStatisticsAccessor(n);
   Object.defineProperty(n, "statistics", { value: fn, writable: true, configurable: true, enumerable: false });
 });
