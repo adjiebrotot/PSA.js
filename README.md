@@ -89,8 +89,10 @@ SCENARIO=opt_uc npm test       # a single scenario
 `test/scenarios/*.json` describe operations that both runners execute:
 `scripts/parity/run_scenarios.py` (PyPSA, writes `test/fixtures/*.json.gz`) and
 `test/scenario_runner.js` (PSA.js). To regenerate fixtures, use a Python
-environment with the reference PyPSA checkout installed (with its release tags,
-`git fetch --tags`, so that `pypsa.__version__` resolves):
+environment with the packages pinned in `scripts/parity/requirements.txt` and
+the reference PyPSA checkout installed (with its release tags, `git fetch
+--tags`, or a pinned version as described in that file, so that
+`pypsa.__version__` resolves):
 
 ```
 scripts/parity/generate_all.sh          # definitions + every fixture
@@ -98,10 +100,17 @@ cd scripts/parity
 python run_scenarios.py [scenario ...]   # optimisation/statistics/clustering scenarios
 python gen_io.py                         # IO fixtures (CSV + netCDF)
 python gen_networks.py                   # network fixtures
+python diff_fixtures.py [--rtol 1e-9]    # what changed vs. the committed fixtures
 ```
 
-Fixtures are deterministic (fixed hash seed, `mtime=0` gzip), so a full
-regeneration leaves `git status` clean unless PyPSA's behaviour changed.
+Fixtures are deterministic (fixed hash seed, `mtime=0` gzip): with the pinned
+environment a full regeneration rewrites every JSON fixture byte-identically
+unless PyPSA's behaviour changed. Two exceptions show up in `git status`
+without being changes: the netCDF files (HDF5 metadata differs between runs;
+the IO tests check their content) and the SOS section of
+`scenario_opt_piecewise` (linopy writes it in non-deterministic order; the
+comparator treats it as a set). `diff_fixtures.py` compares fixture contents
+and reports the latter as the only difference.
 
 The generators pin `PYTHONHASHSEED=0` because PyPSA iterates over Python sets in
 places that affect variable order. Tolerances are exact for data/IO and

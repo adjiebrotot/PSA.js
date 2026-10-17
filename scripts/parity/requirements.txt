@@ -1,0 +1,19 @@
+# Python packages that reproduce the committed fixtures (Python 3.13), verified
+# by a full `generate_all.sh` run against PyPSA v1.4.0 (6c45594).
+#
+# Install the reference PyPSA checkout on top. Without release tags in the
+# checkout, pin the version so that `pypsa.__version__` (written to
+# definitions.js, network.csv and netCDF files) matches the fixtures:
+#   SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PYPSA=1.4.0.post1.dev1+g6c4559459 \
+#     pip install -r requirements.txt -e <pypsa-checkout>
+#
+# highspy must match the HiGHS version bundled with the `highs` npm package
+# (1.15.1 in highs@1.15.3); solver results are compared at 1e-9.
+highspy==1.15.1
+linopy==0.10.0
+pandas==3.0.6
+numpy==2.5.4
+scipy==1.18.1
+xarray==2026.9.0
+netcdf4==1.7.5
+networkx==3.7
