@@ -162,6 +162,14 @@ def _run_op(op, state, records, results):
             _, list_name, attr, mapping = op
             for k, v in mapping.items():
                 n.c[list_name].static.loc[k, attr] = decode(v, n)
+        elif kind == "set_static_sc":
+            _, list_name, attr, scenario, mapping = op
+            for k, v in mapping.items():
+                n.c[list_name].static.loc[(scenario, k), attr] = decode(v, n)
+        elif kind == "set_dynamic_sc":
+            _, list_name, attr, scenario, mapping = op
+            for k, v in mapping.items():
+                n.c[list_name].dynamic[attr].loc[:, (scenario, k)] = decode(v, n)
         elif kind == "set_static_where":
             _, list_name, attr, col, match, v = op
             st = n.c[list_name].static

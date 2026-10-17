@@ -137,6 +137,12 @@ export async function runScenario(scenario, onRecord = null) {
         for (const [k, v] of Object.entries(mapping)) n.c.get(listName).static.setAt(k, attr, decodeValue(v, n));
         break;
       }
+      case "set_static_sc": {
+        // scenario-specific static values on a stochastic network
+        const [, listName, attr, scenario, mapping] = op;
+        for (const [k, v] of Object.entries(mapping)) n.c.get(listName).static.setAt([scenario, k], attr, decodeValue(v, n));
+        break;
+      }
       case "set_static_where": {
         const [, listName, attr, col, match, v] = op;
         const st = n.c.get(listName).static;
@@ -164,6 +170,15 @@ export async function runScenario(scenario, onRecord = null) {
           const df = c.dynamic[attr];
           const val = decodeValue(v, n);
           df.set(k, typeof val === "number" ? new Float64Array(df.index.length).fill(val) : Float64Array.from(val));
+        }
+        break;
+      }
+      case "set_dynamic_sc": {
+        const [, listName, attr, scenario, mapping] = op;
+        const df = n.c.get(listName).dynamic[attr];
+        for (const [k, v] of Object.entries(mapping)) {
+          const val = decodeValue(v, n);
+          df.set([scenario, k], typeof val === "number" ? new Float64Array(df.index.length).fill(val) : Float64Array.from(val));
         }
         break;
       }

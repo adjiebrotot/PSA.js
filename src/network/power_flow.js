@@ -12,6 +12,7 @@ import { Network, updatePortsComponentAttrs } from "./network.js";
 import { GraphMixin, connectedComponents, cycleBasis, bfsRefinedCycleBasis } from "./graph.js";
 import { as_index, isOptions } from "../common.js";
 import { logger } from "../logger.js";
+import { xsStatic } from "./scenario_frames.js";
 
 // ----------------------------------------------------------------------
 // complex helpers (arrays of [re, im])
@@ -54,13 +55,18 @@ function warnTypeParamOverride(component, current, newVals, attrs, names) {
   }
 }
 
+/** Static data by name: the first scenario's rows on stochastic networks (as PyPSA). */
+function firstScenario(n, st) {
+  return n.has_scenarios && st.index.isMulti ? xsStatic(st, n.scenarios.at(0)) : st;
+}
+
 export function apply_line_types(n) {
   const lines = n.c.lines.static;
   const types = lines.col("type");
   const sel = [];
   types.forEach((t, i) => t !== "" && sel.push(i));
   if (!sel.length) return;
-  const lt = n.c.line_types.static;
+  const lt = firstScenario(n, n.c.line_types.static);
   const missing = [...new Set(sel.map((i) => types[i]))].filter((t) => !lt.index.has(t));
   if (missing.length) throw new Error(`The type(s) ${missing.join(", ")} do(es) not exist in n.c.line_types.static`);
   const length = lines.col("length");
@@ -87,7 +93,7 @@ export function apply_transformer_types(n) {
   const sel = [];
   types.forEach((t, i) => t !== "" && sel.push(i));
   if (!sel.length) return;
-  const tt = n.c.transformer_types.static;
+  const tt = firstScenario(n, n.c.transformer_types.static);
   const missing = [...new Set(sel.map((i) => types[i]))].filter((t) => !tt.index.has(t));
   if (missing.length) throw new Error(`The type(s) ${missing.join(", ")} do(es) not exist in n.transformer_types`);
   const attrs = ["r", "x", "g", "b", "phase_shift", "s_nom", "tap_side", "tap_ratio"];
@@ -154,7 +160,7 @@ export function apply_transformer_t_model(n) {
 function calculate_dependent_values() {
   apply_line_types(this);
   apply_transformer_types(this);
-  const buses = this.c.buses.static;
+  const buses = firstScenario(this, this.c.buses.static);
   const vnom = buses.series("v_nom");
   const bcarrier = buses.series("carrier");
 

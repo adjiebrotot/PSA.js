@@ -11,6 +11,7 @@ import { pyFloatRepr } from "../core/csv.js";
 import { ComponentsStore, installStoreAccessors } from "./store.js";
 import { NOMINAL_ATTRS } from "../components/components.js";
 import { importPiecewiseFromDf, piecewiseFromAddValue } from "../components/piecewise.js";
+import { broadcastStatic, broadcastDynamic } from "./scenario_frames.js";
 import { logger } from "../logger.js";
 
 export const DEFAULT_TIMESTAMP = "now";
@@ -280,14 +281,6 @@ export class Network {
 
   get is_solved() {
     return this._objective !== null;
-  }
-
-  get has_scenarios() {
-    return false;
-  }
-
-  get scenarios() {
-    return new Index([], "scenario");
   }
 
   get is_collection() {
@@ -619,9 +612,20 @@ export class Network {
       if (Array.isArray(v) || isNumberArray(v)) data.set(k, Array.from(v));
       else data.set(k, new Array(names.length).fill(v === undefined || v === null ? NaN : v));
     }
-    const staticDf = new DataFrame({ index: names, columns: [...data.keys()], data });
+    let staticDf = new DataFrame({ index: names, columns: [...data.keys()], data });
 
-    this._import_components_from_df(staticDf, c.name, overwrite);
+    // Broadcast to scenarios on stochastic networks (sub-networks are
+    // handled by the topology determination)
+    let staticIn = staticDf;
+    if (this.has_scenarios && c.name !== "SubNetwork") {
+      if (Object.keys(piecewise).length) {
+        throw new Error("NotImplementedError: Piecewise attribute data is not yet supported for stochastic networks (scenarios).");
+      }
+      staticIn = broadcastStatic(staticDf, this.scenarios);
+      for (const k of Object.keys(series)) series[k] = broadcastDynamic(series[k], this.scenarios);
+    }
+
+    this._import_components_from_df(staticIn, c.name, overwrite);
 
     // Load piecewise breakpoint data (after the static import, so that
     // overwriting an existing component does not drop the new breakpoints)
@@ -639,10 +643,12 @@ export class Network {
     const { suffix = "" } = opts;
     const c = this.c.get(class_name);
     const names = buildSuffixedNames(name, suffix);
-    c.static = c.static.dropRows(names);
+    // stochastic networks: remove the components from all scenarios
+    const labels = c.static.index.isMulti ? Index.fromProduct([this.scenarios.values, names.values], ["scenario", "name"]) : names;
+    c.static = c.static.dropRows(labels);
     for (const k of Object.keys(c.dynamic)) {
       const df = c.dynamic[k];
-      const drop = df.columns.intersection(names);
+      const drop = df.columns.intersection(labels);
       if (drop.length) c.dynamic[k] = df.dropCols(drop);
     }
     // Drop piecewise breakpoint data
@@ -658,8 +664,9 @@ export class Network {
     if (cls_name === "Link" || cls_name === "Process") updatePortsComponentAttrs(this, df.columns.values, cls_name);
     const attrs = c.defaults;
 
-    // index as str
-    const names = new Index(df.index.values.map(pyStr), "name");
+    // index as str (each level of a (scenario, name) index)
+    const multi = df.index.isMulti;
+    const names = multi ? new Index(df.index.values.map((t) => t.map(pyStr)), ["scenario", "name"]) : new Index(df.index.values.map(pyStr), "name");
 
     // build typed columns
     const cols = new Map();
@@ -715,7 +722,7 @@ export class Network {
         );
         newStatic = newStatic.dropRows(duplicated);
       } else {
-        this.remove(cls_name, duplicated.values);
+        this.remove(cls_name, multi ? duplicated.uniqueLevel("name").values : duplicated.values);
       }
     }
 
@@ -723,7 +730,7 @@ export class Network {
     let combined = c.static.index.length > 0 ? concatStatic(c.static, newStatic) : newStatic;
     const ordered = sortAttrs(combined.columns, [...attrs.keys()]);
     combined = combined.loc(null, ordered);
-    combined.index = new Index(combined.index.values, "name");
+    combined.index = new Index(combined.index.values, combined.index.isMulti ? ["scenario", "name"] : "name");
     c.static = combined;
 
     // series-only attributes given as static values
@@ -749,10 +756,12 @@ export class Network {
       const drop = df.columns.intersection(c.dynamic[attr].columns);
       if (drop.length) df = df.dropCols(drop);
     }
+    // column labels as str (each level of (scenario, name) columns)
+    const labels = df.columns.values.map((col) => (Array.isArray(col) ? col.map(String) : String(col)));
     df = new DataFrame({
       index: df.index,
-      columns: df.columns.values.map(String),
-      data: new Map(df.columns.values.map((col) => [String(col), Float64Array.from(df.col(col), toNumber)])),
+      columns: new Index(labels, df.columns.isMulti ? ["scenario", "name"] : "name"),
+      data: new Map(df.columns.values.map((col, i) => [labels[i], Float64Array.from(df.col(col), toNumber)])),
     });
     const diff = df.columns.difference(staticIdx);
     if (diff.length > 0) {
@@ -1206,6 +1215,8 @@ function deepCopyNetwork(src) {
   n._committable_big_m = src._committable_big_m;
   if (src.now !== undefined) n.now = src.now;
   n.iteration = src.iteration;
+  if (src.__scenarios_data) n._scenarios_data = copyFrame(src.__scenarios_data);
+  if (src._risk_preference) n._risk_preference = { ...src._risk_preference };
   for (const [ln, comp] of src.components) {
     const dst = n.c.get(ln);
     dst.ctype = comp.ctype === dst.ctype ? comp.ctype : comp.ctype.clone();

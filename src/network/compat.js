@@ -104,11 +104,6 @@ Object.defineProperties(Components.prototype, {
       return this.n ? this.n.has_periods : false;
     },
   },
-  scenarios: {
-    get() {
-      return new Index([], "scenario");
-    },
-  },
 });
 
 Object.defineProperty(Network.prototype, "stats", {
@@ -174,14 +169,3 @@ Network.prototype.static = function staticData(component_name) {
 Network.prototype.dynamic = function dynamicData(component_name) {
   return this.c.get(component_name).dynamic;
 };
-
-/** Stochastic optimisation (scenarios) is not supported by PSA.js. */
-Network.prototype.set_scenarios = function setScenarios() {
-  throw new Error("Stochastic networks (set_scenarios) are not supported by PSA.js.");
-};
-
-Object.defineProperty(Network.prototype, "has_risk_preference", {
-  get() {
-    return false;
-  },
-});

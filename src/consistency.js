@@ -349,6 +349,149 @@ export function check_big_m_exceeded(n, strict = false) {
   }
 }
 
+// ----------------------------------------------------------------------
+// stochastic networks
+// ----------------------------------------------------------------------
+
+/** Attributes that must be identical across scenarios (`RE_INVARIANT_ATTRS`). */
+export const RE_INVARIANT_ATTRS = new RegExp(
+  `^(?:${[
+    "bus\\d*",
+    "type",
+    "p_nom_extendable",
+    "s_nom_extendable",
+    "e_nom_extendable",
+    "p_nom_mod",
+    "s_nom_mod",
+    "e_nom_mod",
+    "p_nom_set",
+    "s_nom_set",
+    "e_nom_set",
+    "committable",
+    "sign",
+    "carrier",
+    "weight",
+    "p_nom_opt",
+    "s_nom_opt",
+    "e_nom_opt",
+    "build_year",
+    "lifetime",
+    "active",
+    "(cyclic_)?delay\\d*",
+  ].join("|")})$`,
+);
+
+const sameValue = (a, b) => a === b || (Number.isNaN(a) && Number.isNaN(b));
+
+export function check_scenarios_sum_to_one(n, strict = false) {
+  if (!n.has_scenarios) return;
+  const total = Array.from(n.scenario_weightings.col("weight")).reduce((a, b) => a + b, 0);
+  if (!(Math.abs(total - 1.0) <= 1e-10 + 1e-10)) {
+    logOrRaise(strict, `Scenario probabilities must sum to 1.0 (got ${Number(total.toPrecision(10))}). This may indicate scenarios were modified after initialization.`);
+  }
+}
+
+/** Invariant attributes must not vary across scenarios (always raises, as in PyPSA). */
+export function check_scenario_invariant_attributes(n) {
+  if (!n.has_scenarios) return;
+  for (const c of n.components.values()) {
+    const st = c.static;
+    if (!st.index.isMulti) continue;
+    const attrs = st.columns.values.filter((a) => RE_INVARIANT_ATTRS.test(a));
+    if (!attrs.length) continue;
+    const groups = new Map();
+    st.index.values.forEach(([sc, nm], i) => {
+      if (!groups.has(nm)) groups.set(nm, []);
+      groups.get(nm).push([sc, i]);
+    });
+    for (const attr of attrs) {
+      const col = st.col(attr);
+      for (const [nm, rows] of groups) {
+        const ref = col[rows[0][1]];
+        const diff = rows.filter(([, i]) => !sameValue(col[i], ref)).map(([sc]) => sc);
+        if (diff.length) {
+          const values = Object.fromEntries(rows.map(([sc, i]) => [`(${sc}, ${nm})`, col[i]]));
+          logOrRaise(
+            true,
+            `Component '${nm}' of type '${c.name}' has attribute '${attr}' that varies across scenarios. This attribute must be identical across all scenarios. Scenarios with different values: [${diff.map((x) => `'${x}'`).join(", ")}]. Values: ${JSON.stringify(values)}`,
+          );
+        }
+      }
+    }
+  }
+}
+
+function checkTypesConsistency(n, listName, label, strict) {
+  if (!n.has_scenarios) return;
+  const st = n.c.get(listName).static;
+  if (st.empty || n.scenarios.length < 2 || !st.index.isMulti) return;
+  const [ref, ...others] = n.scenarios.values;
+  const refRows = st.index.locLevel("scenario", ref);
+  for (const sc of others) {
+    const rows = st.index.locLevel("scenario", sc);
+    const same =
+      rows.length === refRows.length &&
+      rows.every((i, k) => st.index.at(i)[1] === st.index.at(refRows[k])[1] && st.columns.values.every((col) => sameValue(st.col(col)[i], st.col(col)[refRows[k]])));
+    if (!same) logOrRaise(strict, `${label} must be identical across all scenarios. Scenario '${sc}' has different ${listName} than reference scenario '${ref}'.`);
+  }
+}
+
+export function check_line_types_consistency(n, strict = false) {
+  checkTypesConsistency(n, "line_types", "Line types", strict);
+}
+
+export function check_transformer_types_consistency(n, strict = false) {
+  checkTypesConsistency(n, "transformer_types", "Transformer types", strict);
+}
+
+export function check_stochastic_slack_bus_consistency(n, strict = false) {
+  if (!n.has_scenarios) return;
+  const st = n.c.buses.static;
+  if (!st.has("control") || !st.index.isMulti) return;
+  const control = st.col("control");
+  const slackOf = (sc) =>
+    new Set(
+      st.index
+        .locLevel("scenario", sc)
+        .filter((i) => control[i] === "Slack")
+        .map((i) => st.index.at(i)[1]),
+    );
+  const [ref, ...others] = n.scenarios.values;
+  const refSet = slackOf(ref);
+  for (const sc of others) {
+    const cur = slackOf(sc);
+    if (cur.size !== refSet.size || [...cur].some((b) => !refSet.has(b))) {
+      const fmt = (x) => `{${[...x].map((b) => `'${b}'`).join(", ")}}`;
+      logOrRaise(
+        strict,
+        `Different slack buses found across scenarios. This can cause mathematical inconsistency in stochastic optimization. Reference scenario '${ref}' has slack buses ${fmt(refSet)}, but scenario '${sc}' has slack buses ${fmt(cur)}`,
+      );
+    }
+  }
+}
+
+/**
+ * `pypsa.components.common.invariant`: raise if static attributes differ
+ * across scenarios (used by the model builders).
+ */
+export function assert_invariant(c, attrs) {
+  const st = c.static;
+  if (!st.index.isMulti) return;
+  for (const attr of attrs) {
+    if (!st.has(attr)) continue;
+    const col = st.col(attr);
+    const first = new Map();
+    const varies = [];
+    st.index.values.forEach(([, nm], i) => {
+      if (!first.has(nm)) first.set(nm, col[i]);
+      else if (!sameValue(first.get(nm), col[i]) && !varies.includes(nm)) varies.push(nm);
+    });
+    if (varies.length) {
+      throw new Error(`ValueError: Expected static data which is identical across scenarios, got differing values for [${varies.map((x) => `'${x}'`).join(", ")}] in '${attr}'.`);
+    }
+  }
+}
+
 const STRICT_OPTIONS = [
   "unknown_buses",
   "unknown_carriers",
@@ -404,6 +547,11 @@ Network.prototype.consistency_check = function consistencyCheck({ check_dtypes =
   check_for_disconnected_buses(this, s.includes("disconnected_buses"));
   check_investment_periods(this, s.includes("investment_periods"));
   check_shapes(this, s.includes("shapes"));
+  check_scenarios_sum_to_one(this, s.includes("scenarios_sum"));
+  check_scenario_invariant_attributes(this);
+  check_line_types_consistency(this, s.includes("line_types"));
+  check_transformer_types_consistency(this, s.includes("transformer_types"));
+  check_stochastic_slack_bus_consistency(this, s.includes("slack_bus_consistency"));
 };
 
 Network.prototype.consistency_check_plots = function consistencyCheckPlots({ strict = [] } = {}) {

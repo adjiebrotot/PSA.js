@@ -154,8 +154,10 @@ export class Components {
     return this.n !== null;
   }
 
+  /** Component names (unique `name` level for stochastic networks). */
   get names() {
-    return this.static.index.unique();
+    const idx = this.static.index;
+    return idx.isMulti ? idx.uniqueLevel("name") : idx.unique();
   }
 
   get snapshots() {
@@ -171,7 +173,11 @@ export class Components {
   }
 
   get has_scenarios() {
-    return false;
+    return this.n ? this.n.has_scenarios : false;
+  }
+
+  get scenarios() {
+    return this.n ? this.n.scenarios : new Index([], "scenario");
   }
 
   toString() {
@@ -269,37 +275,45 @@ export class Components {
     };
   }
 
+  /** Names where `mask` holds (single-level, as scenarios cannot vary them). */
   _indexWhere(mask) {
-    return this.static.index.filter(mask);
+    const idx = this.static.index.filter(mask);
+    return idx.isMulti ? idx.uniqueLevel("name") : idx;
+  }
+
+  /** Empty name index (`static.iloc[:0].index`, without the scenario level). */
+  _emptyNames() {
+    const idx = this.static.index;
+    return idx.isMulti ? new Index([], "name") : idx.slice(0, 0);
   }
 
   get extendables() {
     const col = OPERATIONAL_BASE[this.name] ? `${OPERATIONAL_BASE[this.name]}_nom_extendable` : null;
-    if (!col || !this.static.has(col)) return this.static.index.slice(0, 0);
+    if (!col || !this.static.has(col)) return this._emptyNames();
     return this._indexWhere(this.static.col(col).map(Boolean));
   }
 
   get fixed() {
     const col = OPERATIONAL_BASE[this.name] ? `${OPERATIONAL_BASE[this.name]}_nom_extendable` : null;
-    if (!col || !this.static.has(col)) return this.static.index.slice(0, 0);
+    if (!col || !this.static.has(col)) return this._emptyNames();
     return this._indexWhere(this.static.col(col).map((x) => !x));
   }
 
   get committables() {
-    if (!this.static.has("committable")) return this.static.index.slice(0, 0);
+    if (!this.static.has("committable")) return this._emptyNames();
     return this._indexWhere(this.static.col("committable").map(Boolean));
   }
 
   /** Components with maintenance scheduling (`maintainable=True`). */
   get maintainables() {
-    if (!this.static.has("maintainable")) return this.static.index.slice(0, 0);
+    if (!this.static.has("maintainable")) return this._emptyNames();
     return this._indexWhere(this.static.col("maintainable").map(Boolean));
   }
 
   get modulars() {
     const base = OPERATIONAL_BASE[this.name];
     const col = base ? `${base}_nom_mod` : null;
-    if (!col || !this.static.has(col)) return this.static.index.slice(0, 0);
+    if (!col || !this.static.has(col)) return this._emptyNames();
     return this._indexWhere(Array.from(this.static.col(col), (x) => x > 0));
   }
 
@@ -335,13 +349,17 @@ export class Components {
     );
   }
 
+  /** Names of assets active in any scenario. */
   get active_assets() {
+    // scenario views of stochastic networks keep the names active in any scenario
+    if (this._activeNamesOverride) return this._activeNamesOverride;
     const a = this.get_active_assets();
-    return this.static.index.filter(a.values).unique();
+    const idx = this.static.index.filter(a.values);
+    return idx.isMulti ? idx.uniqueLevel("name") : idx.unique();
   }
 
   get inactive_assets() {
-    return this.static.index.unique().difference(this.active_assets);
+    return this.names.difference(this.active_assets);
   }
 
   filter_by_active_assets(data, investment_period = null) {

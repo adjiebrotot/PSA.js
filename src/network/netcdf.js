@@ -353,6 +353,7 @@ Object.assign(Network.prototype, {
     const h5 = await getH5();
     const f = new h5.File(String(path), "r");
     try {
+      if (f.keys().includes("scenario_weight")) throw new Error("NotImplementedError: Importing stochastic networks from netCDF is not yet supported by PSA.js.");
       importFromImporter(this, new ImporterNetCDF(f), skip_time);
     } finally {
       f.close();
@@ -362,6 +363,7 @@ Object.assign(Network.prototype, {
 
   /** Export to a netCDF file readable by PyPSA / xarray (async). */
   async export_to_netcdf(path, opts = {}) {
+    if (this.has_scenarios) throw new Error("NotImplementedError: Exporting stochastic networks to netCDF is not yet supported by PSA.js.");
     await exportToNetCDF(this, String(path), opts);
     return path;
   },

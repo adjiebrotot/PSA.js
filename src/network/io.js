@@ -445,6 +445,7 @@ export function collectExport(n, { export_standard_types = false } = {}) {
 }
 
 function exportToFolder(n, folder, { export_standard_types = false } = {}) {
+  if (n.has_scenarios) throw new Error("NotImplementedError: Stochastic networks are not supported in the CSV exporter. Use netcdf instead.");
   if (!folder.exists()) {
     logger.warning(`Directory ${folder.dir ?? ""} does not exist, creating it`);
     folder.mkdir();
