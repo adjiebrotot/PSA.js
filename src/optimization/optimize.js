@@ -22,6 +22,8 @@ import { sparseLU } from "../linalg/sparse.js";
 import { logger } from "../logger.js";
 import { checkForUnknownBuses } from "../network/network.js";
 import { define_piecewise, asPiecewiseOptions, optionsFor } from "./piecewise.js";
+import { scenarioView, mergeScenarioModels, distributeSolution, collectResults, dynamicIdentities } from "./stochastic.js";
+import { assert_invariant } from "../consistency.js";
 
 let warnedObjectiveConstant = false;
 
@@ -62,7 +64,12 @@ function periodizedCostFor(c, names) {
   return names.values.map((nm) => pc[c.static.index.getLoc(nm)]);
 }
 
-export function define_objective(n, sns, includeObjectiveConstant, piecewiseOptions = []) {
+/**
+ * Build the objective (`define_objective`). With `collect`, the CAPEX/OPEX
+ * term blocks and the objective constant are returned instead of being added
+ * to the model (scenario models of a stochastic network).
+ */
+export function define_objective(n, sns, includeObjectiveConstant, piecewiseOptions = [], { collect = false } = {}) {
   const m = n.model;
   const capexTerms = [];
   const opexTerms = [];
@@ -103,7 +110,7 @@ export function define_objective(n, sns, includeObjectiveConstant, piecewiseOpti
     }
     for (const t of terms) constant += t;
     n._objective_constant = constant;
-    if (constant !== 0) {
+    if (constant !== 0 && !collect) {
       const v = m.add_variables({ name: "objective_constant", lower: constant, upper: constant });
       capexTerms.push([[v.at()], [-1]]);
     }
@@ -280,6 +287,7 @@ export function define_objective(n, sns, includeObjectiveConstant, piecewiseOpti
     opexTerms.push([vars, coeffs]);
   }
 
+  if (collect) return { constant: n._objective_constant, includeConstant: Boolean(includeObjectiveConstant), capexTerms, opexTerms, quadTerms };
   if (!capexTerms.length && !opexTerms.length && !quadTerms.length) {
     throw new Error("Objective function could not be created. Please make sure the components have assigned costs.");
   }
@@ -312,8 +320,23 @@ export function create_model(
     meshed_thresholds = null,
     cycle_basis_method = "bfs-refined",
     piecewise_options = null,
+    _stochastic = null,
   } = {},
 ) {
+  if (n.has_scenarios && !_stochastic) {
+    return createStochasticModel(n, {
+      snapshots,
+      multi_investment_periods,
+      transmission_losses,
+      linearized_unit_commitment,
+      consistency_check,
+      include_objective_constant,
+      committable_big_m,
+      meshed_thresholds,
+      cycle_basis_method,
+      piecewise_options,
+    });
+  }
   const sns = as_index(n, snapshots, "snapshots");
   // deduplicated like PyPSA's `set` of frozen PiecewiseOptions
   const pwSeen = new Set();
@@ -353,6 +376,8 @@ export function create_model(
   V.define_spillage_variables(n, sns);
   V.define_operational_variables(n, sns, "Store", "p");
   V.define_phase_shift_variables(n, sns);
+  // the CVaR variables of stochastic models follow here
+  m._cvarSlot = m.variables.size;
   if (transmission_losses) for (const c of ["Line", "Transformer"]) V.define_loss_variables(n, sns, c);
 
   for (const [c, attr] of lookupQuery((r) => r.nominal)) {
@@ -373,7 +398,8 @@ export function create_model(
   C.define_fixed_operation_constraints(n, sns, "Store", "p");
 
   const thresholds = meshed_thresholds !== null ? [...new Set(meshed_thresholds)].sort((a, b) => a - b) : [30, 100, 400];
-  const counts = getBusCounts(n);
+  // stochastic networks count the bus usage over the rows of all scenarios
+  const counts = _stochastic ? _stochastic.busCounts : getBusCounts(n);
   const busNames = n.c.buses.names;
   const busCounts = busNames.values.map((b) => counts.get(b) ?? 0);
   let prev = 0;
@@ -416,8 +442,75 @@ export function create_model(
   G.define_nominal_constraints_per_bus_carrier(n, sns);
   G.define_growth_limit(n, sns);
 
-  define_objective(n, sns, includeConst, piecewiseOpts);
+  if (_stochastic) m._objectiveParts = define_objective(n, sns, includeConst, piecewiseOpts, { collect: true });
+  else define_objective(n, sns, includeConst, piecewiseOpts);
   return m;
+}
+
+/**
+ * Stochastic model: the deterministic models of all scenario views merged
+ * into one model with scenario-indexed operational variables (see
+ * `stochastic.js`).
+ */
+function createStochasticModel(n, opts) {
+  const { consistency_check = true, include_objective_constant = null, ...rest } = opts;
+  const sns = as_index(n, opts.snapshots, "snapshots");
+  n._multi_invest = opts.multi_investment_periods ? 1 : 0;
+  n._linearized_uc = opts.linearized_unit_commitment ? 1 : 0;
+  n._linearizedUcSet = true;
+  n._committable_big_m = opts.committable_big_m ?? null;
+  for (const c of n.components.values()) {
+    for (const df of Object.values(c.piecewise)) {
+      if (!df.empty) throw new Error("NotImplementedError: Piecewise attribute data is not yet supported for stochastic networks (scenarios).");
+    }
+  }
+  if (consistency_check && typeof n.consistency_check === "function") n.consistency_check();
+  // the model builders require these to be identical across scenarios, also
+  // without consistency check
+  for (const cName of ["Line", "Link"]) assert_invariant(n.c.get(cName), ["carrier"]);
+  for (const cName of ["Link", "Process"]) {
+    const st = n.c.get(cName).static;
+    assert_invariant(n.c.get(cName), st.columns.values.filter((a) => /^(cyclic_)?delay\d*$/.test(a)));
+  }
+  const includeConst = resolveIncludeObjectiveConstant(include_objective_constant);
+  const busCounts = getBusCounts(n);
+  const views = n.scenarios.values.map((sc) => scenarioView(n, sc));
+  const models = views.map((v) => create_model(v, { ...rest, snapshots: sns, consistency_check: false, include_objective_constant: includeConst, _stochastic: { busCounts } }));
+  const M = mergeScenarioModels(n, views, models);
+  M.parameters.snapshots = sns;
+  n._model = M;
+  return M;
+}
+
+/** Assign the solution of a stochastic model through its scenario views. */
+function assignStochasticResults(n, assignAllDuals = false) {
+  const M = n.model;
+  const { views, models } = M._stochastic;
+  distributeSolution(M);
+  const before = dynamicIdentities(views);
+  views.forEach((v, s) => {
+    v._model = models[s];
+    v._skipVoltageAngles = true;
+    assign_solution(v);
+    assign_duals(v, assignAllDuals);
+    post_processing(v);
+  });
+  collectResults(n, views, before);
+  // PyPSA groups the bus injections by the first column level, which is the
+  // scenario for stochastic networks: n.buses_t.p ends up all zero. Voltage
+  // angles are not computed for stochastic networks.
+  const buses = n.c.buses.names;
+  const cols = [];
+  const data = new Map();
+  for (const sc of n.scenarios.values) {
+    for (const b of buses.values) {
+      const t = [sc, b];
+      cols.push(t);
+      data.set(t, new Float64Array(n.snapshots.length));
+    }
+  }
+  n.c.buses.dynamic.p = new DataFrame({ index: n.snapshots, columns: new Index(cols, ["scenario", "name"]), data });
+  n._objective = M.objectiveValue;
 }
 
 function checkNoModularCommittables(n) {
@@ -771,6 +864,7 @@ export function post_processing(n) {
   n.c.buses.dynamic.p = pdf;
 
   // voltage angles
+  if (n._skipVoltageAngles) return;
   if (n.c.sub_networks.static.index.length === 0) n.determine_network_topology();
   if (n.c.sub_networks.static.has("obj")) {
     // pd.concat(axis=1) over sub-networks: single-bus sub-networks only cover
@@ -889,9 +983,12 @@ export class OptimizationAccessor {
     if (extra_functionality) await extra_functionality(n, sns);
     const [status, condition] = await m.solve({ solver_name, solver_options, log_to_console, reformulate_sos });
     if (status === "ok") {
-      assign_solution(n);
-      assign_duals(n, assign_all_duals);
-      post_processing(n);
+      if (n.has_scenarios) assignStochasticResults(n, assign_all_duals);
+      else {
+        assign_solution(n);
+        assign_duals(n, assign_all_duals);
+        post_processing(n);
+      }
     }
     return [status, condition];
   }
@@ -905,9 +1002,12 @@ export class OptimizationAccessor {
     if (extra_functionality) await extra_functionality(n, n.model.parameters.snapshots);
     const [status, condition] = await n.model.solve({ solver_name, solver_options, log_to_console, reformulate_sos });
     if (status === "ok") {
-      assign_solution(n);
-      assign_duals(n, assign_all_duals);
-      post_processing(n);
+      if (n.has_scenarios) assignStochasticResults(n, assign_all_duals);
+      else {
+        assign_solution(n);
+        assign_duals(n, assign_all_duals);
+        post_processing(n);
+      }
     }
     return [status, condition];
   }
@@ -930,7 +1030,13 @@ export class OptimizationAccessor {
       const c = n.c.get(cName);
       const extI = c.extendables.intersection(c.active_assets);
       const st = c.static;
-      for (const nm of extI) st.setAt(nm, attr, st.at(nm, `${attr}_opt`));
+      // rows of the extendable names (in all scenarios of stochastic networks)
+      const names = st.index.isMulti ? st.index.getLevelValues("name") : st.index;
+      const nom = st.col(attr);
+      const opt = st.col(`${attr}_opt`);
+      names.values.forEach((nm, i) => {
+        if (extI.has(nm)) nom[i] = opt[i];
+      });
       st.set(`${attr}_extendable`, st.index.values.map(() => false));
     }
   }
