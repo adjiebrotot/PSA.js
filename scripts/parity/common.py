@@ -14,8 +14,17 @@ from pathlib import Path
 # components when adding loss variables), so the variable/constraint order of
 # the generated models depends on string hashing. Pin the hash seed so that the
 # fixtures are reproducible; PSA.js uses the order obtained with seed 0.
-if os.environ.get("PYTHONHASHSEED") != "0":
+#
+# numpy's AVX-512 (SVML) loops for `power`, `exp`, `log`, ... differ from the
+# correctly rounded libm results by one ulp, e.g. `(1 - standing_loss) **
+# elapsed_h`. That makes fixtures depend on the CPU that generated them and
+# can flip HiGHS to another vertex of a dual-degenerate LP. Disable those
+# dispatch targets (unknown names are ignored on other CPUs) so that numpy
+# uses libm, which PSA.js reproduces.
+NPY_DISABLE = "X86_V4 AVX512_ICL AVX512_SPR"
+if os.environ.get("PYTHONHASHSEED") != "0" or os.environ.get("NPY_DISABLE_CPU_FEATURES") != NPY_DISABLE:
     os.environ["PYTHONHASHSEED"] = "0"
+    os.environ["NPY_DISABLE_CPU_FEATURES"] = NPY_DISABLE
     os.execv(sys.executable, [sys.executable, *sys.argv])
 
 import numpy as np

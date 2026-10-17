@@ -381,7 +381,8 @@ export function define_primary_energy_limit(n, sns, piecewiseOptions = []) {
         for (let s = 0; s < snsSel.length; s++) {
           for (let j = 0; j < nN; j++) {
             vars.push(v(s, j));
-            coeffs.push((em.get(carriers[j]) / eff[s * nN + j]) * w[s]);
+            // `(p / efficiency) * weight * emission_rate` in linopy's operation order
+            coeffs.push((1 / eff[s * nN + j]) * w[s] * em.get(carriers[j]));
           }
         }
       } else {
@@ -403,7 +404,7 @@ export function define_primary_energy_limit(n, sns, piecewiseOptions = []) {
               coeffs.push(w[s] * e);
             } else {
               vars.push(vLin(s, j));
-              coeffs.push((e / eff[s * nN + j]) * w[s]);
+              coeffs.push((1 / eff[s * nN + j]) * w[s] * e);
             }
           }
         }

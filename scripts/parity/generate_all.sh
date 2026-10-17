@@ -10,6 +10,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 export PYTHONHASHSEED=0
+# see common.py: use libm instead of numpy's AVX-512 loops
+export NPY_DISABLE_CPU_FEATURES="X86_V4 AVX512_ICL AVX512_SPR"
 
 version=$(python -c "import pypsa; print(pypsa.__version__)" 2>/dev/null)
 echo "PyPSA ${version}"
