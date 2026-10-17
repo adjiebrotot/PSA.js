@@ -35,6 +35,7 @@
     ["expect_error", "err_alpha", ["call", "set_risk_preference", [], {"alpha": 1.0, "omega": 0.3}]],
     ["expect_error", "err_omega", ["call", "set_risk_preference", [], {"alpha": 0.5, "omega": 1.5}]],
     ["expect_error", "err_unknown_scenario", ["call", "get_scenario", ["medium"]]],
+    ["expect_error", "err_cluster", ["call", "cluster.spatial.get_clustering_from_busmap", [{"$series": {"index": ["London"], "values": ["c1"]}}]]],
     ["copy"],
     ["record", "copied", "network"],
     ["record", "copied_weightings", "path", ["scenario_weightings"]],
@@ -46,6 +47,11 @@
     ["add", "Bus", "b"],
     ["call", "set_scenarios", [["s1", "s2", "s3", "s4"]]],
     ["record", "equal_weights", "path", ["scenario_weightings"]],
-    ["record", "empty_components", "network"]
+    ["record", "empty_components", "network"],
+    ["load_example", "ac-dc-meshed"],
+    ["set_snapshots", {"$slice": [0, 2]}],
+    ["call", "set_scenarios", [{"low": 0.3, "high": 0.7}]],
+    ["expect_error", "err_lpf", ["call", "lpf"]],
+    ["expect_error", "err_pf", ["call", "pf"]]
   ]
 }

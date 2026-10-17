@@ -624,6 +624,11 @@ export function busmap_by_kmeans(n, bus_weightings, n_clusters, { buses_i = null
   return new Series(labels, new Index(names, "name"));
 }
 
+/** `_scenarios_not_implemented`: spatial clustering does not support stochastic networks. */
+function scenariosNotImplemented(n, method) {
+  if (n.has_scenarios) throw new Error(`ValueError: Method '${method}' is not yet implemented for stochastic networks.`);
+}
+
 /** Spatial clustering accessor (`n.cluster.spatial`). */
 export class SpatialClusteringAccessor {
   constructor(n) {
@@ -631,18 +636,22 @@ export class SpatialClusteringAccessor {
   }
 
   get_clustering_from_busmap(busmap, opts = {}) {
+    scenariosNotImplemented(this._n, "get_clustering_from_busmap");
     return get_clustering_from_busmap(this._n, busmap, opts);
   }
 
   cluster_by_busmap(busmap, opts = {}) {
+    scenariosNotImplemented(this._n, "cluster_by_busmap");
     return get_clustering_from_busmap(this._n, busmap, opts).n;
   }
 
   busmap_by_kmeans(bus_weightings, n_clusters, opts = {}) {
+    scenariosNotImplemented(this._n, "busmap_by_kmeans");
     return busmap_by_kmeans(this._n, bus_weightings, n_clusters, opts);
   }
 
   cluster_by_kmeans(bus_weightings, n_clusters, { line_length_factor = 1.0, ...opts } = {}) {
+    scenariosNotImplemented(this._n, "cluster_by_kmeans");
     const busmap = busmap_by_kmeans(this._n, bus_weightings, n_clusters, opts);
     return get_clustering_from_busmap(this._n, busmap, { line_length_factor }).n;
   }
@@ -652,10 +661,12 @@ export class SpatialClusteringAccessor {
   }
 
   busmap_by_hac() {
+    scenariosNotImplemented(this._n, "busmap_by_hac");
     throw new Error("busmap_by_hac (scikit-learn agglomerative clustering) is not available in PSA.js; compute a busmap and use cluster_by_busmap.");
   }
 
   busmap_by_greedy_modularity() {
+    scenariosNotImplemented(this._n, "busmap_by_greedy_modularity");
     throw new Error("busmap_by_greedy_modularity (networkx) is not available in PSA.js; compute a busmap and use cluster_by_busmap.");
   }
 }

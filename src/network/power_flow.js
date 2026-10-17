@@ -1631,6 +1631,8 @@ Object.assign(Network.prototype, GraphMixin, {
 
   /** Linear (DC) power flow. */
   lpf(snapshots = null, opts = {}) {
+    // PyPSA's power flow fails on stochastic networks as well
+    if (this.has_scenarios) throw new Error("NotImplementedError: Power flow is not supported for stochastic networks.");
     if (isOptions(snapshots)) [snapshots, opts] = [snapshots.snapshots ?? null, snapshots];
     const { skip_pre = false } = opts;
     const sns = as_index(this, snapshots, "snapshots");
@@ -1639,6 +1641,7 @@ Object.assign(Network.prototype, GraphMixin, {
 
   /** Full non-linear (AC) power flow with Newton-Raphson. */
   pf(snapshots = null, opts = {}) {
+    if (this.has_scenarios) throw new Error("NotImplementedError: Power flow is not supported for stochastic networks.");
     if (isOptions(snapshots)) [snapshots, opts] = [snapshots.snapshots ?? null, snapshots];
     const { skip_pre = false, x_tol = 1e-6, use_seed = false, distribute_slack = false, slack_weights = "p_set" } = opts;
     return prepareAndRunPf(this, snapshots, skip_pre, false, { x_tol, use_seed, distribute_slack, slack_weights });

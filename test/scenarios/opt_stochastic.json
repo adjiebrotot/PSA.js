@@ -1,5 +1,5 @@
 {
-  "description": "Stochastic (two-stage) optimisation: LP files and solutions for scenario-specific costs, profiles and loads on the example networks (lines, links, storage units, stores), the CVaR risk-averse objective, unit commitment, multi-period investment, transmission losses and meshed bus thresholds (bus usage counted over all scenarios).",
+  "description": "Stochastic (two-stage) optimisation: LP files and solutions for scenario-specific costs, profiles and loads on the example networks (lines, links, storage units, stores), the CVaR risk-averse objective, unit commitment, multi-period investment, transmission losses and meshed bus thresholds (bus usage counted over all scenarios), quadratic marginal costs, security-constrained optimisation (outage distribution factors of the first scenario) and rolling horizons carrying storage levels per scenario.",
   "tolerance": {"rtol": 1e-06, "atol": 1e-06},
   "ops": [
     ["load_example", "ac-dc-meshed"],
@@ -20,7 +20,6 @@
     ["call", "optimize", [], {"include_objective_constant": false}],
     ["record", "cvar", "network"],
     ["record", "cvar_objective", "path", ["objective"]],
-
     ["load_example", "storage-hvdc"],
     ["set_snapshots", {"$slice": [0, 4]}],
     ["call", "set_scenarios", [{"dry": 0.25, "normal": 0.5, "wet": 0.25}]],
@@ -30,7 +29,6 @@
     ["call", "optimize", [], {"include_objective_constant": false}],
     ["record", "hvdc", "network"],
     ["record", "hvdc_objective", "path", ["objective"]],
-
     ["load_example", "model-energy"],
     ["set_snapshots", {"$slice": [0, 6]}],
     ["call", "set_scenarios", [{"volcano": 0.2, "no_volcano": 0.8}]],
@@ -39,7 +37,6 @@
     ["call", "optimize", [], {"include_objective_constant": true}],
     ["record", "energy", "network"],
     ["record", "energy_objective", "path", ["objective"]],
-
     ["new_network"],
     ["set_snapshots", [0, 1, 2, 3, 4, 5]],
     ["add", "Bus", "bus"],
@@ -53,7 +50,6 @@
     ["call", "optimize", [], {"include_objective_constant": false}],
     ["record", "uc", "network"],
     ["record", "uc_lin_lp", "lp", {"include_objective_constant": false, "linearized_unit_commitment": true}],
-
     ["new_network"],
     ["set_snapshots", [0, 1, 2]],
     ["set_investment_periods", [2020, 2030]],
@@ -72,13 +68,39 @@
     ["call", "optimize", [], {"multi_investment_periods": true, "include_objective_constant": false}],
     ["record", "mp", "network"],
     ["record", "mp_objective", "path", ["objective"]],
-
     ["load_example", "ac-dc-meshed"],
     ["set_snapshots", {"$slice": [0, 3]}],
     ["call", "set_scenarios", [{"low": 0.5, "high": 0.5}]],
     ["expect_error", "err_losses_inf_s_nom_max", ["record", "losses_inf", "lp", {"transmission_losses": {"mode": "secants"}, "include_objective_constant": false}]],
     ["set_static_all", "lines", "s_nom_max", 3000],
     ["record", "losses_lp", "lp", {"transmission_losses": {"mode": "secants"}, "include_objective_constant": false}],
-    ["record", "meshed_lp", "lp", {"meshed_thresholds": [3], "include_objective_constant": false}]
+    ["record", "meshed_lp", "lp", {"meshed_thresholds": [3], "include_objective_constant": false}],
+    ["load_example", "ac-dc-meshed"],
+    ["set_snapshots", {"$slice": [0, 2]}],
+    ["set_static_all", "generators", "marginal_cost_quadratic", 0.01],
+    ["call", "set_scenarios", [{"low": 0.4, "high": 0.6}]],
+    ["set_static_sc", "generators", "marginal_cost_quadratic", "high", {"Manchester Gas": 0.05}],
+    ["record", "qp_lp", "lp", {"include_objective_constant": true}],
+    ["call", "optimize", [], {"include_objective_constant": true}],
+    ["record", "qp", "network"],
+    ["record", "qp_objective", "path", ["objective"]],
+    ["call", "set_risk_preference", [], {"alpha": 0.9, "omega": 0.5}],
+    ["expect_error", "err_cvar_quadratic", ["record", "cvar_qp", "lp", {"include_objective_constant": false}]],
+    ["load_example", "ac-dc-meshed"],
+    ["set_snapshots", {"$slice": [0, 3]}],
+    ["call", "set_scenarios", [{"low": 0.4, "high": 0.6}]],
+    ["set_static_sc", "lines", "x", "high", {"2": 0.5}],
+    ["set_dynamic_sc", "loads", "p_set", "high", {"London": [400, 500, 600]}],
+    ["expect_error", "err_sclopf_unknown", ["call", "optimize.optimize_security_constrained", [], {"branch_outages": ["99"]}]],
+    ["call", "optimize.optimize_security_constrained", [], {"branch_outages": ["0", "1", "5"], "model_kwargs": {"include_objective_constant": false}}],
+    ["record", "sclopf_lp", "model_lp"],
+    ["record", "sclopf", "network"],
+    ["record", "sclopf_objective", "path", ["objective"]],
+    ["load_example", "storage-hvdc"],
+    ["set_snapshots", {"$slice": [0, 6]}],
+    ["call", "set_scenarios", [{"dry": 0.5, "wet": 0.5}]],
+    ["set_dynamic_sc", "storage_units", "inflow", "wet", {"Storage 0": [5, 5, 5, 5, 5, 5]}],
+    ["call", "optimize.optimize_with_rolling_horizon", [], {"horizon": 3, "overlap": 1, "include_objective_constant": false}],
+    ["record", "rolling", "network"]
   ]
 }

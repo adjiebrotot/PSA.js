@@ -7,6 +7,7 @@
  */
 
 import { Index } from "../core/index.js";
+import { scenarioView } from "../network/scenarios.js";
 import { logger } from "../logger.js";
 import { as_index } from "../common.js";
 import { NOMINAL_ATTRS, npSum } from "./common.js";
@@ -67,6 +68,8 @@ export function installAbstract(Accessor) {
    * (optionally discretised) branch capacities.
    */
   proto.optimize_transmission_expansion_iteratively = async function optimizeTransmissionExpansionIteratively(opts = {}) {
+    // fails in PyPSA v1.4.0 for stochastic networks too
+    if (this._n.has_scenarios) throw new Error("NotImplementedError: Iterative transmission expansion is not supported for stochastic networks.");
     const {
       snapshots = null,
       msq_threshold = 0.05,
@@ -233,7 +236,13 @@ export function installAbstract(Accessor) {
   proto.optimize_security_constrained = async function optimizeSecurityConstrained(opts = {}) {
     const { snapshots = null, branch_outages = null, multi_investment_periods = false, model_kwargs = {}, ...kwargs } = opts;
     const n = this._n;
-    const allPassive = n.passive_branches().index;
+    // passive branches by (component, name); one entry per name on stochastic networks
+    const allPassive = n.has_scenarios
+      ? new Index(
+          [...n.passive_branch_components].sort().flatMap((c) => n.c.get(c).names.values.map((nm) => [c, nm])),
+          ["type", "name"],
+        )
+      : n.passive_branches().index;
     let outagesIdx;
     if (branch_outages === null) outagesIdx = allPassive;
     else {
@@ -254,13 +263,39 @@ export function installAbstract(Accessor) {
       if (activeNames.has(c)) continue;
       const comp = n.c.get(c);
       const a = comp.get_active_assets(periods);
-      activeNames.set(c, new Set(comp.static.index.values.filter((_, i) => a.values[i])));
+      const names = comp.static.index.isMulti ? comp.static.index.getLevelValues("name") : comp.static.index;
+      activeNames.set(c, new Set(names.values.filter((_, i) => a.values[i])));
     }
     const inactive = outagesIdx.values.filter(([c, nm]) => !activeNames.get(c).has(nm));
     if (branch_outages !== null && inactive.length) {
       throw new Error(`The following branch outages are not active in any optimized investment period: {${inactive.map((b) => `('${b[0]}', '${b[1]}')`).join(", ")}}`);
     }
 
+    if (n.has_scenarios) {
+      // outage distribution factors of the first scenario's topology, applied
+      // to the model of every scenario before they are merged (as PyPSA)
+      this.create_model({
+        snapshots,
+        multi_investment_periods,
+        ...model_kwargs,
+        _stochasticExtra: (views, models) => {
+          // a separate copy of the first scenario, like PyPSA's `n.get_scenario`
+          const topo = scenarioView(n, n.scenarios.at(0));
+          topo._multi_invest = views[0]._multi_invest;
+          const modelSns = models[0].parameters.snapshots;
+          const windows = topo._multi_invest ? sns.uniqueLevel(0).values.map((p) => [p, modelSns.filter(modelSns.values.map((t) => t[0] === p))]) : [[null, null]];
+          for (const [period, periodSns] of windows) {
+            let suffix = "";
+            if (period !== null) {
+              topo.determine_network_topology({ investment_period: period, skip_isolated_buses: true });
+              suffix = `-period-${period}`;
+            } else topo.determine_network_topology();
+            for (const sub of topo.c.sub_networks.static.col("obj")) for (const mm of models) addSecurityConstraints(mm, sub, outagesIdx, periodSns, suffix);
+          }
+        },
+      });
+      return this.solve_model(kwargs);
+    }
     const m = this.create_model({ snapshots, multi_investment_periods, ...model_kwargs });
     const modelSns = m.parameters.snapshots;
     const windows = n._multi_invest ? sns.uniqueLevel(0).values.map((p) => [p, modelSns.filter(modelSns.values.map((t) => t[0] === p))]) : [[null, null]];
@@ -319,6 +354,7 @@ export function installAbstract(Accessor) {
    * @returns {Promise<object>} status, termination_condition and pf results
    */
   proto.optimize_and_run_non_linear_powerflow = async function optimizeAndRunNonLinearPowerflow(opts = {}) {
+    if (this._n.has_scenarios) throw new Error("NotImplementedError: Power flow is not supported for stochastic networks.");
     const { snapshots: snapshotsIn = null, skip_pre = false, x_tol = 1e-6, use_seed = false, distribute_slack = false, slack_weights = "p_set", ...kwargs } = opts;
     const n = this._n;
     const snapshots = snapshotsIn ?? n.snapshots;

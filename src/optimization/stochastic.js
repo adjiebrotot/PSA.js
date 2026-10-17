@@ -200,10 +200,18 @@ function sortVariableRuns(vars, coeffs, owner) {
   }
 }
 
-function mergeConstraints(M, n, models, scenarios, maps) {
+function mergeConstraints(M, n, models, scenarios, maps, { extra = false, rowMaps = models.map(() => new Map()) } = {}) {
   const S = scenarios.length;
-  const order = orderedUnion(models.map((m) => [...m.constraints.values()].sort((a, b) => a.start - b.start).map((c) => c.name)));
-  const rowMaps = models.map(() => new Map());
+  // constraints added after building the scenario models are merged last
+  const isExtra = (m, c) => m._extraStart !== undefined && c.start >= m._extraStart;
+  const order = orderedUnion(
+    models.map((m) =>
+      [...m.constraints.values()]
+        .filter((c) => isExtra(m, c) === extra)
+        .sort((a, b) => a.start - b.start)
+        .map((c) => c.name),
+    ),
+  );
   const owner = makeOwner(M);
   const multiInvest = Boolean(n._multi_invest);
   for (const name of order) {
@@ -255,8 +263,10 @@ function defineStochasticObjective(M, n, models, scenarios, maps) {
   const S = scenarios.length;
   const parts = models.map((m) => m._objectiveParts);
   const quadratic = parts.some((p) => p.quadTerms.length > 0);
-  if (quadratic) {
-    throw new Error("NotImplementedError: Quadratic marginal costs are not yet supported for stochastic networks in PSA.js.");
+  if (quadratic && n.has_risk_preference) {
+    throw new Error(
+      "ValueError: CVaR with quadratic operational costs yields quadratic constraints. So a(s) >= OPEX(s) - theta becomes a quadratic inequality. Remove/approximate quadratic costs (e.g. set 'marginal_cost_quadratic=0' or use a piecewise-linear approximation).",
+    );
   }
   // objective constant per scenario, weighted by the scenario probabilities
   const constants = parts.map((p) => p.constant);
@@ -301,6 +311,20 @@ function defineStochasticObjective(M, n, models, scenarios, maps) {
     for (const [v, c] of capex) M.add_objective_terms(v, c);
     for (const [v, c] of opex) M.add_objective_terms(v, c.map((x) => (1 - omega) * x));
     M.add_objective_terms([cvar.labels[0]], [omega]);
+  } else if (quadratic) {
+    // `expected_capex + expected_opex` with a quadratic OPEX evaluates as
+    // quad + lin in linopy: the linear OPEX terms precede the CAPEX terms
+    for (const [v, c] of opex) M.add_objective_terms(v, c);
+    for (const [v, c] of capex) M.add_objective_terms(v, c);
+    parts.forEach((p, s) => {
+      for (const [v1, v2, c] of p.quadTerms) {
+        M.add_quadratic_objective_terms(
+          v1.map((l) => (l >= 0 ? maps[s][l] : -1)),
+          v2.map((l) => (l >= 0 ? maps[s][l] : -1)),
+          c.map((x) => x * weights[s]),
+        );
+      }
+    });
   } else {
     for (const [v, c] of capex) M.add_objective_terms(v, c);
     for (const [v, c] of opex) M.add_objective_terms(v, c);
@@ -318,6 +342,7 @@ export function mergeScenarioModels(n, views, models) {
   const { maps } = mergeVariables(M, n, models, scenarios);
   const rowMaps = mergeConstraints(M, n, models, scenarios, maps);
   defineStochasticObjective(M, n, models, scenarios, maps);
+  mergeConstraints(M, n, models, scenarios, maps, { extra: true, rowMaps });
   M._stochastic = { views, models, maps, rowMaps };
   return M;
 }

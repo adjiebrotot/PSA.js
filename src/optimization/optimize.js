@@ -321,10 +321,12 @@ export function create_model(
     cycle_basis_method = "bfs-refined",
     piecewise_options = null,
     _stochastic = null,
+    _stochasticExtra = null,
   } = {},
 ) {
   if (n.has_scenarios && !_stochastic) {
     return createStochasticModel(n, {
+      _stochasticExtra,
       snapshots,
       multi_investment_periods,
       transmission_losses,
@@ -453,7 +455,7 @@ export function create_model(
  * `stochastic.js`).
  */
 function createStochasticModel(n, opts) {
-  const { consistency_check = true, include_objective_constant = null, ...rest } = opts;
+  const { consistency_check = true, include_objective_constant = null, _stochasticExtra = null, ...rest } = opts;
   const sns = as_index(n, opts.snapshots, "snapshots");
   n._multi_invest = opts.multi_investment_periods ? 1 : 0;
   n._linearized_uc = opts.linearized_unit_commitment ? 1 : 0;
@@ -476,6 +478,12 @@ function createStochasticModel(n, opts) {
   const busCounts = getBusCounts(n);
   const views = n.scenarios.values.map((sc) => scenarioView(n, sc));
   const models = views.map((v) => create_model(v, { ...rest, snapshots: sns, consistency_check: false, include_objective_constant: includeConst, _stochastic: { busCounts } }));
+  // constraints added to the scenario models after building them (e.g. the
+  // security constraints of SCLOPF) follow the objective's CVaR constraints
+  if (_stochasticExtra) {
+    for (const m of models) m._extraStart = m._cCounter;
+    _stochasticExtra(views, models);
+  }
   const M = mergeScenarioModels(n, views, models);
   M.parameters.snapshots = sns;
   n._model = M;
