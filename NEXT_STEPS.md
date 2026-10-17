@@ -1,6 +1,6 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 32 parity scenarios plus
+State at hand-off: all PSA.js tests pass (`npm test`: 35 parity scenarios plus
 IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
 
 ## 1. Housekeeping
@@ -16,12 +16,27 @@ IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
 - [x] PyPSA release tags: `pypsa.__version__` resolves to 1.4.0 (the IO test no
       longer masks the exported version).
 - [x] CI workflow (`.github/workflows/test.yml`, Node 22 and 24).
+- [x] Pinned the Python packages that reproduce the fixtures
+      (`scripts/parity/requirements.txt`, verified by a full regeneration) and
+      added `scripts/parity/diff_fixtures.py`.
+- [x] Fixtures no longer depend on the CPU: the generators disable numpy's
+      AVX-512 (SVML) loops, whose `pow`/`exp`/`log` differ from libm by one ulp
+      and moved HiGHS to other optimal dual vertices on degenerate LPs.
 
 ## 2. Features not yet ported
 
-- [ ] **Stochastic optimisation**: `set_scenarios`, scenario dimension on
-      components, scenario-weighted objective, CVaR / `set_risk_preference`,
-      stochastic statistics. Currently `set_scenarios` throws.
+- [x] **Stochastic optimisation**: `set_scenarios`, scenario-indexed data,
+      `get_scenario`, scenario-weighted objective, CVaR, QP, UC, multi-period,
+      losses, SCLOPF, rolling horizon, statistics, netCDF IO (scenarios
+      `network_stochastic`, `opt_stochastic`, `statistics_stochastic`,
+      `io_stochastic`). Remaining:
+  - [ ] `n.optimize.expressions` with a `scenario` dimension (also missing for
+        deterministic networks, see below), assigning duals of custom
+        constraints (PyPSA raises too).
+  - [ ] Ungrouped statistics (`groupby=False`) of components added after
+        `set_scenarios` follow PyPSA's row order only for scenario-major data.
+  - [ ] Iterative transmission expansion, power flow and spatial clustering
+        raise (they fail or are unsupported in PyPSA v1.4.0 too).
 - [ ] **NetworkCollection** (multi-network statistics).
 - [ ] **`n.optimize.expressions`** (statistic expressions on the linopy model,
       incl. `_split_piecewise` / `_direct_piecewise`).
@@ -49,11 +64,12 @@ IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
 - [ ] `linopy` expression API: only the subset needed by PyPSA workflows
       (`sel`, `mul`, `add`, `sub`, `sum`, `le/ge/eq`, `set_objective`). Missing:
       `shift`, `groupby`, `rolling`, `where`, quadratic expressions, `diff`.
-- [ ] Statistics: `n.statistics(...)` overview table, `aggregate_across_components`,
-      `groupby_method` other than sum/mean/min/max, callable groupers with
-      multi-index results, the `transmission` default component order follows
-      Python set order in PyPSA (PSA.js sorts).
-- [ ] Consistency checks: `check_dtypes`, scenario checks (no scenarios yet).
+- [ ] Statistics: `aggregate_across_components`, `groupby_method` other than
+      sum/mean/min/max, callable groupers with multi-index results. (Done: the
+      overview table `n.statistics()` passes all arguments like PyPSA, the
+      component sets iterate in CPython's set order, deprecated `comps` /
+      `aggregate_groups` / `aggregate_time` are renamed.)
+- [ ] Consistency checks: `check_dtypes`.
 - [ ] SciGrid voltage angles after optimisation use an exact grounded solve while
       PyPSA uses `numpy.linalg.pinv` (differences ~1e-4 rad; documented
       tolerance in `test/scenarios/opt_scigrid_de.json`).
@@ -79,6 +95,27 @@ IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       4. `meshed_thresholds` that put the output buses of piecewise links in
          different bus groups define `Link-p1_piecewise` twice ("already
          assigned to model").
+- [ ] PyPSA v1.4.0 stochastic-network bugs found while porting (consider
+      reporting upstream; PSA.js mirrors 1-4):
+      1. `post_processing` groups the bus injections by the first column level,
+         which is the scenario, so `n.buses_t.p` is all zero; voltage angles
+         are not computed.
+      2. Global constraint duals are never assigned (`suffix in
+         c.static.index` only checks the scenario level), `mu` stays 0.
+      3. `get_bus_counts` counts the rows of all scenarios, so
+         `meshed_thresholds` are effectively divided by the number of
+         scenarios (SciGrid gets an extra `Bus-meshed-30-nodal_balance`).
+      4. In the stochastic model the zero-coefficient maintenance terms of
+         `{c}-fix-*` rows reference another scenario's variable (harmless,
+         linopy drops zero coefficients).
+      5. A scenario named like a component (e.g. scenario and generator
+         "peak") crashes `post_processing` (`rename` with a MultiIndex mapper).
+      6. The secant-loss error for infinite `s_nom_max` crashes with an
+         IndexError while formatting the message.
+      7. `lpf`, `pf`, `optimize_and_run_non_linear_powerflow` and
+         `optimize_transmission_expansion_iteratively` fail.
+      8. netCDF export can reorder scenarios and components (xarray aligns the
+         coordinates to sorted MultiIndex levels; see `io_stochastic`).
 - [ ] PyPSA bugs/quirks observed (mirrored or worked around in fixtures):
       clustering crashes under pandas 3 copy-on-write (runner patches
       `determine_network_topology`), loss variable order depends on Python's
