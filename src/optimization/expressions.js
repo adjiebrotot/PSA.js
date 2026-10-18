@@ -300,8 +300,13 @@ export class LinearExpression {
     return new LinearExpressionGroupby(this, group);
   }
 
-  /** Multiply by a number, Series, DataFrame or flat array (aligned on coordinates). */
+  /**
+   * Multiply by a number, Series, DataFrame or flat array (aligned on
+   * coordinates), or by a variable / single-term expression, which gives a
+   * QuadraticExpression.
+   */
   mul(c) {
+    if (c instanceof LinearExpression || (c && typeof c.labels !== "undefined" && c.dims)) return quadraticProduct(this, toExpr(c, this.model));
     if (typeof c === "number") {
       return new LinearExpression(
         this.model,
@@ -365,8 +370,15 @@ export class LinearExpression {
     return this.mul(-1);
   }
 
+  /** `expr ** 2` (a single-term expression times itself). */
+  pow(exponent) {
+    if (exponent !== 2) throw new Error("ValueError: Power must be 2.");
+    return this.mul(this);
+  }
+
   /** Add an expression, variable, number or Series (terms are concatenated). */
   add(other) {
+    if (other instanceof QuadraticExpression) return other.add(this);
     if (typeof other === "number") {
       return new LinearExpression(
         this.model,
@@ -433,6 +445,7 @@ export class LinearExpression {
 
   sub(other) {
     if (typeof other === "number") return this.add(-other);
+    if (other instanceof QuadraticExpression) return other.neg().add(this);
     return this.add(toExpr(other, this.model).neg());
   }
 
@@ -516,6 +529,202 @@ export class LinearExpression {
     }
     return out;
   }
+}
+
+/**
+ * A quadratic expression (linopy `QuadraticExpression`): every term holds a
+ * pair of variables (`vars` interleaved, the second -1 for a linear term), a
+ * coefficient, and each cell a constant.
+ */
+export class QuadraticExpression {
+  constructor(model, dims, coords, nterm, vars, coeffs, consts) {
+    this.model = model;
+    this.dims = dims;
+    this.coords = coords;
+    this.shape = shapeOf(coords);
+    this.size = sizeOf(this.shape);
+    this.strides = stridesOf(this.shape);
+    this.nterm = nterm;
+    this.vars = vars; // size * nterm * 2
+    this.coeffs = coeffs; // size * nterm
+    this.consts = consts; // size
+  }
+
+  /** The quadratic expression of a linear one (all terms linear). */
+  static fromLinear(e) {
+    const vars = new Int32Array(e.size * e.nterm * 2).fill(-1);
+    for (let i = 0; i < e.vars.length; i++) vars[2 * i] = e.vars[i];
+    return new QuadraticExpression(e.model, e.dims, e.coords, e.nterm, vars, e.coeffs, e.consts);
+  }
+
+  /** A linear expression per factor (`[first, second]`) sharing coefficients and constants. */
+  _factors() {
+    const a = new Int32Array(this.size * this.nterm);
+    const b = new Int32Array(this.size * this.nterm);
+    for (let i = 0; i < a.length; i++) {
+      a[i] = this.vars[2 * i];
+      b[i] = this.vars[2 * i + 1];
+    }
+    const mk = (v) => new LinearExpression(this.model, this.dims, this.coords, this.nterm, v, this.coeffs, this.consts);
+    return [mk(a), mk(b)];
+  }
+
+  /** Rebuild from two linear expressions with the same layout (see `_factors`). */
+  static _fromFactors(a, b) {
+    const vars = new Int32Array(a.vars.length * 2);
+    for (let i = 0; i < a.vars.length; i++) {
+      vars[2 * i] = a.vars[i];
+      vars[2 * i + 1] = b.vars[i];
+    }
+    return new QuadraticExpression(a.model, a.dims, a.coords, a.nterm, vars, a.coeffs, a.consts);
+  }
+
+  /** Apply a layout-only linear operation (sum, sel, shift...) to both factors. */
+  _map(fn) {
+    const [a, b] = this._factors();
+    return QuadraticExpression._fromFactors(fn(a), fn(b));
+  }
+
+  sum(dims = null) {
+    return this._map((e) => e.sum(dims));
+  }
+
+  sel(selectors) {
+    return this._map((e) => e.sel(selectors));
+  }
+
+  isel(indexers) {
+    return this._map((e) => e.isel(indexers));
+  }
+
+  /** Multiply by a constant (number, Series, DataFrame or flat array). */
+  mul(c) {
+    if (c instanceof LinearExpression || c instanceof QuadraticExpression || (c && typeof c.labels !== "undefined")) {
+      throw new TypeError("unsupported operand type(s) for *: 'QuadraticExpression' and an expression");
+    }
+    return this._map((e) => e.mul(c));
+  }
+
+  neg() {
+    return this.mul(-1);
+  }
+
+  /** Add a quadratic or linear expression, variable or number (terms concatenated, quadratic first). */
+  add(other) {
+    if (typeof other === "number") {
+      return new QuadraticExpression(this.model, this.dims, this.coords, this.nterm, this.vars, this.coeffs, this.consts.map((x) => x + other));
+    }
+    const o = other instanceof QuadraticExpression ? other : QuadraticExpression.fromLinear(toExpr(other, this.model));
+    const [a1, a2] = this._factors();
+    const [b1, b2] = o._factors();
+    return QuadraticExpression._fromFactors(a1.add(b1), a2.add(b2));
+  }
+
+  sub(other) {
+    if (typeof other === "number") return this.add(-other);
+    if (other instanceof QuadraticExpression) return this.add(other.neg());
+    return this.add(toExpr(other, this.model).neg());
+  }
+
+  le() {
+    throw new Error("NotImplementedError: quadratic constraints are not supported");
+  }
+
+  ge() {
+    return this.le();
+  }
+
+  eq() {
+    return this.le();
+  }
+
+  /** Solution values (after solving). */
+  get solution() {
+    const out = new Float64Array(this.size);
+    const sol = this.model._labelSolution();
+    for (let k = 0; k < this.size; k++) {
+      let s = this.consts[k];
+      for (let t = 0; t < this.nterm; t++) {
+        const i = k * this.nterm + t;
+        const v1 = this.vars[2 * i];
+        const v2 = this.vars[2 * i + 1];
+        if (v1 < 0) continue;
+        s += this.coeffs[i] * sol.get(v1) * (v2 < 0 ? 1 : sol.get(v2));
+      }
+      out[k] = s;
+    }
+    return out;
+  }
+}
+
+/**
+ * `a * b` of two linear expressions, `b` with a single term (linopy):
+ * `(v1 + c1) * (v2 + c2) = v1 * v2 + c1 * v2 + c2 * v1 + c1 * c2`, with the
+ * cross terms appended as linear terms.
+ */
+function quadraticProduct(a, b) {
+  if (b.nterm > 1) throw new TypeError("Multiplication of multiple terms is not supported.");
+  const constant = (e) => e.nterm === 0 || Array.from(e.vars).every((v) => v < 0);
+  if (constant(b)) return a.mul(Array.from(broadcastTo(b, a).consts));
+  if (constant(a)) return b.mul(Array.from(broadcastTo(a, b).consts));
+  const dims = [...a.dims, ...b.dims.filter((d) => !a.dims.includes(d))];
+  for (const d of b.dims) {
+    const i = a.dims.indexOf(d);
+    if (i >= 0 && a.coords[i].length !== b.coords[b.dims.indexOf(d)].length) {
+      throw new Error(`NotImplementedError: product of expressions with different ${d} coordinates`);
+    }
+  }
+  const coords = dims.map((d) => (a.dims.includes(d) ? a.coords[a.dims.indexOf(d)] : b.coords[b.dims.indexOf(d)]));
+  const shape = shapeOf(coords);
+  const size = sizeOf(shape);
+  const strides = stridesOf(shape);
+  const nt = a.nterm;
+  const vars = new Int32Array(size * nt * 2);
+  const coeffs = new Float64Array(size * nt);
+  const consts = new Float64Array(size);
+  const ac = new Float64Array(size);
+  const bc = new Float64Array(size);
+  const cellOf = (e, pos) => e.dims.reduce((k, d, i) => k + pos[dims.indexOf(d)] * e.strides[i], 0);
+  for (let k = 0; k < size; k++) {
+    const pos = unravel(k, shape, strides);
+    const ka = cellOf(a, pos);
+    const kb = cellOf(b, pos);
+    for (let t = 0; t < nt; t++) {
+      vars[2 * (k * nt + t)] = a.vars[ka * nt + t];
+      vars[2 * (k * nt + t) + 1] = b.vars[kb];
+      coeffs[k * nt + t] = a.coeffs[ka * nt + t] * b.coeffs[kb];
+    }
+    ac[k] = a.consts[ka];
+    bc[k] = b.consts[kb];
+    consts[k] = a.consts[ka] * b.consts[kb];
+  }
+  let res = new QuadraticExpression(a.model, dims, coords, nt, vars, coeffs, consts);
+  const fill0 = (x) => (Number.isNaN(x) ? 0 : x);
+  const resetConst = (e) => new LinearExpression(e.model, e.dims, e.coords, e.nterm, e.vars, e.coeffs, new Float64Array(e.size));
+  if (Array.from(ac).some((x) => x !== 0)) res = res.add(resetConst(broadcastTo(b, res)).mul(Array.from(ac, fill0)));
+  if (Array.from(bc).some((x) => x !== 0)) res = res.add(resetConst(broadcastTo(a, res)).mul(Array.from(bc, fill0)));
+  return res;
+}
+
+/** `e` broadcast to the dims and coordinates of `target` (terms repeated). */
+function broadcastTo(e, target) {
+  if (e.dims.length === target.dims.length && e.dims.every((d, i) => d === target.dims[i])) return e;
+  const shape = target.shape;
+  const size = target.size;
+  const nt = e.nterm;
+  const vars = new Int32Array(size * nt);
+  const coeffs = new Float64Array(size * nt);
+  const consts = new Float64Array(size);
+  for (let k = 0; k < size; k++) {
+    const pos = unravel(k, shape, target.strides);
+    const src = e.dims.reduce((s, d, i) => s + pos[target.dims.indexOf(d)] * e.strides[i], 0);
+    for (let t = 0; t < nt; t++) {
+      vars[k * nt + t] = e.vars[src * nt + t];
+      coeffs[k * nt + t] = e.coeffs[src * nt + t];
+    }
+    consts[k] = e.consts[src];
+  }
+  return new LinearExpression(e.model, target.dims, target.coords, nt, vars, coeffs, consts);
 }
 
 /** `expr.rolling({dim: window})`: windows along one dimension. */
@@ -647,7 +856,7 @@ export function groupSum(e, dim, keys, names, { inPlace = false, compare = compa
 
 /** Convert a variable / expression / number to a LinearExpression. */
 export function toExpr(x, model) {
-  if (x instanceof LinearExpression) return x;
+  if (x instanceof LinearExpression || x instanceof QuadraticExpression) return x;
   if (typeof x === "number") return LinearExpression.constant(model, x);
   if (x && typeof x.labels !== "undefined" && x.dims) return LinearExpression.fromVariable(x);
   throw new TypeError(`Cannot convert ${x} to a linear expression`);
@@ -687,7 +896,7 @@ export class ConstraintSpec {
 
 /** Install expression helpers on the Variable and Model classes. */
 export function installExpressions(Variable, Model) {
-  for (const name of ["sel", "isel", "roll", "mul", "neg", "add", "sub", "sum", "diff", "rolling", "cumsum", "groupby", "le", "ge", "eq"]) {
+  for (const name of ["sel", "isel", "roll", "mul", "neg", "pow", "add", "sub", "sum", "diff", "rolling", "cumsum", "groupby", "le", "ge", "eq"]) {
     Variable.prototype[name] = function exprMethod(...args) {
       return LinearExpression.fromVariable(this)[name](...args);
     };
@@ -735,17 +944,53 @@ export function installExpressions(Variable, Model) {
     return this.add_constraint(con);
   };
 
-  /** Replace the objective by a (scalar or summed) linear expression. */
+  /**
+   * Replace the objective by a (scalar or summed) linear or quadratic
+   * expression (`sense` "min" or "max", or `{sense}`).
+   */
   Model.prototype.set_objective = function setObjective(expr, sense = "min") {
+    if (sense && typeof sense === "object") sense = sense.sense ?? "min";
     let e = toExpr(expr, this);
     if (e.dims.length) e = e.sum();
-    this.objective = { vars: Array.from(e.vars), coeffs: Array.from(e.coeffs, (x) => (Number.isNaN(x) ? 0 : x)), q1: [], q2: [], qcoeffs: [], const: e.consts[0] ?? 0, sense };
+    const coeff = (x) => (Number.isNaN(x) ? 0 : x);
+    const o = { vars: [], coeffs: [], q1: [], q2: [], qcoeffs: [], const: e.consts[0] ?? 0, sense };
+    if (e instanceof QuadraticExpression) {
+      for (let t = 0; t < e.nterm; t++) {
+        const [v1, v2] = [e.vars[2 * t], e.vars[2 * t + 1]];
+        if (v2 < 0) {
+          o.vars.push(v1);
+          o.coeffs.push(coeff(e.coeffs[t]));
+        } else {
+          o.q1.push(v1);
+          o.q2.push(v2);
+          o.qcoeffs.push(coeff(e.coeffs[t]));
+        }
+      }
+    } else {
+      o.vars = Array.from(e.vars);
+      o.coeffs = Array.from(e.coeffs, coeff);
+    }
+    this.objective = o;
   };
 
-  /** Linear part of the objective as an expression. */
+  /** linopy's `add_objective(expr, overwrite, sense)`. */
+  Model.prototype.add_objective = function addObjective(expr, { overwrite = false, sense = "min" } = {}) {
+    const o = this.objective;
+    if (!overwrite && (o.vars.length || o.q1.length)) throw new Error("ValueError: Objective already defined. Set `overwrite` to True to force overwriting.");
+    this.set_objective(expr, sense);
+  };
+
+  /** The objective as an expression (quadratic if it has quadratic terms). */
   Model.prototype.objective_expression = function objectiveExpression() {
     const o = this.objective;
-    return new LinearExpression(this, [], [], o.vars.length, Int32Array.from(o.vars), Float64Array.from(o.coeffs), Float64Array.of(o.const || 0));
+    const lin = new LinearExpression(this, [], [], o.vars.length, Int32Array.from(o.vars), Float64Array.from(o.coeffs), Float64Array.of(o.const || 0));
+    if (!o.q1.length) return lin;
+    const vars = new Int32Array(o.q1.length * 2);
+    o.q1.forEach((v, t) => {
+      vars[2 * t] = v;
+      vars[2 * t + 1] = o.q2[t];
+    });
+    return new QuadraticExpression(this, [], [], o.q1.length, vars, Float64Array.from(o.qcoeffs), Float64Array.of(0)).add(lin);
   };
 
   Model.prototype._labelSolution = function labelSolution() {

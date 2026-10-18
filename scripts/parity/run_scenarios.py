@@ -79,6 +79,10 @@ def decode(v, n):
             if spec.get("column_names"):
                 columns = pd.MultiIndex.from_tuples([tuple(c) for c in columns], names=spec["column_names"])
             return pd.DataFrame([[decode(x, n) for x in row] for row in spec["data"]], index=spec["index"], columns=columns)
+        if "$var" in v:
+            return n.model.variables[v["$var"]]
+        if "$result" in v:
+            return _RESULTS[v["$result"]]
         if "$da" in v:
             # DataArray with named dims; "snapshot" coordinates default to n.snapshots
             import xarray as xr
@@ -122,9 +126,27 @@ def linexpr_json(e) -> dict:
     }
 
 
+def quadexpr_json(e):
+    """A linopy QuadraticExpression: like a LinearExpression, with a (var1, var2) pair per term (var2 -1 for linear terms)."""
+    dims = [d for d in e.dims if d not in ("_term", "_factor")]
+    vars_ = e.vars.transpose(*dims, "_term", "_factor").values
+    coeffs = e.coeffs.transpose(*dims, "_term").values
+    const = e.const.transpose(*dims).values
+    return {
+        "dims": dims,
+        "coords": [{"names": list(e.indexes[d].names), "values": [nan_label(label(v)) for v in e.indexes[d]]} for d in dims],
+        "nterm": int(e.sizes["_term"]),
+        "vars": [int(x) for x in vars_.ravel()],
+        "coeffs": [value(x) for x in coeffs.ravel()],
+        "const": [value(x) for x in const.ravel()],
+    }
+
+
 def to_json(obj):
     import linopy
 
+    if isinstance(obj, linopy.QuadraticExpression):
+        return {"$type": "quadexpr", **quadexpr_json(obj)}
     if isinstance(obj, linopy.LinearExpression):
         return {"$type": "linexpr", **linexpr_json(obj)}
     if isinstance(obj, pd.DataFrame):
@@ -178,7 +200,12 @@ def run(scenario: dict) -> dict:
     return records
 
 
+_RESULTS = {}
+
+
 def _run_op(op, state, records, results):
+    global _RESULTS
+    _RESULTS = results
     n = state["n"]
     if True:
         kind = op[0]
@@ -269,6 +296,13 @@ def _run_op(op, state, records, results):
             if isinstance(obj, linopy.Variable):
                 obj = obj.to_linexpr()
             results[out_key] = obj
+        elif kind == "set_objective":
+            # replace the objective by an expression (optionally added to the current one)
+            _, key, opts = op
+            expr = results[key]
+            if opts.get("add"):
+                expr = n.model.objective.expression + expr
+            n.model.add_objective(expr, overwrite=True, sense=opts.get("sense", "min"))
         elif kind == "expr_constraint":
             _, out_key, sign, rhs, cname = op
             n.model.add_constraints(results[out_key], sign, decode(rhs, n), name=cname)

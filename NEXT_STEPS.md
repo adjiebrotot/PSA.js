@@ -89,8 +89,10 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       `sum`, `shift`, `roll`, `diff`, `rolling().sum()`, `cumsum` (one
       dimension, as linopy), `where`, `fillna`, `groupby(series).sum()`,
       `le/ge/eq`, `set_objective` (scenario `opt_linexpr`: term layout incl.
-      -1/NaN padding, LP rows, solution). Missing: quadratic expressions
-      (`x * y`, quadratic objectives from custom code), `groupby` with a
+      -1/NaN padding, LP rows, solution), quadratic expressions (`x * y`,
+      `expr * var`, `pow(2)`, sums, mixing with linear terms) and quadratic
+      objectives via `set_objective` / `add_objective` (scenario
+      `opt_quadexpr`). Missing: quadratic constraints, `groupby` with a
       DataFrame/multi-key grouper, centred rolling windows, `where` with a
       condition over dimensions the expression lacks, `Variable.fillna`, and
       chains on Variable-returning operations (JS `Variable.shift/where`

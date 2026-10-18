@@ -89,7 +89,8 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
   `reformulate_sos: true`, as HiGHS has no native SOS support), custom
   constraints through a linopy-style expression API (`sel`, `isel`, `sum`,
   `shift`, `roll`, `diff`, `rolling().sum()`, `cumsum`, `where`, `fillna`,
-  `groupby().sum()`, with linopy's term layout).
+  `groupby().sum()`, with linopy's term layout) and quadratic expressions for
+  custom objectives (`x.mul(y)`, `pow(2)`, `m.add_objective(q, {overwrite})`).
 - **Statistics**: capex, opex, capacities, supply/withdrawal, energy balance,
   transmission, curtailment, capacity factor, revenue, market value, prices,
   with PyPSA's groupers and rounding/drop_zero semantics.

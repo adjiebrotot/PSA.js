@@ -5,7 +5,7 @@
  */
 
 import assert from "node:assert/strict";
-import { Network, NetworkCollection, DataFrame, Series, Index, LinearExpression } from "../src/index.js";
+import { Network, NetworkCollection, DataFrame, Series, Index, LinearExpression, QuadraticExpression } from "../src/index.js";
 import path from "node:path";
 import { ROOT, examplePath, decode as decodeFixture, assertFrameClose, assertSeriesClose, assertNetworkMatches, isClose, fmtLabel } from "./helpers.js";
 
@@ -48,6 +48,8 @@ export function decodeValue(v, n) {
       const columns = spec.column_names ? new Index(spec.columns, spec.column_names) : spec.columns;
       return new DataFrame({ index: new Index(spec.index), columns, data });
     }
+    if ("$var" in v) return n.model.variables.get(v.$var);
+    if ("$result" in v) return currentResults[v.$result];
     if ("$da" in v) {
       // a constant with named dims: a Series (1-D) or DataFrame (2-D) whose
       // index/column names carry the dims
@@ -116,11 +118,18 @@ export async function getPath(n, path) {
   return obj;
 }
 
+// results of the running scenario (for `$result` references)
+let currentResults = {};
+
+// Python operator methods used in scenario call chains
+const DUNDER = { __pow__: "pow", __neg__: "neg", __mul__: "mul", __add__: "add", __sub__: "sub" };
+
 export async function runScenario(scenario, onRecord = null) {
   let n = null;
   const records = {};
   const saved = {};
   const results = {};
+  currentResults = results;
   const runOp = async (op) => {
     const kind = op[0];
     switch (kind) {
@@ -243,9 +252,17 @@ export async function runScenario(scenario, onRecord = null) {
         const [, outKey, start, chain] = op;
         let obj = "var" in start ? n.model.variables.get(start.var) : results[start.result];
         for (const [name, args = [], kwargs = {}] of chain) {
-          obj = await callWithKwargs(obj, name, decodeValue(args, n), decodeValue(kwargs, n));
+          obj = await callWithKwargs(obj, DUNDER[name] ?? name, decodeValue(args, n), decodeValue(kwargs, n));
         }
-        results[outKey] = obj instanceof LinearExpression ? obj : obj.toExpr();
+        results[outKey] = obj instanceof LinearExpression || obj instanceof QuadraticExpression ? obj : obj.toExpr();
+        break;
+      }
+      case "set_objective": {
+        // replace the objective by an expression (optionally added to the current one)
+        const [, key, opts = {}] = op;
+        let expr = results[key];
+        if (opts.add) expr = n.model.objective_expression().add(expr);
+        n.model.add_objective(expr, { overwrite: true, sense: opts.sense ?? "min" });
         break;
       }
       case "expr_constraint": {
@@ -362,6 +379,7 @@ export function assertRecordMatches(actual, expected, opts) {
       assertLpMatches(actual.$lp, expected.text, opts);
       break;
     case "linexpr":
+    case "quadexpr":
       assertLinexprMatches(actual, expected, { ...opts, path: where });
       break;
     case "dict":
@@ -385,6 +403,9 @@ export function assertRecordMatches(actual, expected, opts) {
  */
 export function assertLinexprMatches(actual, expected, { exprRtol = 1e-12, path: where = "linexpr" } = {}) {
   assert.ok(actual && actual.vars && actual.dims, `${where}: expected a LinearExpression, got ${actual?.constructor?.name}`);
+  // quadratic expressions hold a pair of variables per term
+  const factors = expected.$type === "quadexpr" ? 2 : 1;
+  assert.equal(actual instanceof QuadraticExpression, factors === 2, `${where}: expected a ${factors === 2 ? "Quadratic" : "Linear"}Expression, got ${actual.constructor.name}`);
   assert.deepEqual(actual.dims, expected.dims, `${where}: dims differ`);
   expected.coords.forEach((c, d) => {
     const idx = actual.coords[d];
@@ -395,9 +416,10 @@ export function assertLinexprMatches(actual, expected, { exprRtol = 1e-12, path:
   assert.equal(actual.nterm, expected.nterm, `${where}: nterm differs`);
   assert.deepEqual(Array.from(actual.vars), expected.vars, `${where}: term variables differ`);
   const close = (a, b) => a === b || (Number.isNaN(a) && Number.isNaN(b)) || Math.abs(a - b) <= exprRtol * Math.max(Math.abs(a), Math.abs(b));
-  expected.vars.forEach((v, i) => {
+  expected.coeffs.forEach((c, i) => {
+    const v = expected.vars[i * factors];
     if (v < 0) return;
-    const b = decodeFixture(expected.coeffs[i]);
+    const b = decodeFixture(c);
     if (!close(actual.coeffs[i], b)) assert.fail(`${where}: coeff[${i}] (var ${v}) PSA.js=${actual.coeffs[i]} PyPSA=${b}`);
   });
   assert.equal(actual.consts.length, expected.const.length, `${where}: const size differs`);

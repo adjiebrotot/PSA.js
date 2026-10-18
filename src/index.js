@@ -15,7 +15,7 @@ import "./clustering/index.js";
 import "./network/compat.js";
 import "./network/netcdf.js";
 export { Model as LinopyModel, Variable as LinopyVariable } from "./optimization/linopy.js";
-export { LinearExpression, ConstraintSpec, merge as mergeExpressions } from "./optimization/expressions.js";
+export { LinearExpression, QuadraticExpression, ConstraintSpec, merge as mergeExpressions } from "./optimization/expressions.js";
 export { generate_directions_random, generate_directions_evenly_spaced, generate_directions_halton } from "./optimization/mga.js";
 export { discretized_capacity } from "./optimization/abstract.js";
 export { PiecewiseOptions } from "./optimization/piecewise.js";
