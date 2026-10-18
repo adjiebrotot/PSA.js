@@ -97,29 +97,59 @@ function connectedComponents(rows) {
   return { count: k, labels };
 }
 
+const sqNorm = (x) => x.reduce((s, v) => s + v * v, 0); // einsum("ij,ij->i")
+const fmaDot = (x, y) => {
+  // BLAS kernels accumulate the products with FMA
+  let dot = 0;
+  for (let k = 0; k < x.length; k++) dot = pyFma(x[k], y[k], dot);
+  return dot;
+};
+/** sklearn `normalize` (l2): rows divided by their norm (0 -> 1). */
+const unit = (x) => {
+  const nrm = Math.sqrt(sqNorm(x));
+  const d = nrm < 10 * Number.EPSILON ? 1 : nrm;
+  return x.map((v) => v / d);
+};
+
 /**
- * sklearn `euclidean_distances` (squared, before the square root) between
- * rows: `-2 X.Y^T + |x|^2 + |y|^2`, the products accumulated with FMA as in
- * the BLAS kernel, the norms summed plainly (`einsum`). Rounding matters:
- * identical points need not come out at exactly zero.
+ * sklearn `pairwise_distances(Xi, Xj, metric)` between rows. Euclidean:
+ * `sqrt(-2 X.Y^T + |x|^2 + |y|^2)` (rounding matters: identical points need
+ * not come out at exactly zero); manhattan: scipy's `cdist(cityblock)`;
+ * cosine: `1 - normalize(X).normalize(Y)^T`, clipped to [0, 2].
  */
-function sqDistances(Xi, Xj) {
-  const norm = (x) => x.reduce((s, v) => s + v * v, 0);
-  return Xi.map((x) => {
-    const xx = norm(x);
-    return Xj.map((y) => {
-      let dot = 0;
-      for (let k = 0; k < x.length; k++) dot = pyFma(x[k], y[k], dot);
-      return Math.max(-2 * dot + xx + norm(y), 0);
+function pairwiseDistances(Xi, Xj, metric = "euclidean") {
+  if (metric === "manhattan" || metric === "l1") {
+    return Xi.map((x) => Xj.map((y) => x.reduce((s, v, k) => s + Math.abs(v - y[k]), 0)));
+  }
+  if (metric === "cosine") {
+    const yi = Xj.map(unit);
+    return Xi.map((x) => {
+      const xn = unit(x);
+      return yi.map((yn) => Math.min(Math.max(-fmaDot(xn, yn) + 1, 0), 2));
     });
+  }
+  return Xi.map((x) => {
+    const xx = sqNorm(x);
+    return Xj.map((y) => Math.sqrt(Math.max(-2 * fmaDot(x, y) + xx + sqNorm(y), 0)));
   });
+}
+
+/** sklearn `paired_distances(x, y, metric)` of two rows. */
+function pairedDistance(x, y, metric = "euclidean") {
+  if (metric === "manhattan" || metric === "l1") return x.reduce((s, v, k) => s + Math.abs(v - y[k]), 0);
+  if (metric === "cosine") {
+    const xn = unit(x);
+    const yn = unit(y);
+    return 0.5 * sqNorm(xn.map((v, k) => v - yn[k]));
+  }
+  return Math.sqrt(sqNorm(x.map((v, k) => v - y[k])));
 }
 
 /**
  * `_fix_connectivity`: symmetric row lists (sorted, LIL), and when the graph
  * is disconnected every pair of components joined at their closest samples.
  */
-function fixConnectivity(X, adjacency) {
+function fixConnectivity(X, adjacency, metric = "euclidean") {
   const n = X.length;
   const sets = Array.from({ length: n }, () => new Set());
   adjacency.forEach(([i, j]) => {
@@ -133,9 +163,10 @@ function fixConnectivity(X, adjacency) {
       const idxI = [...labels.keys()].filter((p) => labels[p] === i);
       for (let j = 0; j < i; j++) {
         const idxJ = [...labels.keys()].filter((p) => labels[p] === j);
-        const D = sqDistances(
+        const D = pairwiseDistances(
           idxI.map((p) => X[p]),
           idxJ.map((p) => X[p]),
+          metric,
         );
         let best = [0, 0];
         D.forEach((r, a) => r.forEach((d, b) => d < D[best[0]][best[1]] && (best = [a, b])));
@@ -278,14 +309,82 @@ function headLabels(parent, nSamples) {
 }
 
 /**
- * Labels of `AgglomerativeClustering(n_clusters, connectivity, linkage="ward")
- * .fit_predict(X)`: `X` rows are samples, `adjacency` a list of `[i, j]`
- * connected sample pairs.
+ * `linkage_tree(X, connectivity, n_clusters, linkage, affinity)` for complete
+ * and average linkage: edges in a heap compared by weight only (sklearn's
+ * `WeightedEdge`), cluster neighbourhoods as key-ordered maps merged by max
+ * or size-weighted mean (`max_merge` / `average_merge`).
  */
-export function wardClustering(X, adjacency, nClusters) {
+function linkageTree(X, rows, nClusters, linkage, metric) {
   const nSamples = X.length;
-  const { rows } = fixConnectivity(X, adjacency);
+  if (nClusters !== null && nClusters > nSamples) throw new Error(`ValueError: Cannot provide more clusters than samples. ${nClusters} n_clusters was asked, and there are ${nSamples} samples.`);
+  const nNodes = nClusters === null ? 2 * nSamples - 1 : 2 * nSamples - nClusters;
+  const lt = (a, b) => a[0] < b[0];
+  // A[i]: Map neighbour -> distance, kept in ascending key order (std::map)
+  const A = new Array(nNodes).fill(null);
+  const inertia = [];
+  rows.forEach((r, ind) => {
+    const nbrs = r.filter((c) => c !== ind);
+    A[ind] = new Map(nbrs.map((c) => [c, pairedDistance(X[ind], X[c], metric)]));
+    for (const c of nbrs) if (c < ind) inertia.push([A[ind].get(c), ind, c]);
+  });
+  heapify(inertia, lt);
+  const parent = Int32Array.from({ length: nNodes }, (_, i) => i);
+  const used = new Int32Array(nNodes).fill(1);
+  const children = [];
+  const sortedMap = (m) => new Map([...m.entries()].sort((a, b) => a[0] - b[0]));
+  for (let k = nSamples; k < nNodes; k++) {
+    let i;
+    let j;
+    for (;;) {
+      [, i, j] = heappop(inertia, lt);
+      if (used[i] && used[j]) break;
+    }
+    parent[i] = k;
+    parent[j] = k;
+    children.push([i, j]);
+    const ni = used[i];
+    const nj = used[j];
+    used[k] = ni + nj;
+    used[i] = 0;
+    used[j] = 0;
+    const merged = new Map();
+    for (const [c, d] of A[i]) if (used[c]) merged.set(c, d);
+    for (const [c, d] of A[j]) {
+      if (!used[c]) continue;
+      if (!merged.has(c)) merged.set(c, d);
+      else if (linkage === "complete") merged.set(c, Math.max(merged.get(c), d));
+      else merged.set(c, (ni * merged.get(c) + nj * d) / (ni + nj));
+    }
+    const coord = sortedMap(merged);
+    for (const [c, d] of coord) {
+      A[c].set(k, d);
+      heappush(inertia, [d, k, c], lt);
+    }
+    A[k] = coord;
+    A[i] = null;
+    A[j] = null;
+  }
+  return { children: children.map(([a, b]) => [b, a]), parent };
+}
+
+/**
+ * Labels of `AgglomerativeClustering(n_clusters, connectivity, linkage,
+ * metric).fit_predict(X)`: `X` rows are samples, `adjacency` a list of
+ * `[i, j]` connected sample pairs. Linkages "ward", "complete" and
+ * "average"; metrics "euclidean"/"l2", "manhattan"/"l1" and "cosine".
+ */
+export function agglomerativeClustering(X, adjacency, nClusters, { linkage = "ward", metric = "euclidean" } = {}) {
+  const nSamples = X.length;
+  if (linkage !== "ward" && metric === "cosine" && X.some((x) => x.every((v) => v === 0))) {
+    throw new Error("ValueError: Cosine affinity cannot be used when X contains zero vectors");
+  }
+  const { rows } = fixConnectivity(X, adjacency, linkage === "ward" ? "euclidean" : metric);
   const full = nClusters < Math.max(100, 0.02 * nSamples);
-  const { children, parent } = wardTree(X, rows, full ? null : nClusters);
-  return full ? hcCut(nClusters, children, nSamples) : headLabels(parent, nSamples);
+  const tree = linkage === "ward" ? wardTree(X, rows, full ? null : nClusters) : linkageTree(X, rows, full ? null : nClusters, linkage, metric);
+  return full ? hcCut(nClusters, tree.children, nSamples) : headLabels(tree.parent, nSamples);
+}
+
+/** Ward clustering (`agglomerativeClustering` with linkage "ward"). */
+export function wardClustering(X, adjacency, nClusters) {
+  return agglomerativeClustering(X, adjacency, nClusters);
 }

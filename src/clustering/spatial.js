@@ -11,7 +11,7 @@ import { haversinePts } from "../components/components.js";
 import { logger } from "../logger.js";
 import { pyHypot } from "../core/pymath.js";
 import { greedy_modularity_communities } from "./modularity.js";
-import { wardClustering } from "./hac.js";
+import { agglomerativeClustering } from "./hac.js";
 
 const sumKeepNa = (xs) => {
   const v = xs.filter((x) => !(typeof x === "number" && Number.isNaN(x)));
@@ -655,13 +655,16 @@ export function busmap_by_greedy_modularity(n, n_clusters, buses_i = null) {
 }
 
 /**
- * Busmap by hierarchical agglomerative clustering (scikit-learn's Ward
- * linkage) of `feature` rows, constrained to buses connected by branches.
+ * Busmap by hierarchical agglomerative clustering (scikit-learn's Ward,
+ * complete or average linkage) of `feature` rows, constrained to buses
+ * connected by branches.
  * Without a feature all buses are equally similar.
  */
 export function busmap_by_hac(n, n_clusters, { buses_i = null, branch_components = null, feature = null, affinity = "euclidean", linkage = "ward" } = {}) {
-  if (linkage !== "ward") throw new Error(`NotImplementedError: busmap_by_hac supports linkage='ward' only, got '${linkage}'`);
-  if (affinity !== "euclidean" && affinity !== "l2") {
+  if (linkage === "single") throw new Error("NotImplementedError: busmap_by_hac with linkage='single' (scipy's minimum spanning tree) is not available in PSA.js");
+  if (!["ward", "complete", "average"].includes(linkage)) throw new Error(`ValueError: Unknown linkage type ${linkage}.`);
+  if (!["euclidean", "l2", "manhattan", "l1", "cosine"].includes(affinity)) throw new Error(`NotImplementedError: metric '${affinity}' is not available in PSA.js`);
+  if (linkage === "ward" && affinity !== "euclidean" && affinity !== "l2") {
     throw new Error(`ValueError: ${affinity} was provided as metric. Ward can only work with euclidean distances (i.e. 'euclidean' and 'l2').`);
   }
   const static_ = n.c.buses.static;
@@ -686,7 +689,7 @@ export function busmap_by_hac(n, n_clusters, { buses_i = null, branch_components
       if (v !== 0 && sample.has(i)) pairs.push([sample.get(i), sample.get(j)]);
     });
   });
-  const labels = wardClustering(X, pairs, n_clusters);
+  const labels = agglomerativeClustering(X, pairs, n_clusters, { linkage, metric: affinity });
   return new Series(
     Array.from(labels, String),
     new Index(buses, "name"),

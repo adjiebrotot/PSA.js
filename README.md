@@ -132,7 +132,8 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
 - **Consistency checks** (`consistency_check`, strict mode, scenario-invariant
   attributes), `sanitize`, carrier colours.
 - **Clustering**: spatial (`get_clustering_from_busmap` with all aggregation
-  strategies, greedy-modularity and Ward HAC busmaps) and temporal
+  strategies, greedy-modularity busmaps and HAC busmaps with Ward, complete
+  and average linkage) and temporal
   (`resample` with fixed and calendar offsets such as `3h`, `W`, `ME`, `QS`,
   `YE`; `downsample`, `from_snapshot_map`, tsam-style `segment`).
 
@@ -179,7 +180,7 @@ from libm by one ulp on some CPUs).
 
 See [`NEXT_STEPS.md`](NEXT_STEPS.md) for the remaining work list. In short:
 HDF5 IO, the pandapower importer, plotting, `to_crs`, segmentation of
-non-hourly snapshots, non-Ward HAC linkages, k-means busmaps (a seeded approximation,
+non-hourly snapshots, single-linkage HAC, k-means busmaps (a seeded approximation,
 not scikit-learn's), solvers other than HiGHS.
 
 PyPSA v1.4.0 behaviour that PSA.js mirrors on stochastic networks (likely

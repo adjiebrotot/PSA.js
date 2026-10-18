@@ -12,11 +12,9 @@ PSA.js workbooks) and the browser smoke test are run separately.
 
 ## 0. Suggested next steps
 
-1. `busmap_by_hac` with complete/average linkage: sklearn's `linkage_tree`
-   with connectivity (a weight-only `WeightedEdge` heap and ordered
-   `IntFloatDict` merges, `max_merge` / `average_merge`) is exactly portable
-   on top of `src/clustering/hac.js`; single linkage needs scipy's MST with
-   numpy's unstable argsort for ties and is not.
+1. ~~`busmap_by_hac` with complete/average linkage~~ done (scenario
+   `clustering_hac`); single linkage stays open (scipy's MST with numpy's
+   unstable argsort for ties).
 2. HDF5 IO (`import_from_hdf5` / `export_to_hdf5`): PyTables table layout plus
    a minimal pickle reader/writer for the `meta` / `crs` object arrays.
 3. netCDF URL inputs (`fetch` then `from_netcdf(bytes)`), CSV/Excel URLs.
@@ -125,9 +123,12 @@ PSA.js workbooks) and the browser smoke test are run separately.
       `YS[-<month>]`; scenario `clustering_resample`);
       `busmap_by_greedy_modularity` / `cluster_by_greedy_modularity` (port of
       networkx's CNM algorithm incl. its heap tie-breaking; scenario
-      `clustering_modularity`); `busmap_by_hac` / `cluster_by_hac` with Ward
-      linkage (port of scikit-learn's connectivity-constrained `ward_tree`,
-      component completion, `_hc_cut` / `hc_get_heads`; scenario
+      `clustering_modularity`); `busmap_by_hac` / `cluster_by_hac` with Ward,
+      complete and average linkage and euclidean/manhattan/cosine metrics
+      (port of scikit-learn's connectivity-constrained `ward_tree` and
+      `linkage_tree` with its weight-only edge heap and ordered
+      `max_merge` / `average_merge`, component completion, `_hc_cut` /
+      `hc_get_heads`; scenario
       `clustering_hac`; the completion compares squared distances computed
       like numpy's BLAS `dot` with FMA, so on CPUs without FMA the fixture
       could differ for coincident buses); `segment` / `get_segment_result`
@@ -137,8 +138,9 @@ PSA.js workbooks) and the browser smoke test are run separately.
 - [ ] **Clustering** open: `segment` for snapshots that are not hourly (PyPSA
       passes the snapshot count to tsam as hours, so tsam forms several
       periods and only part of the series is segmented, an upstream bug;
-      PSA.js raises); `busmap_by_hac` with linkages other than "ward" (see
-      section 0; PSA.js raises NotImplementedError); parity for
+      PSA.js raises); `busmap_by_hac` with single linkage (scipy's minimum
+      spanning tree, ties ordered by numpy's unstable argsort) or a callable /
+      precomputed metric (PSA.js raises NotImplementedError); parity for
       `busmap_by_kmeans` (a seeded Lloyd/k-means++, not scikit-learn's, whose
       threaded chunk reductions make exact parity unlikely); multiples of
       calendar offsets in `resample` ("2W", "3ME"; PSA.js raises).
