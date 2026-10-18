@@ -68,12 +68,17 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
 - [ ] netCDF extras: `float32`, `compression=None`, URL inputs, browser support
       (h5wasm in-memory files), shapes/geometry (WKT) round trip.
 - [ ] `to_crs` (coordinate transformation; needs a proj4 equivalent).
-- [ ] **Clustering**: `segment` (tsam), `busmap_by_hac`, `busmap_by_greedy_modularity`,
-      parity for `busmap_by_kmeans` (current implementation is a seeded
+- [ ] **Clustering**: `segment` (tsam), `busmap_by_hac` (scikit-learn's
+      `AgglomerativeClustering` with a connectivity matrix; needs sklearn in
+      the fixture environment, and its default all-zero feature makes the
+      result depend on sklearn's tie-breaking), parity for `busmap_by_kmeans` (current implementation is a seeded
       Lloyd/k-means++, not scikit-learn), multiples of calendar offsets in
       `resample` ("2W", "3ME"; PSA.js raises). Done: calendar offsets `W`,
       `W-<day>`, `ME`, `MS`, `QE[-<month>]`, `QS[-<month>]`, `YE[-<month>]`,
-      `YS[-<month>]` (scenario `clustering_resample`).
+      `YS[-<month>]` (scenario `clustering_resample`);
+      `busmap_by_greedy_modularity` / `cluster_by_greedy_modularity` (port of
+      networkx's CNM algorithm incl. its heap tie-breaking, scenario
+      `clustering_modularity`).
 - [ ] Plotting (`n.plot`, `n.explore`, statistics plots) — out of scope or a
       separate package.
 - [ ] Solvers other than HiGHS; solver option passthrough is only tested for

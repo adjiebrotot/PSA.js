@@ -9,6 +9,8 @@ import { DataFrame, Series, isNumberArray } from "../core/frame.js";
 import { Network } from "../network/network.js";
 import { haversinePts } from "../components/components.js";
 import { logger } from "../logger.js";
+import { pyHypot } from "../core/pymath.js";
+import { greedy_modularity_communities } from "./modularity.js";
 
 const sumKeepNa = (xs) => {
   const v = xs.filter((x) => !(typeof x === "number" && Number.isNaN(x)));
@@ -624,6 +626,37 @@ export function busmap_by_kmeans(n, bus_weightings, n_clusters, { buses_i = null
   return new Series(labels, new Index(names, "name"));
 }
 
+/**
+ * Busmap from Clauset-Newman-Moore greedy modularity communities of the line
+ * graph, weighted by `s_nom / |r + jx|` (networkx, exactly `n_clusters`
+ * communities; labels by decreasing community size).
+ */
+export function busmap_by_greedy_modularity(n, n_clusters, buses_i = null) {
+  if (buses_i && !(buses_i instanceof Index) && !Array.isArray(buses_i)) buses_i = buses_i.buses_i ?? null;
+  const buses = buses_i === null ? n.c.buses.static.index.values : asList(buses_i);
+  n.calculate_dependent_values();
+  const st = n.c.lines.static;
+  const inBuses = new Set(buses.map(labelKey));
+  const edges = [];
+  st.index.values.forEach((_, i) => {
+    const b0 = st.col("bus0")[i];
+    const b1 = st.col("bus1")[i];
+    if (!inBuses.has(labelKey(b0)) || !inBuses.has(labelKey(b1))) return;
+    edges.push([b0, b1, st.col("s_nom")[i] / pyHypot(st.col("r")[i], st.col("x")[i])]);
+  });
+  const communities = greedy_modularity_communities(buses, edges, { best_n: n_clusters, cutoff: n_clusters });
+  const label = new Map();
+  communities.forEach((c, k) => c.forEach((b) => label.set(labelKey(b), String(k))));
+  return new Series(
+    buses.map((b) => label.get(labelKey(b))),
+    new Index(buses.map(String), "name"),
+  );
+}
+
+function asList(x) {
+  return x instanceof Index ? x.values : Array.isArray(x) ? x : [x];
+}
+
 /** `_scenarios_not_implemented`: spatial clustering does not support stochastic networks. */
 function scenariosNotImplemented(n, method) {
   if (n.has_scenarios) throw new Error(`ValueError: Method '${method}' is not yet implemented for stochastic networks.`);
@@ -665,9 +698,16 @@ export class SpatialClusteringAccessor {
     throw new Error("busmap_by_hac (scikit-learn agglomerative clustering) is not available in PSA.js; compute a busmap and use cluster_by_busmap.");
   }
 
-  busmap_by_greedy_modularity() {
+  busmap_by_greedy_modularity(n_clusters, buses_i = null) {
     scenariosNotImplemented(this._n, "busmap_by_greedy_modularity");
-    throw new Error("busmap_by_greedy_modularity (networkx) is not available in PSA.js; compute a busmap and use cluster_by_busmap.");
+    return busmap_by_greedy_modularity(this._n, n_clusters, buses_i);
+  }
+
+  cluster_by_greedy_modularity(n_clusters, buses_i = null, { line_length_factor = 1.0 } = {}) {
+    scenariosNotImplemented(this._n, "cluster_by_greedy_modularity");
+    if (buses_i && !(buses_i instanceof Index) && !Array.isArray(buses_i)) ({ buses_i = null, line_length_factor = 1.0 } = buses_i);
+    const busmap = busmap_by_greedy_modularity(this._n, n_clusters, buses_i);
+    return get_clustering_from_busmap(this._n, busmap, { line_length_factor }).n;
   }
 }
 
