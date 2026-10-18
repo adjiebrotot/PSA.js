@@ -1,6 +1,6 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 122 tests: the parity
+State at hand-off: all PSA.js tests pass (`npm test`: 123 tests: the parity
 scenarios, IO tests and the example scripts; `npm run test:browser` passes in
 headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
 of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
@@ -134,6 +134,15 @@ browser smoke test are run separately.
       failures on unnamed loads (`case9`) and on buses removed twice
       (`example_multivoltage`) are mirrored. `n.remove` now raises for
       unknown names like pandas' `drop`.
+- [x] SubNetwork API (scenario `topology_subnetwork_api`): `sub.lpf()`,
+      `sub.pf()` (iterations, errors, convergence per snapshot) and PyPSA's
+      deprecated accessors (`buses_i()` ... `stores_i()`, `buses()`,
+      `generators()`, `loads()`, `shunt_impedances()`, `storage_units()`,
+      `stores()`, `component`, `df`, `static`, `pnl`, `dynamic`,
+      `iterate_components`), `investment_period_weightings`, `scenarios`;
+      `n.optimize.expressions.n`. A fresh diff of `dir()` against PyPSA now
+      leaves `n.plot`, `n.explore`, `n.to_crs` and the xarray views `c.da` /
+      `c.ds` (and `c.n_save`).
 - [x] Small API gaps found by diffing `dir(pypsa.Network())`: deprecated
       `n.cluster` aliases (`busmap_by_hac`, `busmap_by_greedy_modularity`,
       `cluster_spatially_by_*`), `n.statistics.n` / `.is_multi_indexed`,

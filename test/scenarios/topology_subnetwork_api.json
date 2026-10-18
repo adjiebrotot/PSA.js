@@ -1,0 +1,28 @@
+{
+  "description": "SubNetwork API: component names and static data per sub-network (PyPSA's deprecated accessors), static/dynamic data, Newton-Raphson power flow of one sub-network (iterations, errors, convergence) and a linear power flow of one sub-network.",
+  "tolerance": {"rtol": 1e-08, "atol": 1e-08},
+  "ops": [
+    ["load_network", "scigrid-pf"],
+    ["call", "determine_network_topology"],
+    ["record", "sub_buses_i", "path", ["c", "sub_networks", "static", "obj", "0", ["buses_i"]]],
+    ["record", "sub_lines_i", "path", ["c", "sub_networks", "static", "obj", "0", ["lines_i"]]],
+    ["record", "sub_transformers_i", "path", ["c", "sub_networks", "static", "obj", "0", ["transformers_i"]]],
+    ["record", "sub_generators_i", "path", ["c", "sub_networks", "static", "obj", "0", ["generators_i"]]],
+    ["record", "sub_loads_i", "path", ["c", "sub_networks", "static", "obj", "0", ["loads_i"]]],
+    ["record", "sub_shunt_impedances_i", "path", ["c", "sub_networks", "static", "obj", "0", ["shunt_impedances_i"]]],
+    ["record", "sub_storage_units_i", "path", ["c", "sub_networks", "static", "obj", "0", ["storage_units_i"]]],
+    ["record", "sub_stores_i", "path", ["c", "sub_networks", "static", "obj", "0", ["stores_i"]]],
+    ["record", "sub_buses", "path", ["c", "sub_networks", "static", "obj", "0", ["buses"]]],
+    ["record", "sub_generators", "path", ["c", "sub_networks", "static", "obj", "0", ["generators"]]],
+    ["record", "sub_loads", "path", ["c", "sub_networks", "static", "obj", "0", ["loads"]]],
+    ["record", "sub_storage_units", "path", ["c", "sub_networks", "static", "obj", "0", ["storage_units"]]],
+    ["record", "sub_static_line", "path", ["c", "sub_networks", "static", "obj", "0", ["static", ["Line"]]]],
+    ["record", "sub_dynamic_load", "path", ["c", "sub_networks", "static", "obj", "0", ["dynamic", ["Load"]], "p_set"]],
+    ["record", "sub_pf", "path", ["c", "sub_networks", "static", "obj", "0", ["pf", [], {"snapshots": {"$slice": [0, 2]}}]]],
+    ["record", "network_after_sub_pf", "network"],
+    ["load_network", "ac-dc-lpf"],
+    ["call", "determine_network_topology"],
+    ["record", "acdc_sub0_lpf", "path", ["c", "sub_networks", "static", "obj", "0", ["lpf"]]],
+    ["record", "acdc_after_sub_lpf", "network"]
+  ]
+}

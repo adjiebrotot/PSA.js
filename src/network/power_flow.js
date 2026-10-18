@@ -273,7 +273,7 @@ class SubNetworkComponents {
       const buses = this._sub.c.get("buses").static.index;
       return st.filter(st.col("bus").map((b) => buses.has(b)));
     }
-    throw new Error(`Component ${c.name} not supported for sub-networks`);
+    throw new Error(`ValueError: Component ${c.name} not supported for sub-networks`);
   }
 
   get dynamic() {
@@ -1718,5 +1718,107 @@ Object.assign(Network.prototype, GraphMixin, {
 Network.prototype.determine_network_topology = function determineTopologyWrapper(opts = {}) {
   return determine_network_topology.call(this, opts);
 };
+
+// ----------------------------------------------------------------------
+// SubNetwork power flow and (deprecated in PyPSA) component accessors
+// ----------------------------------------------------------------------
+
+const subStatic = (sub, name) => sub.c.get(name).static;
+
+Object.assign(SubNetwork.prototype, {
+  /** Linear power flow of this sub-network (`sub.lpf(snapshots, {skip_pre})`). */
+  lpf(snapshots = null, opts = {}) {
+    if (isOptions(snapshots)) [snapshots, opts] = [snapshots.snapshots ?? null, snapshots];
+    subLpf(this, as_index(this.n, snapshots, "snapshots"), opts.skip_pre ?? false);
+  },
+
+  /**
+   * Newton-Raphson power flow of this sub-network; returns the iterations,
+   * remaining errors and convergence flags per snapshot (Series).
+   */
+  pf(snapshots = null, opts = {}) {
+    if (isOptions(snapshots)) [snapshots, opts] = [snapshots.snapshots ?? null, snapshots];
+    const { slack_weights = "p_set" } = opts;
+    if (!(typeof slack_weights === "string" || slack_weights instanceof Series || (slack_weights && typeof slack_weights === "object"))) {
+      throw new TypeError(`Type of 'slack_weights' must be string, pd.Series or dict. Got ${typeof slack_weights}.`);
+    }
+    const sns = as_index(this.n, snapshots, "snapshots");
+    const [it, dif, cnv] = subPf(this, sns, opts);
+    return [new Series(Float64Array.from(it), sns), new Series(Float64Array.from(dif), sns), new Series(Array.from(cnv, Boolean), sns)];
+  },
+
+  /** Component of the sub-network (deprecated in PyPSA: `sub.c.<name>`). */
+  component(c_name) {
+    return this.c.get(c_name);
+  },
+
+  /** Static data of a component in the sub-network (deprecated in PyPSA). */
+  df(c_name) {
+    return subStatic(this, c_name);
+  },
+
+  /** Static data of a component in the sub-network (deprecated in PyPSA). */
+  static(c_name) {
+    return subStatic(this, c_name);
+  },
+
+  /** Time series of a component in the sub-network (deprecated in PyPSA). */
+  pnl(c_name) {
+    return this.c.get(c_name).dynamic;
+  },
+
+  /** Time series of a component in the sub-network (deprecated in PyPSA). */
+  dynamic(c_name) {
+    return this.c.get(c_name).dynamic;
+  },
+
+  /** Components of the sub-network (all, or `components`), skipping empty ones. */
+  *iterate_components(components = null, skip_empty = true) {
+    if (components && !Array.isArray(components) && typeof components === "object") [components, skip_empty] = [components.components ?? null, components.skip_empty ?? true];
+    for (const name of components ?? this.n.all_components) {
+      const c = this.c.get(name);
+      if (!(skip_empty && c.static.empty)) yield c;
+    }
+  },
+});
+
+Object.defineProperties(SubNetwork.prototype, {
+  investment_period_weightings: {
+    /** Investment period weightings of the network. */
+    get() {
+      return this.n.investment_period_weightings;
+    },
+    configurable: true,
+  },
+  scenarios: {
+    /** Scenarios of the network. */
+    get() {
+      return this.n.scenarios;
+    },
+    configurable: true,
+  },
+});
+
+for (const [listName, method] of [
+  ["buses", "buses"],
+  ["lines", null],
+  ["transformers", null],
+  ["generators", "generators"],
+  ["loads", "loads"],
+  ["shunt_impedances", "shunt_impedances"],
+  ["storage_units", "storage_units"],
+  ["stores", "stores"],
+]) {
+  /** Names of the components in the sub-network (deprecated in PyPSA). */
+  SubNetwork.prototype[`${listName}_i`] = function componentNames() {
+    return subStatic(this, listName).index;
+  };
+  if (method) {
+    /** Static data of the components in the sub-network (deprecated in PyPSA). */
+    SubNetwork.prototype[method] = function componentStatic() {
+      return subStatic(this, listName);
+    };
+  }
+}
 
 export { prepareAndRunPf, allocatePfOutputs, subLpf, subPf };

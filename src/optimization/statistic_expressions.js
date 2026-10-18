@@ -580,6 +580,11 @@ export class StatisticExpressionsAccessor {
     this._n = n;
   }
 
+  /** The network the expressions are built for. */
+  get n() {
+    return this._n;
+  }
+
   get _model() {
     const m = this._n.model;
     if (!m) throw new Error("No model: call `n.optimize.create_model()` first.");

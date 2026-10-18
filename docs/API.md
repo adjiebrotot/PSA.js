@@ -564,6 +564,7 @@ Solve the existing model (`n.model`) and assign the results.
 | property | description |
 | --- | --- |
 | `n.optimize.expressions.is_multi_indexed` |  |
+| `n.optimize.expressions.n` |  |
 
 ### `n.optimize.expressions.capacity(opts = {})`
 
@@ -844,9 +845,11 @@ As `n.get_switchable_as_dense`: Attribute as a (snapshots x names) frame: time s
 | `sub.c` |  |
 | `sub.components` |  |
 | `sub.has_scenarios` |  |
+| `sub.investment_period_weightings` | Investment period weightings of the network. |
 | `sub.investment_periods` |  |
 | `sub.list_name` |  |
 | `sub.n` |  |
+| `sub.scenarios` | Scenarios of the network. |
 | `sub.snapshot_weightings` |  |
 | `sub.snapshots` |  |
 
@@ -861,6 +864,14 @@ Passive branches of the sub-network as a `(component, name)` indexed frame.
 ### `sub.branches_i(active_only = false)`
 
 (type, name) tuples of passive branches in this sub-network.
+
+### `sub.buses()`
+
+Static data of the components in the sub-network (deprecated in PyPSA).
+
+### `sub.buses_i()`
+
+Names of the components in the sub-network (deprecated in PyPSA).
 
 ### `sub.calculate_BODF({ skip_pre = false } = {})`
 
@@ -878,6 +889,18 @@ Power transfer distribution factors (`sub.PTDF`, branches x buses).
 
 Bus admittance matrix `Y` and the branch admittances for the AC power flow.
 
+### `sub.component(c_name)`
+
+Component of the sub-network (deprecated in PyPSA: `sub.c.<name>`).
+
+### `sub.df(c_name)`
+
+Static data of a component in the sub-network (deprecated in PyPSA).
+
+### `sub.dynamic(c_name)`
+
+Time series of a component in the sub-network (deprecated in PyPSA).
+
 ### `sub.find_bus_controls()`
 
 Assign the PV/PQ/Slack control of the buses from their generators.
@@ -886,6 +909,14 @@ Assign the PV/PQ/Slack control of the buses from their generators.
 
 Choose the slack bus (the bus of the slack generator, else the first bus) and set `slack_generator`.
 
+### `sub.generators()`
+
+Static data of the components in the sub-network (deprecated in PyPSA).
+
+### `sub.generators_i()`
+
+Names of the components in the sub-network (deprecated in PyPSA).
+
 ### `sub.graph({ branch_components = null, weight = null, inf_weight = false, include_inactive = true } = {})`
 
 Build the ordered multigraph of buses and branches.
@@ -893,6 +924,67 @@ Build the ordered multigraph of buses and branches.
 ### `sub.incidence_matrix({ branch_components = null, busorder = null } = {})`
 
 Incidence matrix (buses x active branches) as CSC.
+
+### `sub.iterate_components(components = null, skip_empty = true)`
+
+Components of the sub-network (all, or `components`), skipping empty ones.
+
+### `sub.lines_i()`
+
+Names of the components in the sub-network (deprecated in PyPSA).
+
+### `sub.loads()`
+
+Static data of the components in the sub-network (deprecated in PyPSA).
+
+### `sub.loads_i()`
+
+Names of the components in the sub-network (deprecated in PyPSA).
+
+### `sub.lpf(snapshots = null, opts = {})`
+
+Linear power flow of this sub-network (`sub.lpf(snapshots, {skip_pre})`).
+
+### `sub.pf(snapshots = null, opts = {})`
+
+Newton-Raphson power flow of this sub-network; returns the iterations,
+remaining errors and convergence flags per snapshot (Series).
+
+### `sub.pnl(c_name)`
+
+Time series of a component in the sub-network (deprecated in PyPSA).
+
+### `sub.shunt_impedances()`
+
+Static data of the components in the sub-network (deprecated in PyPSA).
+
+### `sub.shunt_impedances_i()`
+
+Names of the components in the sub-network (deprecated in PyPSA).
+
+### `sub.static(c_name)`
+
+Static data of a component in the sub-network (deprecated in PyPSA).
+
+### `sub.storage_units()`
+
+Static data of the components in the sub-network (deprecated in PyPSA).
+
+### `sub.storage_units_i()`
+
+Names of the components in the sub-network (deprecated in PyPSA).
+
+### `sub.stores()`
+
+Static data of the components in the sub-network (deprecated in PyPSA).
+
+### `sub.stores_i()`
+
+Names of the components in the sub-network (deprecated in PyPSA).
+
+### `sub.transformers_i()`
+
+Names of the components in the sub-network (deprecated in PyPSA).
 
 ## linopy model (`n.model`)
 
