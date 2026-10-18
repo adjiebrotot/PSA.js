@@ -290,6 +290,13 @@ def _run_op(op, state, records, results):
             res = target(*args, **kwargs)
             if out_key:
                 results[out_key] = res
+        elif kind == "call_module":
+            # a function of the pypsa package, e.g. "costs.annuity"
+            target = pypsa
+            for part in op[1].split("."):
+                target = getattr(target, part)
+            res = target(*decode(op[2] if len(op) > 2 else [], n), **decode(op[3] if len(op) > 3 else {}, n))
+            results[op[4]] = res
         elif kind == "create_model":
             n.optimize.create_model(**decode(op[1] if len(op) > 1 else {}, n))
         elif kind == "add_constraint":

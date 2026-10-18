@@ -1,6 +1,6 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 127 tests: the parity
+State at hand-off: all PSA.js tests pass (`npm test`: 131 tests: the parity
 scenarios, IO tests and the example scripts; `npm run test:browser` passes in
 headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
 of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
@@ -24,7 +24,7 @@ browser smoke test are run separately.
 2. ~~HDF5 IO~~ done (see section 2, IO formats).
 3. ~~URL inputs~~ done: `from_netcdf` / `from_hdf5` (and the `import_from_*`
    methods) accept http(s) URLs (`fetch`, PyPSA's `_retrieve_from_url`
-   errors, `ioOptions.allow_network_requests`); the synchronous Excel and
+   errors, `options.general.allow_network_requests`); the synchronous Excel and
    CSV loaders raise with instructions (fetch the bytes first).
 4. ~~More examples~~ done (`examples/scripts`: `mga`, `security_constrained`,
    `rolling_horizon`, `multi_investment`, `transmission_losses`; their
@@ -141,7 +141,21 @@ browser smoke test are run separately.
       `return_names` and the optimisation defaults (`solver_name`,
       `solver_options`, `log_to_console`, `include_objective_constant`);
       `optimization.model_snapshot_index`, `warnings.*` and `api.*` are
-      stored only. Tests: `test/options.test.js`.
+      stored only; `reset_option` and `PYPSA_<GROUP>__<NAME>` environment
+      variables as in PyPSA. Tests: `test/options.test.js`.
+- [x] Module helpers (scenario `module_helpers`): `costs.annuity` /
+      `costs.periodized_cost` on numbers, arrays and Series (pandas
+      alignment), `geo.haversine_pts` / `geo.haversine` / `geo.compute_bbox`
+      (`get_projection_from_crs` / `get_projected_area_factor` need cartopy
+      axes: plotting), `examples.*` (async loaders of PyPSA's published
+      example networks from data.pypsa.org with a per-user cache, the 404
+      fallback to `latest` and `clear_cache`; offline test in `io.test.js`).
+      All six example networks import identically to PyPSA (CSV exports are
+      byte-identical; the stochastic one round-trips through netCDF with
+      `n.equals`). Found on the way: metadata JSON written by Python holds
+      `NaN` / `Infinity` literals (`carbon_management`), now read and written
+      like Python's `json` module, keeping the float form of integral numbers
+      (`src/core/pyjson.js`).
 - [x] SubNetwork API (scenario `topology_subnetwork_api`): `sub.lpf()`,
       `sub.pf()` (iterations, errors, convergence per snapshot) and PyPSA's
       deprecated accessors (`buses_i()` ... `stores_i()`, `buses()`,

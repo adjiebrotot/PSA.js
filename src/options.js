@@ -2,10 +2,14 @@
 /**
  * Package options (mirrors `pypsa.options`): `options.params.statistics.round`
  * style access, `get_option(path)`, `set_option(path, value)`,
- * `option_context(path, value, ..., fn)`, `options.reset_all()` and
- * `options.describe()`. The older per-module objects (`statisticsOptions`,
+ * `option_context(path, value, ..., fn)`, `reset_option(path)`,
+ * `options.reset_all()` and `options.describe()`. Under Node.js, `PYPSA_*`
+ * environment variables set options at load time like PyPSA's
+ * (`PYPSA_PARAMS__STATISTICS__ROUND=3` sets `params.statistics.round`). The older per-module objects (`statisticsOptions`,
  * `consistencyOptions`, `ioOptions`) are views onto the same values.
  */
+
+import { logger } from "./logger.js";
 
 const SPEC = {
   "general.allow_network_requests": [true, "Allow network requests (URL inputs of the netCDF and HDF5 importers)."],
@@ -43,6 +47,12 @@ export function get_option(path) {
 export function set_option(path, value) {
   check(path);
   values.set(path, value);
+}
+
+/** Reset one option to its default. */
+export function reset_option(path) {
+  check(path);
+  values.set(path, clone(SPEC[path][0]));
 }
 
 /**
@@ -99,6 +109,7 @@ function view(prefix) {
 export const options = Object.assign(view(""), {
   get_option,
   set_option,
+  reset_option,
   /** Reset all options to their defaults. */
   reset_all() {
     for (const [k, [d]] of Object.entries(SPEC)) values.set(k, clone(d));
@@ -126,3 +137,39 @@ export const statisticsOptions = alias({ nice_names: "params.statistics.nice_nam
 export const consistencyOptions = alias({ numerical_tolerance: "params.consistency.numerical_tolerance" });
 /** IO settings (`general.allow_network_requests`). */
 export const ioOptions = alias({ allow_network_requests: "general.allow_network_requests" });
+
+/** Python literal of an environment variable (`ast.literal_eval` subset). */
+function parseEnvValue(text) {
+  const lower = text.toLowerCase();
+  if (lower === "true" || lower === "1") return true;
+  if (lower === "false" || lower === "0") return false;
+  const t = text.trim();
+  if (t === "None") return null;
+  if (/^[+-]?(\d+\.?\d*(e[+-]?\d+)?|\.\d+(e[+-]?\d+)?)$/i.test(t)) return Number(t);
+  if (/^'.*'$|^".*"$/s.test(t)) return t.slice(1, -1);
+  if (/^[[{]/.test(t)) {
+    try {
+      return JSON.parse(t.replace(/'/g, '"').replace(/\bTrue\b/g, "true").replace(/\bFalse\b/g, "false").replace(/\bNone\b/g, "null"));
+    } catch {
+      // keep the string
+    }
+  }
+  return text;
+}
+
+/** Options from `PYPSA_<GROUP>__<NAME>` environment variables (Node.js). */
+function loadFromEnv() {
+  const env = globalThis.process?.env;
+  if (!env) return;
+  for (const [key, text] of Object.entries(env)) {
+    if (!key.startsWith("PYPSA_") || text === undefined) continue;
+    const path = key.slice(6).replaceAll("__", ".").toLowerCase();
+    if (!values.has(path)) {
+      logger.warning(`Unknown option '${path}' from env var '${key}'. Use options.describe() to see valid options.`);
+      continue;
+    }
+    values.set(path, parseEnvValue(text));
+  }
+}
+
+loadFromEnv();

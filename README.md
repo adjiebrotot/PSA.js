@@ -64,7 +64,12 @@ objective), `stochastic`, `clustering`, `power_flow`, `io`, `mga`,
 API names follow PyPSA (snake_case). Python keyword arguments become a trailing
 options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
 Package options mirror `pypsa.options` (`options.params.statistics.round =
-3`, `get_option`, `set_option`, `option_context(name, value, fn)`).
+3`, `get_option`, `set_option`, `reset_option`, `option_context(name, value,
+fn)`, `PYPSA_*` environment variables). The module helpers `costs`
+(`annuity`, `periodized_cost`), `geo` (`haversine`, `haversine_pts`,
+`compute_bbox`) and `examples` (`await examples.ac_dc_meshed()` and PyPSA's
+other published example networks, cached on disk) mirror `pypsa.costs`,
+`pypsa.geo` and `pypsa.examples`.
 The API reference is in [`docs/API.md`](docs/API.md) (generated from the
 sources with `npm run docs`).
 

@@ -364,3 +364,53 @@ test("metadata JSON like Python's json module (NaN, Infinity, float repr)", asyn
   const m = Network.from_csv_folder(folder);
   assert.equal(pyJsonDumps(m.copy().meta), text);
 });
+
+test("examples: download, cache, 404 fallback and disabled network requests", { skip: process.platform !== "linux" && "cache location test written for Linux" }, async () => {
+  const http = await import("node:http");
+  const { readFileSync, existsSync } = await import("node:fs");
+  const { examples, options, PYPSA_VERSION } = await import("../src/index.js");
+  const served = [];
+  const server = http.createServer((req, res) => {
+    served.push(req.url);
+    const file = req.url === `/v${PYPSA_VERSION}/ac_dc_meshed.nc` ? ncPath("ac-dc-meshed") : req.url === "/latest/storage_hvdc.nc" ? ncPath("storage-hvdc") : null;
+    if (!file) {
+      res.writeHead(404, "Not Found").end();
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "application/octet-stream" }).end(readFileSync(file));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const dir = mkdtempSync(path.join(os.tmpdir(), "psajs-cache-"));
+  const saved = [process.env.XDG_CACHE_HOME, examples._EXAMPLES_BASE_URL];
+  process.env.XDG_CACHE_HOME = dir;
+  examples._EXAMPLES_BASE_URL = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const expected = await Network.from_netcdf(ncPath("ac-dc-meshed"));
+    const n = await examples.ac_dc_meshed();
+    assert.equal(n.name, expected.name);
+    assert.deepEqual(n.c.buses.static.index.values, expected.c.buses.static.index.values);
+    const cached = path.join(dir, "psa.js", "examples", `v${PYPSA_VERSION}`, "ac_dc_meshed.nc");
+    assert.ok(existsSync(cached));
+    // cached files load without network requests
+    options.general.allow_network_requests = false;
+    served.length = 0;
+    assert.equal((await examples.ac_dc_meshed()).name, expected.name);
+    assert.deepEqual(served, []);
+    await assert.rejects(() => examples.storage_hvdc(), /ValueError: Network requests are disabled\. .*storage_hvdc\.nc/);
+    options.general.allow_network_requests = true;
+    // 404 for the version falls back to "latest"
+    const s = await examples.storage_hvdc();
+    assert.deepEqual(served, [`/v${PYPSA_VERSION}/storage_hvdc.nc`, "/latest/storage_hvdc.nc"]);
+    assert.equal(s.name, (await Network.from_netcdf(ncPath("storage-hvdc"))).name);
+    await assert.rejects(() => examples.scigrid_de(), /HTTP Error 404/);
+    examples.clear_cache();
+    assert.ok(!existsSync(cached));
+  } finally {
+    options.general.allow_network_requests = true;
+    if (saved[0] === undefined) delete process.env.XDG_CACHE_HOME;
+    else process.env.XDG_CACHE_HOME = saved[0];
+    examples._EXAMPLES_BASE_URL = saved[1];
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

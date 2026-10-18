@@ -25,7 +25,7 @@ export const isUrl = (p) => typeof p === "string" && /^[a-z][a-z0-9+.-]*:\/\/[^\
 /** `_retrieve_from_url`: the bytes behind `url` (http and https only). */
 export async function retrieveFromUrl(url) {
   if (!ioOptions.allow_network_requests) {
-    throw new Error("ValueError: Network requests are disabled. Set `ioOptions.allow_network_requests = true` to enable URL loading.");
+    throw new Error("ValueError: Network requests are disabled. Set `options.general.allow_network_requests = true` to enable URL loading.");
   }
   logger.info(`Retrieving network data from ${url}.`);
   if (!url.startsWith("http")) throw new Error(`ValueError: Invalid URL: ${url}`);

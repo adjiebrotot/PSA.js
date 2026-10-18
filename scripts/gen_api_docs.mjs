@@ -35,7 +35,7 @@ function jsdocOf(code) {
     const i = text.indexOf(code);
     if (i < 0) continue;
     // drop what precedes the function on its line (`proto.x = `, `static `, `export `)
-    let before = text.slice(0, i).replace(/[ \t]*(?:export\s+)?(?:static\s+)?(?:[\w$.]+(?:\[[^\]]*\])?\s*=\s*)?$/, "");
+    let before = text.slice(0, i).replace(/[ \t]*(?:export\s+)?(?:static\s+)?(?:[\w$.]+(?:\[[^\]]*\])?\s*[=:]\s*)?$/, "");
     before = before.replace(/\s+$/, "");
     if (!before.endsWith("*/")) return "";
     const start = before.lastIndexOf("/**");
@@ -136,6 +136,9 @@ const sections = [
   render("Temporal clustering (`n.cluster.temporal`)", "n.cluster.temporal.", Object.getPrototypeOf(n.cluster.temporal)),
   render("Network collections (`NetworkCollection`)", "nc.", psa.NetworkCollection.prototype, "", { stopAt: psa.Network.prototype, fallback: [psa.Network.prototype, "n."] }),
   render("Sub-networks (`SubNetwork`)", "sub.", psa.SubNetwork.prototype),
+  render("Costs (`costs`, `pypsa.costs`)", "costs.", psa.costs),
+  render("Geography (`geo`, `pypsa.geo`)", "geo.", psa.geo),
+  render("Example networks (`examples`, `pypsa.examples`)", "examples.", psa.examples, "Async loaders of PyPSA's published example networks (`const n = await examples.ac_dc_meshed()`), cached on disk under Node.js; `options.general.allow_network_requests` must be true unless the file is cached."),
   render("linopy model (`n.model`)", "m.", psa.LinopyModel.prototype),
   render("Variables (`m.variables.get(name)`)", "v.", psa.LinopyVariable.prototype, "Operations on variables act on their expression (coefficient 1); `shift`, `where`, `roll`, `sel` and `isel` keep linopy's Variable semantics.", { fallback: [psa.LinearExpression.prototype, "e."] }),
   render("Linear expressions (`LinearExpression`)", "e.", psa.LinearExpression.prototype),

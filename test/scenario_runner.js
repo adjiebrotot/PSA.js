@@ -5,6 +5,7 @@
  */
 
 import assert from "node:assert/strict";
+import * as psa from "../src/index.js";
 import { Network, NetworkCollection, DataFrame, Series, Index, LinearExpression, QuadraticExpression } from "../src/index.js";
 import path from "node:path";
 import { ROOT, examplePath, decode as decodeFixture, assertFrameClose, assertSeriesClose, assertNetworkMatches, isClose, fmtLabel } from "./helpers.js";
@@ -248,6 +249,14 @@ export async function runScenario(scenario, onRecord = null) {
         for (const p of parts.slice(0, -1)) target = target[p];
         const res = await callWithKwargs(target, parts[parts.length - 1], args, kwargs);
         if (op[4]) results[op[4]] = res;
+        break;
+      }
+      case "call_module": {
+        // a function of the package, e.g. "costs.annuity"
+        const parts = op[1].split(".");
+        let target = psa;
+        for (const p of parts.slice(0, -1)) target = target[p];
+        results[op[4]] = await callWithKwargs(target, parts[parts.length - 1], decodeValue(op[2] ?? [], n), decodeValue(op[3] ?? {}, n));
         break;
       }
       case "create_model":

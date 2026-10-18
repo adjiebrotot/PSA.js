@@ -55,3 +55,22 @@ test("options change the defaults of add and statistics", async () => {
   assert.ok(Array.from(coarse.values).every(oneDecimal));
   assert.ok(!Array.from(fine.values).every(oneDecimal));
 });
+
+test("reset_option and PYPSA_* environment variables", async () => {
+  const { reset_option } = await import("../src/index.js");
+  set_option("general.allow_network_requests", false);
+  options.params.statistics.round = 2;
+  reset_option("general.allow_network_requests");
+  assert.equal(options.general.allow_network_requests, true);
+  assert.equal(options.params.statistics.round, 2);
+  options.reset_option("params.statistics.round");
+  assert.equal(options.params.statistics.round, 5);
+  assert.throws(() => reset_option("params.statistics"), /InvalidOptionError/);
+  const { execFileSync } = await import("node:child_process");
+  const out = execFileSync(
+    process.execPath,
+    ["--input-type=module", "-e", `import { options } from ${JSON.stringify(new URL("../src/index.js", import.meta.url).href)}; console.log(JSON.stringify([options.params.statistics.round, options.general.allow_network_requests, options.params.optimize.solver_options, options.params.optimize.solver_name]));`],
+    { env: { ...process.env, PYPSA_PARAMS__STATISTICS__ROUND: "3", PYPSA_GENERAL__ALLOW_NETWORK_REQUESTS: "False", PYPSA_PARAMS__OPTIMIZE__SOLVER_OPTIONS: "{'presolve': 'off', 'parallel': True}", PYPSA_PARAMS__OPTIMIZE__SOLVER_NAME: "highs" }, encoding: "utf8" },
+  );
+  assert.deepEqual(JSON.parse(out), [3, false, { presolve: "off", parallel: true }, "highs"]);
+});
