@@ -18,21 +18,36 @@ browser smoke test are run separately.
 
 ## 0. Suggested next steps
 
-1. ~~`busmap_by_hac` with complete, average and single linkage~~ done
-   (scenario `clustering_hac`; single linkage follows scipy's Kruskal over a
-   stable edge sort, so ties resolve identically).
-2. ~~HDF5 IO~~ done (see section 2, IO formats).
-3. ~~URL inputs~~ done: `from_netcdf` / `from_hdf5` (and the `import_from_*`
-   methods) accept http(s) URLs (`fetch`, PyPSA's `_retrieve_from_url`
-   errors, `options.general.allow_network_requests`); the synchronous Excel and
-   CSV loaders raise with instructions (fetch the bytes first).
-4. ~~More examples~~ done (`examples/scripts`: `mga`, `security_constrained`,
-   `rolling_horizon`, `multi_investment`, `transmission_losses`; their
-   numbers were checked against PyPSA) and ~~an API reference~~
-   (`docs/API.md`, `npm run docs`).
-5. Report the upstream bugs listed in section 3 (PyPSA issues).
-6. ~~Stochastic leftovers (components added after `set_scenarios`)~~ done
-   (scenario `stochastic_added`); remaining stochastic items in section 2.
+Done in earlier sessions: HAC linkages, HDF5 IO, URL inputs, more examples
+and the API reference, stochastic components added after `set_scenarios`,
+package options, module helpers (`costs`, `geo`, `examples`), LP and
+statistics parity on PyPSA's published example networks (see section 2).
+
+Candidates for the next session, roughly by value:
+
+1. **Decisions for the user** (outward-facing, not done without asking):
+   report the upstream PyPSA bugs listed in section 3; publish to npm
+   (package name, versioning tied to the PyPSA version).
+2. **Large models**: HiGHS-WASM is capped at 4 GB of memory, so
+   PyPSA-Eur-sized models (e.g. `carbon_management` with all 168
+   snapshots) are better solved by a native solver. A `solver_name` that
+   runs an external HiGHS binary on the LP file PSA.js already writes
+   (byte-identical to linopy's) and reads the solution back would cover
+   it; check how PyPSA's `solver_options` map to HiGHS' options file.
+3. **More CRS**: `to_crs` supports EPSG 4326, 4258, 3857, 3035 and UTM
+   32/33 (WGS 84 / ETRS89). All UTM zones (326xx/327xx, 258xx) only need
+   the WKT pattern generalised (`src/core/crs.js`, compare with pyproj's
+   `CRS.to_wkt()`); Lambert-93 (2154, LCC) needs a new projection; datum
+   shifts (27700, 31467) are harder.
+4. **Clustering leftovers**: `busmap_by_hac` with a callable or
+   precomputed metric; `busmap_by_kmeans` parity is unlikely (threaded
+   scikit-learn reductions).
+5. **xarray views** `c.da` / `c.ds`: PSA.js has no xarray; a small
+   labelled N-d array (dims, coords, values) built from `c.static` /
+   `c.dynamic` would cover the common read-only uses.
+6. Quadratic constraints in the linopy-style API (LP writing; HiGHS cannot
+   solve them) and the stochastic items in section 2 that PyPSA itself
+   does not support yet.
 
 ## 1. Housekeeping
 
@@ -157,6 +172,12 @@ browser smoke test are run separately.
       `await examples.carbon_management()`, `n.optimize.create_model().to_lp()`
       against `n.optimize.create_model().to_file(..., io_api="lp")`
       (`node --max-old-space-size=12000` for the full network).
+- [x] Solving PyPSA's published example networks (checked by hand):
+      `storage_hvdc`, `scigrid_de`, `model_energy` (2920 snapshots) and
+      `stochastic_network` give PyPSA's objective to the last digit and the
+      same network results, overview and energy balance (HiGHS-WASM takes
+      about as long as highspy). `carbon_management` was not solved: even
+      an 8-snapshot slice runs for more than 10 minutes in native HiGHS.
 - [x] Statistics on PyPSA's published example networks (checked by hand):
       the overview and 21 statistics (capex variants, capacities, opex,
       supply, withdrawal, transmission, energy balance incl. time series,
