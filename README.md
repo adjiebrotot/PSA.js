@@ -107,7 +107,8 @@ sources with `npm run docs`).
   seasonal line ratings.
 - **Optimisation**: the LP written by PSA.js is identical to linopy's LP file
   (same labels, row/term order and numbers), so HiGHS returns the same
-  solution. Covers operational/extendable/committable constraints, unit
+  solution; this holds up to PyPSA-Eur scale (the 310 MB LP of PyPSA's
+  `carbon_management` example network is byte-identical). Covers operational/extendable/committable constraints, unit
   commitment (MILP and linearised, status history, time-varying start-up and
   shut-down costs), ramp limits incl. big-M for committable+extendable,
   maintenance scheduling, modular capacities, storage units and stores,

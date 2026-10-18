@@ -373,6 +373,10 @@ def _run_op(op, state, records, results):
                 records[key] = to_json(get_path(results[op[3]], op[4]))
             elif what == "path":
                 records[key] = to_json(get_path(n, op[3]))
+            elif what == "model_terms":
+                # linopy's `_term` size per constraint (it decides how the LP writer slices blocks)
+                m = n.optimize.create_model(**decode(op[3] if len(op) > 3 else {}, n))
+                records[key] = to_json({k: int(c.data.sizes.get("_term", 0)) for k, c in m.constraints.items()})
             elif what == "model_lp":
                 import tempfile, os
                 with tempfile.TemporaryDirectory() as d:

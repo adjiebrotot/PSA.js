@@ -1,6 +1,6 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 131 tests: the parity
+State at hand-off: all PSA.js tests pass (`npm test`: 133 tests: the parity
 scenarios, IO tests and the example scripts; `npm run test:browser` passes in
 headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
 of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
@@ -143,6 +143,20 @@ browser smoke test are run separately.
       `optimization.model_snapshot_index`, `warnings.*` and `api.*` are
       stored only; `reset_option` and `PYPSA_<GROUP>__<NAME>` environment
       variables as in PyPSA. Tests: `test/options.test.js`.
+- [x] LP parity on PyPSA's published example networks (checked by hand,
+      too large for fixtures): the LP files of `model_energy` (2920
+      snapshots), `stochastic_network` and the PyPSA-Eur sector-coupled
+      `carbon_management` network (2164 buses, 6830 links, 168 snapshots:
+      a 310 MB LP) are byte-identical to PyPSA's. Fixed on the way: linopy's
+      LP writer slices blocks whose size incl. the `_term` dimension exceeds
+      2,000,000 along their largest dimension (`lpRowOrder`, test
+      `lp_writer.test.js`), which needs linopy's `_term` size per constraint
+      (`Constraint.termCount`; KVL rows are compacted by linopy's sparse
+      `@`; scenario `lp_terms`), and operational-limit constants sum the
+      initial storage levels with numpy's pairwise summation. To repeat:
+      `await examples.carbon_management()`, `n.optimize.create_model().to_lp()`
+      against `n.optimize.create_model().to_file(..., io_api="lp")`
+      (`node --max-old-space-size=12000` for the full network).
 - [x] Module helpers (scenario `module_helpers`): `costs.annuity` /
       `costs.periodized_cost` on numbers, arrays and Series (pandas
       alignment), `geo.haversine_pts` / `geo.haversine` / `geo.compute_bbox`

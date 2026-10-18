@@ -343,7 +343,10 @@ export async function runScenario(scenario, onRecord = null) {
         else if (what === "result") records[key] = results[op[3]];
         else if (what === "result_path") records[key] = await getPath(results[op[3]], op[4]);
         else if (what === "path") records[key] = await getPath(n, op[3]);
-        else if (what === "model_lp") records[key] = { $lp: n.model.to_lp() };
+        else if (what === "model_terms") {
+          const m = n.optimize.create_model(decodeValue(op[3] ?? {}, n));
+          records[key] = Object.fromEntries([...m.constraints].map(([k, c]) => [k, c.termCount]));
+        } else if (what === "model_lp") records[key] = { $lp: n.model.to_lp() };
         else if (what === "lp") records[key] = { $lp: n.optimize.create_model(decodeValue(op[3] ?? {}, n)).to_lp() };
         else throw new Error(`unknown record ${what}`);
         if (onRecord) onRecord(key, records[key]);
