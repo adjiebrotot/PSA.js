@@ -969,7 +969,7 @@ export class OptimizationAccessor {
       assign_all_duals = false,
       solver_name = get_option("params.optimize.solver_name"),
       solver_options = get_option("params.optimize.solver_options"),
-      log_to_console = get_option("params.optimize.log_to_console") ?? false,
+      log_to_console = get_option("params.optimize.log_to_console"),
       include_objective_constant = get_option("params.optimize.include_objective_constant"),
       committable_big_m = null,
       meshed_thresholds = null,
@@ -1017,7 +1017,7 @@ export class OptimizationAccessor {
     extra_functionality = null,
     solver_name = get_option("params.optimize.solver_name"),
     solver_options = get_option("params.optimize.solver_options"),
-    log_to_console = get_option("params.optimize.log_to_console") ?? false,
+    log_to_console = get_option("params.optimize.log_to_console"),
     assign_all_duals = false,
     reformulate_sos = false,
   } = {}) {

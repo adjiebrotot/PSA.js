@@ -9,6 +9,7 @@
  * solver PyPSA uses by default) reproduces PyPSA's solutions.
  */
 
+import { CLI_SOLVERS, solveWithCli } from "./cli_solvers.js";
 import { installExpressions } from "./expressions.js";
 import { Index } from "../core/index.js";
 import { polarsFloat } from "./format.js";
@@ -646,10 +647,14 @@ export class Model {
   }
 
   /**
-   * Solve with HiGHS (highs-js). Returns [status, termination_condition].
+   * Solve with HiGHS (highs-js, also in browsers) or, under Node.js, with the
+   * CBC / GLPK executables (`solver_name: "cbc"` / `"glpk"`, run on the LP
+   * file like linopy does). Returns [status, termination_condition].
    */
-  async solve({ solver_name = "highs", solver_options = {}, log_to_console = false, reformulate_sos = false } = {}) {
-    if (solver_name !== "highs") throw new Error(`Solver ${solver_name} is not available in PSA.js (only 'highs').`);
+  async solve({ solver_name = "highs", solver_options = {}, log_to_console = null, reformulate_sos = false } = {}) {
+    if (solver_name !== "highs" && !(solver_name in CLI_SOLVERS)) {
+      throw new Error(`Solver ${solver_name} is not available in PSA.js (highs, ${Object.keys(CLI_SOLVERS).join(", ")}).`);
+    }
     if (reformulate_sos !== true && reformulate_sos !== false && reformulate_sos !== "auto") {
       throw new Error(`ValueError: Invalid value for reformulate_sos: ${reformulate_sos}. Must be True, False, or 'auto'.`);
     }
@@ -667,6 +672,7 @@ export class Model {
         this.undo_sos_reformulation(state);
       }
     }
+    if (solver_name !== "highs") return this._solveCli(solver_name, solver_options, log_to_console);
     const highs = await getHighs();
     // linopy sanitizes the constraints in place before writing the problem
     for (const con of this.constraints.values()) con.sanitize_zeros().sanitize_infinities();
@@ -722,6 +728,39 @@ export class Model {
     } finally {
       model.dispose();
     }
+  }
+
+  /** Solve with a command-line solver and assign the parsed solution (linopy's `assign_result`). */
+  async _solveCli(solver_name, solver_options, log_to_console) {
+    if (this.is_quadratic) throw new Error(`ValueError: Solver ${solver_name} does not support quadratic problems.`);
+    for (const con of this.constraints.values()) con.sanitize_zeros().sanitize_infinities();
+    const lp = this.to_lp();
+    this._lp = lp;
+    // PyPSA passes log_to_console on to linopy, which hands it to the solver as an option
+    const options = log_to_console === null || log_to_console === undefined ? solver_options : { ...solver_options, log_to_console };
+    const res = await solveWithCli(solver_name, lp, options);
+    // the LP file has no objective constant, so neither has the solver's objective
+    this.objectiveValue = res.objective;
+    this.status = res.status;
+    this.termination_condition = res.termination_condition;
+    if (res.status !== "ok" || !res.primal || !res.primal.size) return [this.status, this.termination_condition];
+    for (const v of this.variables.values()) {
+      v.solution = new Float64Array(v.size);
+      for (let k = 0; k < v.size; k++) {
+        const l = v.labels[k];
+        v.solution[k] = l === -1 ? NaN : res.primal.get(l) ?? NaN;
+      }
+    }
+    if (res.dual && res.dual.size) {
+      for (const c of this.constraints.values()) {
+        c.dual = new Float64Array(c.size);
+        for (let k = 0; k < c.size; k++) {
+          const l = c.labels[k];
+          c.dual[k] = l === -1 ? NaN : res.dual.get(l) ?? NaN;
+        }
+      }
+    }
+    return [this.status, this.termination_condition];
   }
 
   toString() {

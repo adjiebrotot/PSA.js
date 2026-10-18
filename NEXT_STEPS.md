@@ -1,6 +1,6 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 134 tests: the parity
+State at hand-off: all PSA.js tests pass (`npm test`: 135 tests: the parity
 scenarios, IO tests and the example scripts; `npm run test:browser` passes in
 headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
 of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
@@ -28,12 +28,12 @@ Candidates for the next session, roughly by value:
 1. **Decisions for the user** (outward-facing, not done without asking):
    report the upstream PyPSA bugs listed in section 3; publish to npm
    (package name, versioning tied to the PyPSA version).
-2. **Large models**: HiGHS-WASM is capped at 4 GB of memory, so
-   PyPSA-Eur-sized models (e.g. `carbon_management` with all 168
-   snapshots) are better solved by a native solver. A `solver_name` that
-   runs an external HiGHS binary on the LP file PSA.js already writes
-   (byte-identical to linopy's) and reads the solution back would cover
-   it; check how PyPSA's `solver_options` map to HiGHS' options file.
+2. **Large models**: HiGHS-WASM is capped at 4 GB of memory. CBC and GLPK
+   executables are supported now (`solver_name: "cbc"` / `"glpk"`); a
+   native HiGHS binary (`highs --model_file problem.lp --solution_file
+   ...`) would be the fastest option for PyPSA-Eur-sized models, but
+   linopy has no command-line HiGHS path to mirror, so its results would
+   only be checkable against highspy's.
 3. **More CRS**: `to_crs` supports EPSG 4326, 4258, 3857, 3035 and UTM
    32/33 (WGS 84 / ETRS89). All UTM zones (326xx/327xx, 258xx) only need
    the WKT pattern generalised (`src/core/crs.js`, compare with pyproj's
@@ -271,9 +271,21 @@ Candidates for the next session, roughly by value:
       threaded chunk reductions make exact parity unlikely).
 - [ ] Plotting (`n.plot`, `n.explore`, statistics plots) — out of scope or a
       separate package.
-- [ ] Solvers other than HiGHS; solver option passthrough is only tested for
-      basic options. HiGHS' QP solver is slow on larger quadratic problems
-      (also true in PyPSA).
+- [x] Command-line solvers CBC and GLPK (`src/optimization/cli_solvers.js`,
+      Node.js; scenario `opt_cli_solvers`, skipped when `cbc` / `glpsol` are
+      not on the PATH, CI installs them): linopy's `CBC` / `GLPK` classes
+      (command lines, solver options as `-key value` / `--key value`,
+      status mapping, solution-file parsing incl. pandas' fixed-width
+      inference for GLPK's report and linopy's truncation of each block,
+      values at the printed precision, objective from the report without
+      the objective constant, no duals for GLPK MILPs). Mirrored PyPSA quirk:
+      PyPSA passes `log_to_console` (when set) to every solver as an option;
+      glpsol rejects it and linopy fails on the empty solution file
+      (`EmptyDataError`). Checked by hand on `scigrid_de` and `model_energy`
+      (identical objectives and results).
+- [ ] Other solvers (Gurobi, CPLEX, Xpress, ...: Python APIs in linopy;
+      SCIP/COPT/Mosek command lines could follow the CBC pattern). HiGHS'
+      QP solver is slow on larger quadratic problems (also true in PyPSA).
 - [ ] Deprecated APIs not mirrored (e.g. `n.lopf`, old `n.generators_t`
       style accessors beyond what exists). `dir(pypsa.Network())` and the
       `optimize`, `statistics`, `cluster` and `c` accessors were diffed

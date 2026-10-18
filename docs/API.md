@@ -570,7 +570,7 @@ Derive results after a solve: branch flows at all ports, bus injections, voltage
 
 Evaluate solved dimensions {key: weights} as a Series.
 
-### `n.optimize.solve_model({ extra_functionality = null, solver_name = get_option("params.optimize.solver_name"), solver_options = get_option("params.optimize.solver_options"), log_to_console = get_option("params.optimize.log_to_console") ?? false, assign_all_duals = false, reformulate_sos = false, } = {})`
+### `n.optimize.solve_model({ extra_functionality = null, solver_name = get_option("params.optimize.solver_name"), solver_options = get_option("params.optimize.solver_options"), log_to_console = get_option("params.optimize.log_to_console"), assign_all_duals = false, reformulate_sos = false, } = {})`
 
 Solve the existing model (`n.model`) and assign the results.
 
@@ -1141,9 +1141,11 @@ token for `undo_sos_reformulation`.
 Replace the objective by a (scalar or summed) linear or quadratic
 expression (`sense` "min" or "max", or `{sense}`).
 
-### `m.solve({ solver_name = "highs", solver_options = {}, log_to_console = false, reformulate_sos = false } = {})`
+### `m.solve({ solver_name = "highs", solver_options = {}, log_to_console = null, reformulate_sos = false } = {})`
 
-Solve with HiGHS (highs-js). Returns [status, termination_condition].
+Solve with HiGHS (highs-js, also in browsers) or, under Node.js, with the
+CBC / GLPK executables (`solver_name: "cbc"` / `"glpk"`, run on the LP
+file like linopy does). Returns [status, termination_condition].
 
 ### `m.to_lp()`
 

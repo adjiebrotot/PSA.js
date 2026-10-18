@@ -156,6 +156,7 @@ export async function runScenario(scenario, onRecord = null) {
   const records = {};
   const saved = {};
   const results = {};
+  const savedOptions = {};
   currentResults = results;
   const runOp = async (op) => {
     const kind = op[0];
@@ -251,6 +252,10 @@ export async function runScenario(scenario, onRecord = null) {
         if (op[4]) results[op[4]] = res;
         break;
       }
+      case "set_option":
+        if (!(op[1] in savedOptions)) savedOptions[op[1]] = psa.get_option(op[1]);
+        psa.set_option(op[1], decodeValue(op[2], n));
+        break;
       case "call_module": {
         // a function of the package, e.g. "costs.annuity"
         const parts = op[1].split(".");
@@ -356,19 +361,24 @@ export async function runScenario(scenario, onRecord = null) {
         throw new Error(`unknown op ${kind}`);
     }
   };
-  for (const op of scenario.ops) {
-    if (op[0] === "expect_error") {
-      let raised = false;
-      try {
-        await runOp(op[2]);
-      } catch {
-        raised = true;
+  try {
+    for (const op of scenario.ops) {
+      if (op[0] === "expect_error") {
+        let raised = false;
+        try {
+          await runOp(op[2]);
+        } catch {
+          raised = true;
+        }
+        records[op[1]] = raised;
+        if (onRecord) onRecord(op[1], raised);
+        continue;
       }
-      records[op[1]] = raised;
-      if (onRecord) onRecord(op[1], raised);
-      continue;
+      await runOp(op);
     }
-    await runOp(op);
+  } finally {
+    // options set by the scenario do not leak into the next one
+    for (const [k, v] of Object.entries(savedOptions)) psa.set_option(k, v);
   }
   return { network: n, records };
 }

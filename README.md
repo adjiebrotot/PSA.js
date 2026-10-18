@@ -125,6 +125,9 @@ sources with `npm run docs`).
   `shift`, `roll`, `diff`, `rolling().sum()`, `cumsum`, `where`, `fillna`,
   `groupby().sum()`, with linopy's term layout) and quadratic expressions for
   custom objectives (`x.mul(y)`, `pow(2)`, `m.add_objective(q, {overwrite})`).
+  Solvers: HiGHS (WebAssembly, everywhere) and, under Node.js, the CBC and
+  GLPK executables (`solver_name: "cbc"` / `"glpk"`, run on the LP file and
+  parsed like linopy, so results equal PyPSA's with the same solver).
 - **Statistics**: capex, opex, capacities, supply/withdrawal, energy balance,
   transmission, curtailment, capacity factor, revenue, market value, prices,
   with PyPSA's groupers and rounding/drop_zero semantics.
@@ -199,7 +202,7 @@ from libm by one ulp on some CPUs).
 See [`NEXT_STEPS.md`](NEXT_STEPS.md) for the remaining work list. In short:
 plotting, segmentation of non-hourly snapshots, `to_crs` beyond a set of
 common EPSG codes (4326, 4258, 3857, 3035, UTM 32/33 on WGS 84 and ETRS89), k-means busmaps (a seeded approximation,
-not scikit-learn's), solvers other than HiGHS.
+not scikit-learn's), solvers other than HiGHS, CBC and GLPK.
 
 PyPSA v1.4.0 behaviour that PSA.js mirrors on stochastic networks (likely
 upstream bugs): `n.buses_t.p` is all zero after optimisation, voltage angles

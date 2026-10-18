@@ -210,19 +210,24 @@ def get_path(n, path):
 
 
 def run(scenario: dict) -> dict:
-    state = {"n": None}
+    state = {"n": None, "options": {}}
     records = {}
     results = {}
-    for op in scenario["ops"]:
-        if op[0] == "expect_error":
-            try:
-                _run_op(op[2], state, records, results)
-                raised = False
-            except Exception:
-                raised = True
-            records[op[1]] = {"$type": "value", "value": raised}
-            continue
-        _run_op(op, state, records, results)
+    try:
+        for op in scenario["ops"]:
+            if op[0] == "expect_error":
+                try:
+                    _run_op(op[2], state, records, results)
+                    raised = False
+                except Exception:
+                    raised = True
+                records[op[1]] = {"$type": "value", "value": raised}
+                continue
+            _run_op(op, state, records, results)
+    finally:
+        # options set by the scenario do not leak into the next one
+        for k, v in state["options"].items():
+            pypsa.set_option(k, v)
     return records
 
 
@@ -290,6 +295,9 @@ def _run_op(op, state, records, results):
             res = target(*args, **kwargs)
             if out_key:
                 results[out_key] = res
+        elif kind == "set_option":
+            state["options"].setdefault(op[1], pypsa.get_option(op[1]))
+            pypsa.set_option(op[1], decode(op[2], n))
         elif kind == "call_module":
             # a function of the pypsa package, e.g. "costs.annuity"
             target = pypsa
