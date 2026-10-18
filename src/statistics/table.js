@@ -150,6 +150,24 @@ export function aggregate(values, agg) {
       const m = s.length >> 1;
       return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
     }
+    case "var":
+    case "std": {
+      // pandas' group_var: Welford's algorithm, ddof=1
+      let mean = 0;
+      let ssqdm = 0;
+      v.forEach((x, i) => {
+        const old = mean;
+        mean += (x - old) / (i + 1);
+        ssqdm += (x - old) * (x - mean);
+      });
+      const res = v.length > 1 ? ssqdm / (v.length - 1) : NaN;
+      return agg === "std" ? Math.sqrt(res) : res;
+    }
+    case "prod": {
+      let p = 1;
+      for (const x of v) p *= x;
+      return p;
+    }
     default:
       throw new Error(`Unsupported aggregation '${agg}'`);
   }

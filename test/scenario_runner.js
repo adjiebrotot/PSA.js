@@ -81,6 +81,10 @@ export function decodeValue(v, n) {
 }
 
 function callWithKwargs(target, fnName, args, kwargs) {
+  // `obj(...)` (Python `__call__`) on callable accessors such as n.statistics
+  if (fnName === "__call__" && typeof target === "function") {
+    return kwargs && Object.keys(kwargs).length ? target(...args, kwargs) : target(...args);
+  }
   const fn = target[fnName];
   if (typeof fn !== "function") throw new Error(`${fnName} is not a function on ${target}`);
   if (kwargs && Object.keys(kwargs).length) return fn.call(target, ...args, kwargs);

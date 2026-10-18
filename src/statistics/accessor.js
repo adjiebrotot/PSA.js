@@ -15,7 +15,7 @@ import { Network } from "../network/network.js";
 import { NOMINAL_ATTRS } from "../components/components.js";
 import { LOOKUP } from "../optimization/common.js";
 import { logger } from "../logger.js";
-import { Tab, KeyError, isKeyError, groupRows, groupByLevels, concatRows, roundTo } from "./table.js";
+import { Tab, KeyError, isKeyError, groupRows, groupByLevels, concatRows, roundTo, aggregate } from "./table.js";
 import { scenarioView } from "../network/scenarios.js";
 import { PySet } from "../core/pyset.js";
 
@@ -1253,12 +1253,9 @@ function prefixRows(parts, names) {
 }
 
 function aggregateArr(a, agg) {
-  const v = a.filter((x) => !Number.isNaN(x));
-  if (agg === "max") return v.length ? Math.max(...v) : NaN;
-  if (agg === "min") return v.length ? Math.min(...v) : NaN;
-  if (agg === "mean") return v.length ? v.reduce((s, x) => s + x, 0) / v.length : NaN;
+  // unweighted `DataFrame.agg(agg)` over time (NaN skipped)
   if (typeof agg === "function") return agg(a);
-  throw new Error(`Unsupported time aggregation '${agg}'`);
+  return aggregate(Array.from(a), agg);
 }
 
 function wrapKeyError(fn) {

@@ -127,11 +127,15 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       chains on Variable-returning operations (JS `Variable.shift/where`
       return expressions, so a following `shift` pads with NaN instead of a
       coefficient of 1).
-- [ ] Statistics: `aggregate_across_components`, `groupby_method` other than
-      sum/mean/min/max, callable groupers with multi-index results. (Done: the
-      overview table `n.statistics()` passes all arguments like PyPSA, the
-      component sets iterate in CPython's set order, deprecated `comps` /
-      `aggregate_groups` / `aggregate_time` are renamed.)
+- [ ] Statistics: callable groupers with multi-index results, pandas
+      aggregations beyond sum/mean/min/max/median/first/last/std/var/prod/
+      count (e.g. `sem`, `nunique`). (Done: scenario `statistics_more` covers
+      `groupby_method` and `groupby_time` aggregations, aggregation across
+      components, ports, carrier/bus-carrier filters, nice names, storage
+      capacities and price weightings; the overview table `n.statistics()`
+      passes all arguments like PyPSA, the component sets iterate in CPython's
+      set order, deprecated `comps` / `aggregate_groups` / `aggregate_time`
+      are renamed.)
 - [ ] Consistency checks: `check_dtypes`.
 - [ ] SciGrid voltage angles after optimisation use an exact grounded solve while
       PyPSA uses `numpy.linalg.pinv` (differences ~1e-4 rad; documented
