@@ -28,6 +28,11 @@ for pkg in ("numpy", "pandas", "scipy", "highspy", "linopy"):
         print(f"warning: {pkg} {version(pkg)} installed, requirements.txt pins {pin.group(1)}", file=sys.stderr)
 EOF
 
+# opt_cli_solvers runs the CBC and GLPK executables
+for exe in cbc glpsol; do
+  command -v "$exe" >/dev/null || echo "warning: $exe not on PATH; opt_cli_solvers will fail (sudo apt-get install coinor-cbc glpk-utils)" >&2
+done
+
 python ../generate_definitions.py
 python gen_networks.py
 python gen_io.py
