@@ -3,8 +3,9 @@
  * Coordinate reference systems for `n.to_crs`, `n.srid` and `n.crs`: the
  * WKT pyproj writes for a set of EPSG codes and their projections, ported
  * from PROJ (geographic WGS 84 / ETRS89, Popular Visualisation
- * Pseudo-Mercator, Lambert azimuthal equal-area and the Poder/Engsager
- * transverse Mercator of UTM). WGS 84 and ETRS89 are related by PROJ's null
+ * Pseudo-Mercator, Lambert azimuthal equal-area, Lambert conformal conic
+ * (LCC Europe, Lambert-93 on RGF93 v1) and the Poder/Engsager transverse
+ * Mercator of UTM). WGS 84 and ETRS89 are related by PROJ's null
  * transformation ("ETRS89 to WGS 84 (1)"). UTM zones: all of WGS 84 (EPSG
  * 32601-32660 north, 32701-32760 south) and ETRS89 (25828-25838), their WKT
  * built from one template and the zones' USAGE blocks (`src/data/utm_usage.js`).
@@ -22,6 +23,10 @@ export const CRS_WKT = {
     "PROJCRS[\"WGS 84 / Pseudo-Mercator\",BASEGEOGCRS[\"WGS 84\",ENSEMBLE[\"World Geodetic System 1984 ensemble\",MEMBER[\"World Geodetic System 1984 (Transit)\"],MEMBER[\"World Geodetic System 1984 (G730)\"],MEMBER[\"World Geodetic System 1984 (G873)\"],MEMBER[\"World Geodetic System 1984 (G1150)\"],MEMBER[\"World Geodetic System 1984 (G1674)\"],MEMBER[\"World Geodetic System 1984 (G1762)\"],MEMBER[\"World Geodetic System 1984 (G2139)\"],MEMBER[\"World Geodetic System 1984 (G2296)\"],ELLIPSOID[\"WGS 84\",6378137,298.257223563,LENGTHUNIT[\"metre\",1]],ENSEMBLEACCURACY[2.0]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4326]],CONVERSION[\"Popular Visualisation Pseudo-Mercator\",METHOD[\"Popular Visualisation Pseudo Mercator\",ID[\"EPSG\",1024]],PARAMETER[\"Latitude of natural origin\",0,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8801]],PARAMETER[\"Longitude of natural origin\",0,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8802]],PARAMETER[\"False easting\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8806]],PARAMETER[\"False northing\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8807]]],CS[Cartesian,2],AXIS[\"easting (X)\",east,ORDER[1],LENGTHUNIT[\"metre\",1]],AXIS[\"northing (Y)\",north,ORDER[2],LENGTHUNIT[\"metre\",1]],USAGE[SCOPE[\"Web mapping and visualisation.\"],AREA[\"World between 85.06\u00b0S and 85.06\u00b0N.\"],BBOX[-85.06,-180,85.06,180]],ID[\"EPSG\",3857]]",
   3035:
     "PROJCRS[\"ETRS89-extended / LAEA Europe\",BASEGEOGCRS[\"ETRS89\",ENSEMBLE[\"European Terrestrial Reference System 1989 ensemble\",MEMBER[\"European Terrestrial Reference Frame 1989\"],MEMBER[\"European Terrestrial Reference Frame 1990\"],MEMBER[\"European Terrestrial Reference Frame 1991\"],MEMBER[\"European Terrestrial Reference Frame 1992\"],MEMBER[\"European Terrestrial Reference Frame 1993\"],MEMBER[\"European Terrestrial Reference Frame 1994\"],MEMBER[\"European Terrestrial Reference Frame 1996\"],MEMBER[\"European Terrestrial Reference Frame 1997\"],MEMBER[\"European Terrestrial Reference Frame 2000\"],MEMBER[\"European Terrestrial Reference Frame 2005\"],MEMBER[\"European Terrestrial Reference Frame 2014\"],MEMBER[\"European Terrestrial Reference Frame 2020\"],ELLIPSOID[\"GRS 1980\",6378137,298.257222101,LENGTHUNIT[\"metre\",1]],ENSEMBLEACCURACY[0.1]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4258]],CONVERSION[\"Europe Equal Area 2001\",METHOD[\"Lambert Azimuthal Equal Area\",ID[\"EPSG\",9820]],PARAMETER[\"Latitude of natural origin\",52,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8801]],PARAMETER[\"Longitude of natural origin\",10,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8802]],PARAMETER[\"False easting\",4321000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8806]],PARAMETER[\"False northing\",3210000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8807]]],CS[Cartesian,2],AXIS[\"northing (Y)\",north,ORDER[1],LENGTHUNIT[\"metre\",1]],AXIS[\"easting (X)\",east,ORDER[2],LENGTHUNIT[\"metre\",1]],USAGE[SCOPE[\"Statistical analysis.\"],AREA[\"Europe - European Union (EU) countries and candidates. Europe - onshore and offshore: Albania; Andorra; Austria; Belgium; Bosnia and Herzegovina; Bulgaria; Croatia; Cyprus; Czechia; Denmark; Estonia; Faroe Islands; Finland; France; Germany; Gibraltar; Greece; Hungary; Iceland; Ireland; Italy; Kosovo; Latvia; Liechtenstein; Lithuania; Luxembourg; Malta; Monaco; Montenegro; Netherlands; North Macedonia; Norway including Svalbard and Jan Mayen; Poland; Portugal including Madeira and Azores; Romania; San Marino; Serbia; Slovakia; Slovenia; Spain including Canary Islands; Sweden; Switzerland; T\u00fcrkiye (Turkey); United Kingdom (UK) including Channel Islands and Isle of Man; Vatican City State.\"],BBOX[24.6,-35.58,84.73,44.83]],ID[\"EPSG\",3035]]",
+  2154:
+    "PROJCRS[\"RGF93 v1 / Lambert-93\",BASEGEOGCRS[\"RGF93 v1\",DATUM[\"Reseau Geodesique Francais 1993 v1\",ELLIPSOID[\"GRS 1980\",6378137,298.257222101,LENGTHUNIT[\"metre\",1]]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4171]],CONVERSION[\"Lambert-93\",METHOD[\"Lambert Conic Conformal (2SP)\",ID[\"EPSG\",9802]],PARAMETER[\"Latitude of false origin\",46.5,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8821]],PARAMETER[\"Longitude of false origin\",3,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8822]],PARAMETER[\"Latitude of 1st standard parallel\",49,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8823]],PARAMETER[\"Latitude of 2nd standard parallel\",44,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8824]],PARAMETER[\"Easting at false origin\",700000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8826]],PARAMETER[\"Northing at false origin\",6600000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8827]]],CS[Cartesian,2],AXIS[\"easting (X)\",east,ORDER[1],LENGTHUNIT[\"metre\",1]],AXIS[\"northing (Y)\",north,ORDER[2],LENGTHUNIT[\"metre\",1]],USAGE[SCOPE[\"Engineering survey, topographic mapping.\"],AREA[\"France - onshore and offshore, mainland and Corsica (France m\u00e9tropolitaine including Corsica).\"],BBOX[41.15,-9.86,51.56,10.38]],ID[\"EPSG\",2154]]",
+  3034:
+    "PROJCRS[\"ETRS89-extended / LCC Europe\",BASEGEOGCRS[\"ETRS89\",ENSEMBLE[\"European Terrestrial Reference System 1989 ensemble\",MEMBER[\"European Terrestrial Reference Frame 1989\"],MEMBER[\"European Terrestrial Reference Frame 1990\"],MEMBER[\"European Terrestrial Reference Frame 1991\"],MEMBER[\"European Terrestrial Reference Frame 1992\"],MEMBER[\"European Terrestrial Reference Frame 1993\"],MEMBER[\"European Terrestrial Reference Frame 1994\"],MEMBER[\"European Terrestrial Reference Frame 1996\"],MEMBER[\"European Terrestrial Reference Frame 1997\"],MEMBER[\"European Terrestrial Reference Frame 2000\"],MEMBER[\"European Terrestrial Reference Frame 2005\"],MEMBER[\"European Terrestrial Reference Frame 2014\"],MEMBER[\"European Terrestrial Reference Frame 2020\"],ELLIPSOID[\"GRS 1980\",6378137,298.257222101,LENGTHUNIT[\"metre\",1]],ENSEMBLEACCURACY[0.1]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4258]],CONVERSION[\"Europe Conformal 2001\",METHOD[\"Lambert Conic Conformal (2SP)\",ID[\"EPSG\",9802]],PARAMETER[\"Latitude of false origin\",52,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8821]],PARAMETER[\"Longitude of false origin\",10,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8822]],PARAMETER[\"Latitude of 1st standard parallel\",35,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8823]],PARAMETER[\"Latitude of 2nd standard parallel\",65,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8824]],PARAMETER[\"Easting at false origin\",4000000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8826]],PARAMETER[\"Northing at false origin\",2800000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8827]]],CS[Cartesian,2],AXIS[\"northing (N)\",north,ORDER[1],LENGTHUNIT[\"metre\",1]],AXIS[\"easting (E)\",east,ORDER[2],LENGTHUNIT[\"metre\",1]],USAGE[SCOPE[\"Conformal mapping at scales of 1:500,000 and smaller.\"],AREA[\"Europe - European Union (EU) countries and candidates. Europe - onshore and offshore: Albania; Andorra; Austria; Belgium; Bosnia and Herzegovina; Bulgaria; Croatia; Cyprus; Czechia; Denmark; Estonia; Faroe Islands; Finland; France; Germany; Gibraltar; Greece; Hungary; Iceland; Ireland; Italy; Kosovo; Latvia; Liechtenstein; Lithuania; Luxembourg; Malta; Monaco; Montenegro; Netherlands; North Macedonia; Norway including Svalbard and Jan Mayen; Poland; Portugal including Madeira and Azores; Romania; San Marino; Serbia; Slovakia; Slovenia; Spain including Canary Islands; Sweden; Switzerland; T\u00fcrkiye (Turkey); United Kingdom (UK) including Channel Islands and Isle of Man; Vatican City State.\"],BBOX[24.6,-35.58,84.73,44.83]],ID[\"EPSG\",3034]]",
 };
 
 const DEG = Math.PI / 180;
@@ -107,6 +112,90 @@ function laea({ lat0, lon0, x0, y0, ellps }) {
       const ab = cCe * sinb1 + (py * sCe * cosb1) / rho;
       py = rho * cosb1 * cCe - py * sinb1 * sCe;
       return [adjlon(Math.atan2(px, py) + lam0) / DEG, authalicInverse(ab, { e, es, oneEs, qp }) / DEG];
+    },
+  };
+}
+
+/** PROJ's `pj_msfn`. */
+const msfn = (sinphi, cosphi, es) => cosphi / Math.sqrt(1 - es * sinphi * sinphi);
+
+/** PROJ's `pj_tsfn`: exp(-psi) of the isometric latitude psi. */
+function tsfn(phi, sinphi, e) {
+  const cosphi = Math.cos(phi);
+  return Math.exp(e * Math.atanh(e * sinphi)) * (sinphi > 0 ? cosphi / (1 + sinphi) : (1 - sinphi) / cosphi);
+}
+
+const ROOTEPS = Math.sqrt(Number.EPSILON);
+
+/** PROJ's `pj_sinhpsi2tanphi`: tan(phi) from sinh(psi), Karney's Newton iteration. */
+function sinhpsi2tanphi(taup, e) {
+  const tol = ROOTEPS / 10;
+  const tmax = 2 / ROOTEPS;
+  const e2m = 1 - e * e;
+  const stol = tol * Math.max(1, Math.abs(taup));
+  let tau = Math.abs(taup) > 70 ? taup * Math.exp(e * Math.atanh(e)) : taup / e2m;
+  if (!(Math.abs(tau) < tmax)) return tau;
+  for (let i = 5; i; --i) {
+    const tau1 = Math.sqrt(1 + tau * tau);
+    const sig = Math.sinh(e * Math.atanh((e * tau) / tau1));
+    const taupa = Math.sqrt(1 + sig * sig) * tau - sig * tau1;
+    const dtau = ((taup - taupa) * (1 + e2m * (tau * tau))) / (e2m * tau1 * Math.sqrt(1 + taupa * taupa));
+    tau += dtau;
+    if (!(Math.abs(dtau) >= stol)) break;
+  }
+  return tau;
+}
+
+/** PROJ's `pj_phi2`: latitude from ts = exp(-psi). */
+const phi2 = (ts0, e) => Math.atan(sinhpsi2tanphi((1 / ts0 - ts0) / 2, e));
+
+/** Lambert conformal conic, ellipsoidal, one or two standard parallels (PROJ `lcc`). */
+function lcc({ lat0, lon0, lat1, lat2, x0, y0, ellps, k0 = 1 }) {
+  const { a, es, e } = ellipsoid(ellps);
+  const ra = 1 / a;
+  const HALFPI = Math.PI / 2;
+  const p0 = lat0 * DEG;
+  const p1 = lat1 * DEG;
+  const p2 = lat2 * DEG;
+  const lam0 = lon0 * DEG;
+  let sinphi = Math.sin(p1);
+  const cosphi = Math.cos(p1);
+  let n = sinphi;
+  const m1 = msfn(sinphi, cosphi, es);
+  const ml1 = tsfn(p1, sinphi, e);
+  if (Math.abs(p1 - p2) >= 1e-10) {
+    sinphi = Math.sin(p2);
+    n = Math.log(m1 / msfn(sinphi, Math.cos(p2), es));
+    n /= Math.log(ml1 / tsfn(p2, sinphi, e));
+  }
+  const c = (m1 * Math.pow(ml1, -n)) / n;
+  const rho0 = Math.abs(Math.abs(p0) - HALFPI) < 1e-10 ? 0 : c * Math.pow(tsfn(p0, Math.sin(p0), e), n);
+  return {
+    forward(lon, lat) {
+      let lam = adjlon(lon * DEG - lam0);
+      const phi = lat * DEG;
+      let rho;
+      if (Math.abs(Math.abs(phi) - HALFPI) < 1e-10) {
+        if (phi * n <= 0) return [Infinity, Infinity];
+        rho = 0;
+      } else rho = c * Math.pow(tsfn(phi, Math.sin(phi), e), n);
+      lam *= n;
+      const x = k0 * (rho * Math.sin(lam));
+      const y = k0 * (rho0 - rho * Math.cos(lam));
+      return [a * x + x0, a * y + y0];
+    },
+    inverse(X, Y) {
+      let x = ((X - x0) * ra) / k0;
+      let y = rho0 - ((Y - y0) * ra) / k0;
+      let rho = Math.hypot(x, y);
+      if (rho === 0) return [lon0, n > 0 ? 90 : -90];
+      if (n < 0) {
+        rho = -rho;
+        x = -x;
+        y = -y;
+      }
+      const phi = phi2(Math.pow(rho / c, 1 / n), e);
+      return [adjlon(Math.atan2(x, y) / n + lam0) / DEG, phi / DEG];
     },
   };
 }
@@ -295,6 +384,8 @@ const SYSTEMS = {
   4258: { proj: () => geographic, latFirst: true },
   3857: { proj: webmerc, latFirst: false },
   3035: { proj: () => laea({ lat0: 52, lon0: 10, x0: 4321000, y0: 3210000, ellps: "GRS80" }), northFirst: true },
+  3034: { proj: () => lcc({ lat0: 52, lon0: 10, lat1: 35, lat2: 65, x0: 4000000, y0: 2800000, ellps: "GRS80" }), northFirst: true },
+  2154: { proj: () => lcc({ lat0: 46.5, lon0: 3, lat1: 49, lat2: 44, x0: 700000, y0: 6600000, ellps: "GRS80" }) },
 };
 
 /** EPSG code of a CRS given as a number, "EPSG:<code>", a WKT with an EPSG id or `{epsg}`. */

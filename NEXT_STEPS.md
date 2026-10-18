@@ -34,9 +34,10 @@ Candidates for the next session, roughly by value:
    ...`) would be the fastest option for PyPSA-Eur-sized models, but
    linopy has no command-line HiGHS path to mirror, so its results would
    only be checkable against highspy's.
-3. **More CRS**: `to_crs` supports EPSG 4326, 4258, 3857, 3035 and all UTM
-   zones. Lambert-93 (2154, LCC) needs a new projection (port PROJ's
-   `lcc`); datum shifts (27700, 31467: Helmert transformations) are harder.
+3. **More CRS**: `to_crs` supports EPSG 4326, 4258, 3857, 3035, 3034, 2154
+   and all UTM zones. Other projections on these datums need their PROJ
+   code ported (the helpers `tsfn`, `phi2`, `qsfn` exist); datum shifts
+   (27700, 31467: Helmert transformations, grids) are harder.
 4. **Clustering leftovers**: `busmap_by_hac` with a callable or
    precomputed metric; `busmap_by_kmeans` parity is unlikely (threaded
    scikit-learn reductions).
@@ -231,8 +232,9 @@ Candidates for the next session, roughly by value:
       stored as float32 like PyPSA's `typecast_float32`; PyPSA reads the file
       identically to its own) and PyPSA's `compression` dict (`io.test.js`,
       fixture `io_float32`).
-- [x] `to_crs`, `n.crs` / `n.srid` (scenario `crs`, 21 records): EPSG 4326,
-      4258, 3857, 3035 and every UTM zone (WGS 84 32601-32660 / 32701-32760,
+- [x] `to_crs`, `n.crs` / `n.srid` (scenario `crs`, 27 records): EPSG 4326,
+      4258, 3857, 3035, 3034 (LCC Europe), 2154 (Lambert-93; PROJ's `lcc`
+      with `pj_tsfn` / `pj_phi2`) and every UTM zone (WGS 84 32601-32660 / 32701-32760,
       ETRS89 25828-25838; the zone WKTs come from one template plus the
       zones' USAGE blocks generated from pyproj, `scripts/generate_crs_data.py`,
       all 131 identical to pyproj's, `crs_utm_wkt.json.gz`) with pyproj's WKT
