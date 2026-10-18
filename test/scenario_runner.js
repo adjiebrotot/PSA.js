@@ -46,7 +46,7 @@ export function decodeValue(v, n) {
       const data = new Map();
       spec.columns.forEach((c, j) => data.set(c, spec.data.map((row) => decodeValue(row[j], n))));
       const columns = spec.column_names ? new Index(spec.columns, spec.column_names) : spec.columns;
-      return new DataFrame({ index: new Index(spec.index), columns, data });
+      return new DataFrame({ index: new Index(spec.index, spec.index_name ?? null), columns, data });
     }
     if ("$ppc" in v) return v.$ppc;
     if ("$columns" in v) {

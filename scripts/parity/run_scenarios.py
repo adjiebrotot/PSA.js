@@ -78,7 +78,8 @@ def decode(v, n):
             columns = spec["columns"]
             if spec.get("column_names"):
                 columns = pd.MultiIndex.from_tuples([tuple(c) for c in columns], names=spec["column_names"])
-            return pd.DataFrame([[decode(x, n) for x in row] for row in spec["data"]], index=spec["index"], columns=columns)
+            index = pd.Index(spec["index"], name=spec.get("index_name"))
+            return pd.DataFrame([[decode(x, n) for x in row] for row in spec["data"]], index=index, columns=columns)
         if "$ppc" in v:
             # a PYPOWER case: matrices as numpy arrays
             return {k: (np.array(x, dtype=float) if isinstance(x, list) else x) for k, x in v["$ppc"].items()}

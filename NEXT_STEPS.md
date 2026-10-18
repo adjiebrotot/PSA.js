@@ -134,11 +134,12 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       -1/NaN padding, LP rows, solution), quadratic expressions (`x * y`,
       `expr * var`, `pow(2)`, sums, mixing with linear terms) and quadratic
       objectives via `set_objective` / `add_objective` (scenario
-      `opt_quadexpr`). Missing: quadratic constraints, `groupby` with a
-      DataFrame/multi-key grouper, centred rolling windows, `where` with a
-      condition over dimensions the expression lacks, `Variable.fillna`, and
-      chains on Variable-returning operations (JS `Variable.shift/where`
-      return expressions, so a following `shift` pads with NaN instead of a
+      `opt_quadexpr`), `groupby` with a DataFrame (multi-key) grouper and
+      `Variable.fillna` (also after a Variable's `shift` / `where`). Missing:
+      quadratic constraints, centred rolling windows, `where` with a
+      condition over dimensions the expression lacks, and longer chains on
+      Variable-returning operations (JS `Variable.shift/where` return
+      expressions, so e.g. a second `shift` pads with NaN instead of a
       coefficient of 1).
 - [ ] Statistics: callable groupers with multi-index results, pandas
       aggregations beyond sum/mean/min/max/median/first/last/std/var/prod/

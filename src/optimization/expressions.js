@@ -277,9 +277,17 @@ export class LinearExpression {
     };
   }
 
-  /** Replace missing (NaN) constants by `value`. */
+  /**
+   * Replace missing (NaN) constants by `value`. On the result of a Variable's
+   * `shift` / `where` (linopy keeps those Variables) the absent slots get it.
+   */
   fillna(value) {
     if (typeof value !== "number") throw new TypeError("fillna: value must be a number");
+    if (this._variableLike) {
+      const consts = Float64Array.from(this.consts);
+      for (let k = 0; k < this.size; k++) if (this.vars[k] < 0) consts[k] = value;
+      return new LinearExpression(this.model, this.dims, this.coords, this.nterm, this.vars, this.coeffs, consts);
+    }
     return new LinearExpression(
       this.model,
       this.dims,
@@ -762,10 +770,13 @@ export class LinearExpressionRolling {
   }
 }
 
-/** `expr.groupby(series)`: groups along the dimension the Series is indexed by. */
+/**
+ * `expr.groupby(grouper)`: groups along the dimension the grouper is indexed
+ * by, a Series (one key) or a DataFrame (one key per column).
+ */
 export class LinearExpressionGroupby {
   constructor(expr, group) {
-    if (!(group instanceof Series)) throw new TypeError("groupby: the grouper must be a Series indexed by a dimension");
+    if (!(group instanceof Series) && !(group instanceof DataFrame)) throw new TypeError("groupby: the grouper must be a Series or DataFrame indexed by a dimension");
     this.expr = expr;
     this.group = group;
   }
@@ -784,11 +795,14 @@ export class LinearExpressionGroupby {
     if (!g.index.equals(e.coords[d])) {
       throw new Error(`ValueError: the grouper's labels along dimension '${dim}' do not match the expression's coordinates. linopy matches groupers by position and does not reindex.`);
     }
-    const keys = Array.from(g.values);
-    if (keys.some((k) => k === null || k === undefined || (typeof k === "number" && Number.isNaN(k)))) {
+    const frame = g instanceof DataFrame;
+    const keys = frame ? g.index.values.map((_, i) => g.columns.values.map((c) => g.col(c)[i])) : Array.from(g.values);
+    const missing = (k) => k === null || k === undefined || (typeof k === "number" && Number.isNaN(k));
+    if (keys.some((k) => (frame ? k.some(missing) : missing(k)))) {
       throw new Error("ValueError: Cannot group by a pandas object containing NaN values. Drop or fill the corresponding entries before grouping.");
     }
-    return groupSum(e, dim, keys, g.name ?? "group", { inPlace: true });
+    // a frame gives a `group` dimension labelled by key tuples (legacy MultiIndex)
+    return groupSum(e, dim, keys, frame ? g.columns.values.map(String) : (g.name ?? "group"), { inPlace: true });
   }
 }
 
@@ -904,11 +918,21 @@ export function installExpressions(Variable, Model) {
   // linopy keeps these on the Variable: missing labels are -1 while the
   // expression of a variable has coefficient 1 and constant 0 everywhere
   Variable.prototype.shift = function shift(shifts) {
-    return LinearExpression.fromVariable(this)._shifted(shifts, false, { coeff: 1, const: 0 });
+    const e = LinearExpression.fromVariable(this)._shifted(shifts, false, { coeff: 1, const: 0 });
+    e._variableLike = true;
+    return e;
   };
   Variable.prototype.where = function where(cond, other = null) {
     if (other !== null && !(typeof other === "object" && (other.other ?? null) === null)) throw new Error("NotImplementedError: Variable.where with `other`");
-    return LinearExpression.fromVariable(this)._masked(cond, { coeff: 1, const: 0 });
+    const e = LinearExpression.fromVariable(this)._masked(cond, { coeff: 1, const: 0 });
+    e._variableLike = true;
+    return e;
+  };
+  /** A constant for the absent slots (labels -1); the result is an expression. */
+  Variable.prototype.fillna = function fillna(value) {
+    const e = LinearExpression.fromVariable(this);
+    e._variableLike = true;
+    return e.fillna(value);
   };
   Variable.prototype.toExpr = function toExprMethod() {
     return LinearExpression.fromVariable(this);
