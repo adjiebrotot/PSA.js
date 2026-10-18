@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: MIT
 /**
- * A small subset of linopy's expression API, enough to write custom
- * constraints (`extra_functionality`) and objectives (MGA):
+ * A subset of linopy's expression API, enough to write custom constraints
+ * (`extra_functionality`) and objectives (MGA):
  *
  *   const p = m.variables.get("Link-p");
  *   m.add_constraints(p.sum().le(30000), { name: "GlobalConstraint-limit" });
  *   m.add_constraints(p.sum("name").le(5000), { name: "GlobalConstraint-limit_t" });
+ *   m.add_constraints(p.diff("snapshot").le(100), { name: "ramp" });
+ *   m.add_constraints(p.groupby(busOf).sum().le(3000), { name: "bus-limit" });
  *
  * Term ordering follows linopy so that LP files match: `sum()` ravels cells in
  * C order (terms innermost), `sum(dims)` stacks the old terms outermost.
+ * Missing slots (from `shift`, `where`, rolling windows or groups) hold
+ * variable -1 and a NaN coefficient, like linopy's fill values.
  */
 
-import { Index } from "../core/index.js";
+import { Index, compareLabels, labelKey } from "../core/index.js";
 import { DataFrame, Series } from "../core/frame.js";
 
 function shapeOf(coords) {
@@ -138,6 +142,164 @@ export class LinearExpression {
     return new LinearExpression(this.model, dims, coords, this.nterm, vars, coeffs, consts);
   }
 
+  /** Select by position (`{dim: int | int[]}`); an integer drops the dimension. */
+  isel(indexers) {
+    let out = this;
+    for (const [dim, p] of Object.entries(indexers)) {
+      const d = out.dims.indexOf(dim);
+      if (d < 0) throw new Error(`Dimension ${dim} not in expression`);
+      const len = out.coords[d].length;
+      const norm = (i) => {
+        const q = i < 0 ? i + len : i;
+        if (!(q >= 0 && q < len)) throw new Error(`IndexError: index ${i} is out of bounds for dimension ${dim} with size ${len}`);
+        return q;
+      };
+      if (typeof p === "number") out = out._take(d, [norm(p)], null);
+      else {
+        const pos = asIndexList(p).map(norm);
+        out = out._take(d, pos, out.coords[d].take(pos));
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Shift along dimensions (`{dim: n}`, positive moves values forward). The
+   * shifted-in cells are missing: no terms and a NaN constant.
+   */
+  shift(shifts) {
+    return this._shifted(shifts, false, { coeff: NaN, const: NaN });
+  }
+
+  /** Roll along dimensions (`{dim: n}`, circular shift). */
+  roll(shifts) {
+    return this._shifted(shifts, true, null);
+  }
+
+  _shifted(shifts, circular, fill) {
+    const by = this.dims.map((d) => shifts[d] ?? 0);
+    for (const d of Object.keys(shifts)) if (!this.dims.includes(d)) throw new Error(`Dimension ${d} not in expression`);
+    const nt = this.nterm;
+    const vars = new Int32Array(this.size * nt);
+    const coeffs = new Float64Array(this.size * nt);
+    const consts = new Float64Array(this.size);
+    for (let k = 0; k < this.size; k++) {
+      const pos = unravel(k, this.shape, this.strides);
+      let src = 0;
+      for (let d = 0; d < pos.length; d++) {
+        let p = pos[d] - by[d];
+        if (circular) p = ((p % this.shape[d]) + this.shape[d]) % this.shape[d];
+        if (p < 0 || p >= this.shape[d]) {
+          src = -1;
+          break;
+        }
+        src += p * this.strides[d];
+      }
+      for (let t = 0; t < nt; t++) {
+        vars[k * nt + t] = src < 0 ? -1 : this.vars[src * nt + t];
+        coeffs[k * nt + t] = src < 0 ? fill.coeff : this.coeffs[src * nt + t];
+      }
+      consts[k] = src < 0 ? fill.const : this.consts[src];
+    }
+    return new LinearExpression(this.model, this.dims, this.coords, nt, vars, coeffs, consts);
+  }
+
+  /** n-th order difference along `dim` (`expr - expr.shift({dim: n})`). */
+  diff(dim, n = 1) {
+    if (typeof n === "object" && n !== null) n = n.n ?? 1;
+    return this.sub(this.shift({ [dim]: n }));
+  }
+
+  /**
+   * Rolling window along one dimension (`{dim: window}`); `.sum()` stacks the
+   * window (oldest first) into the terms, padding the first cells.
+   */
+  rolling(dims, opts = {}) {
+    const spec = { ...dims };
+    for (const k of ["min_periods", "center"]) delete spec[k];
+    if (dims.center || opts.center) throw new Error("NotImplementedError: centred rolling windows are not supported");
+    const entries = Object.entries(spec);
+    if (entries.length !== 1) throw new Error("ValueError: Mapping argument is necessary for 2d-rolling.");
+    const [dim, window] = entries[0];
+    if (!this.dims.includes(dim)) throw new Error(`Dimension ${dim} not in expression`);
+    return new LinearExpressionRolling(this, dim, window);
+  }
+
+  /** Cumulative sum along `dim` (a rolling window over the whole dimension). */
+  cumsum(dim = null) {
+    const dims = dim === null || dim === undefined ? this.dims.slice() : Array.isArray(dim) ? dim : [dim];
+    return this.rolling(Object.fromEntries(dims.map((d) => [d, this.coords[this.dims.indexOf(d)].length]))).sum();
+  }
+
+  /**
+   * Keep cells where `cond` holds (a boolean Series, DataFrame, flat array or
+   * a function of the expression). Other cells lose their terms; their
+   * constant becomes `other` (NaN by default).
+   */
+  where(cond, other = null) {
+    if (other !== null && typeof other === "object" && !(other instanceof LinearExpression)) other = other.other ?? null;
+    if (other !== null && typeof other !== "number") throw new TypeError("where: `other` must be a number");
+    return this._masked(cond, { coeff: NaN, const: other ?? NaN });
+  }
+
+  _masked(cond, fill) {
+    if (typeof cond === "function") cond = cond(this);
+    const keep = this._condition(cond);
+    const nt = this.nterm;
+    const vars = Int32Array.from(this.vars);
+    const coeffs = Float64Array.from(this.coeffs);
+    const consts = Float64Array.from(this.consts);
+    for (let k = 0; k < this.size; k++) {
+      if (keep(k)) continue;
+      for (let t = 0; t < nt; t++) {
+        vars[k * nt + t] = -1;
+        coeffs[k * nt + t] = fill.coeff;
+      }
+      consts[k] = fill.const;
+    }
+    return new LinearExpression(this.model, this.dims, this.coords, nt, vars, coeffs, consts);
+  }
+
+  /** Cell predicate of a boolean condition over (a subset of) the dims. */
+  _condition(cond) {
+    if (typeof cond === "boolean") return () => cond;
+    const op = constantOperand(cond, this);
+    if (op.flat) return (k) => Boolean(cond[k]);
+    for (let i = 0; i < op.dims.length; i++) {
+      const d = this.dims.indexOf(op.dims[i]);
+      if (d < 0) throw new Error(`NotImplementedError: condition dimension ${op.dims[i]} not in expression`);
+      if (!this.coords[d].equals(op.coords[i])) throw new Error(`AlignmentError: coordinates of ${op.dims[i]} differ between condition and expression`);
+    }
+    const where = op.dims.map((dim) => this.dims.indexOf(dim));
+    return (k) => {
+      const pos = unravel(k, this.shape, this.strides);
+      return Boolean(op.at(where.map((d) => pos[d])));
+    };
+  }
+
+  /** Replace missing (NaN) constants by `value`. */
+  fillna(value) {
+    if (typeof value !== "number") throw new TypeError("fillna: value must be a number");
+    return new LinearExpression(
+      this.model,
+      this.dims,
+      this.coords,
+      this.nterm,
+      this.vars,
+      this.coeffs,
+      this.consts.map((x) => (Number.isNaN(x) ? value : x)),
+    );
+  }
+
+  /**
+   * Group cells along a dimension by a Series indexed like that dimension;
+   * `.sum()` replaces the dimension by the sorted group labels (named after
+   * the Series, else `group`).
+   */
+  groupby(group) {
+    return new LinearExpressionGroupby(this, group);
+  }
+
   /** Multiply by a number, Series, DataFrame or flat array (aligned on coordinates). */
   mul(c) {
     if (typeof c === "number") {
@@ -250,19 +412,20 @@ export class LinearExpression {
       const pos = unravel(k, shape, strides);
       const ka = locate(this, pos);
       const kb = locate(o, pos);
+      // missing constants count as zero when merging (linopy)
       if (ka >= 0) {
         for (let t = 0; t < this.nterm; t++) {
           vars[k * nterm + t] = this.vars[ka * this.nterm + t];
           coeffs[k * nterm + t] = this.coeffs[ka * this.nterm + t];
         }
-        consts[k] += this.consts[ka];
+        if (!Number.isNaN(this.consts[ka])) consts[k] += this.consts[ka];
       }
       if (kb >= 0) {
         for (let t = 0; t < o.nterm; t++) {
           vars[k * nterm + this.nterm + t] = o.vars[kb * o.nterm + t];
           coeffs[k * nterm + this.nterm + t] = o.coeffs[kb * o.nterm + t];
         }
-        consts[k] += o.consts[kb];
+        if (!Number.isNaN(o.consts[kb])) consts[k] += o.consts[kb];
       }
     }
     return new LinearExpression(this.model, dims, coords, nterm, vars, coeffs, consts);
@@ -355,6 +518,133 @@ export class LinearExpression {
   }
 }
 
+/** `expr.rolling({dim: window})`: windows along one dimension. */
+export class LinearExpressionRolling {
+  constructor(expr, dim, window) {
+    this.expr = expr;
+    this.dim = dim;
+    this.window = window;
+  }
+
+  /** Window terms stacked into each cell (old term outermost), constants summed skipping NaN. */
+  sum() {
+    const e = this.expr;
+    const w = this.window;
+    const d = e.dims.indexOf(this.dim);
+    const nt = e.nterm;
+    const nterm = nt * w;
+    const vars = new Int32Array(e.size * nterm).fill(-1);
+    const coeffs = new Float64Array(e.size * nterm).fill(NaN);
+    const consts = new Float64Array(e.size);
+    for (let k = 0; k < e.size; k++) {
+      const p = Math.floor(k / e.strides[d]) % e.shape[d];
+      for (let r = 0; r < w; r++) {
+        const q = p - (w - 1) + r;
+        if (q < 0) continue;
+        const src = k + (q - p) * e.strides[d];
+        for (let t = 0; t < nt; t++) {
+          vars[k * nterm + t * w + r] = e.vars[src * nt + t];
+          coeffs[k * nterm + t * w + r] = e.coeffs[src * nt + t];
+        }
+        if (!Number.isNaN(e.consts[src])) consts[k] += e.consts[src];
+      }
+    }
+    return new LinearExpression(e.model, e.dims, e.coords, nterm, vars, coeffs, consts);
+  }
+}
+
+/** `expr.groupby(series)`: groups along the dimension the Series is indexed by. */
+export class LinearExpressionGroupby {
+  constructor(expr, group) {
+    if (!(group instanceof Series)) throw new TypeError("groupby: the grouper must be a Series indexed by a dimension");
+    this.expr = expr;
+    this.group = group;
+  }
+
+  /**
+   * Sum each group: the grouped dimension is replaced (in place) by the
+   * sorted group labels; members are stacked innermost in the terms and
+   * padded to the largest group.
+   */
+  sum() {
+    const e = this.expr;
+    const g = this.group;
+    const dim = g.index.name ?? (e.dims.length === 1 ? e.dims[0] : null);
+    const d = e.dims.indexOf(dim);
+    if (d < 0) throw new Error(`ValueError: the grouper must be indexed by a dimension of the expression (${e.dims})`);
+    if (!g.index.equals(e.coords[d])) {
+      throw new Error(`ValueError: the grouper's labels along dimension '${dim}' do not match the expression's coordinates. linopy matches groupers by position and does not reindex.`);
+    }
+    const keys = Array.from(g.values);
+    if (keys.some((k) => k === null || k === undefined || (typeof k === "number" && Number.isNaN(k)))) {
+      throw new Error("ValueError: Cannot group by a pandas object containing NaN values. Drop or fill the corresponding entries before grouping.");
+    }
+    return groupSum(e, dim, keys, g.name ?? "group", { inPlace: true });
+  }
+}
+
+/**
+ * Sum `e` over the groups of dimension `dim` (`keys[i]` labels the i-th cell;
+ * null drops it). Groups are sorted; the new dimension `name` (labels named
+ * `names` if given as a list) replaces `dim` in place or comes last. Terms:
+ * old term outermost, group member innermost (padded with -1 / NaN).
+ */
+export function groupSum(e, dim, keys, names, { inPlace = false, compare = compareLabels } = {}) {
+  const d = e.dims.indexOf(dim);
+  if (d < 0) throw new Error(`Dimension ${dim} not in expression`);
+  const groups = new Map();
+  const labels = [];
+  keys.forEach((k, i) => {
+    if (k === null) return;
+    const lk = labelKey(k);
+    let grp = groups.get(lk);
+    if (!grp) {
+      grp = [];
+      groups.set(lk, grp);
+      labels.push(k);
+    }
+    grp.push(i);
+  });
+  labels.sort(compare);
+  const members = labels.map((l) => groups.get(labelKey(l)));
+  const M = members.reduce((m, grp) => Math.max(m, grp.length), 0);
+  const g0 = inPlace ? d : e.dims.length - 1;
+  const groupDim = Array.isArray(names) ? "group" : names;
+  const dims = e.dims.filter((x) => x !== dim);
+  const coords = e.coords.filter((_, i) => i !== d);
+  dims.splice(g0, 0, groupDim);
+  coords.splice(g0, 0, new Index(labels, names));
+  const shape = shapeOf(coords);
+  const size = sizeOf(shape);
+  const strides = stridesOf(shape);
+  const nt = e.nterm;
+  const nterm = nt * M;
+  const vars = new Int32Array(size * nterm).fill(-1);
+  const coeffs = new Float64Array(size * nterm).fill(NaN);
+  const consts = new Float64Array(size);
+  for (let c = 0; c < size; c++) {
+    const pos = unravel(c, shape, strides);
+    const grp = members[pos[g0]];
+    let base = 0;
+    for (let i = 0; i < dims.length; i++) {
+      if (i === g0) continue;
+      const j = i < g0 ? i : i - 1; // position among the kept dims
+      base += pos[i] * e.strides[j < d ? j : j + 1];
+    }
+    let sum = 0;
+    for (let j = 0; j < grp.length; j++) {
+      const ec = base + grp[j] * e.strides[d];
+      for (let t = 0; t < nt; t++) {
+        vars[c * nterm + t * M + j] = e.vars[ec * nt + t];
+        coeffs[c * nterm + t * M + j] = e.coeffs[ec * nt + t];
+      }
+      if (!Number.isNaN(e.consts[ec])) sum += e.consts[ec];
+    }
+    consts[c] = sum;
+  }
+  return new LinearExpression(e.model, dims, coords, nterm, vars, coeffs, consts);
+}
+
 /** Convert a variable / expression / number to a LinearExpression. */
 export function toExpr(x, model) {
   if (x instanceof LinearExpression) return x;
@@ -397,11 +687,20 @@ export class ConstraintSpec {
 
 /** Install expression helpers on the Variable and Model classes. */
 export function installExpressions(Variable, Model) {
-  for (const name of ["sel", "mul", "neg", "add", "sub", "sum", "le", "ge", "eq"]) {
+  for (const name of ["sel", "isel", "roll", "mul", "neg", "add", "sub", "sum", "diff", "rolling", "cumsum", "groupby", "le", "ge", "eq"]) {
     Variable.prototype[name] = function exprMethod(...args) {
       return LinearExpression.fromVariable(this)[name](...args);
     };
   }
+  // linopy keeps these on the Variable: missing labels are -1 while the
+  // expression of a variable has coefficient 1 and constant 0 everywhere
+  Variable.prototype.shift = function shift(shifts) {
+    return LinearExpression.fromVariable(this)._shifted(shifts, false, { coeff: 1, const: 0 });
+  };
+  Variable.prototype.where = function where(cond, other = null) {
+    if (other !== null && !(typeof other === "object" && (other.other ?? null) === null)) throw new Error("NotImplementedError: Variable.where with `other`");
+    return LinearExpression.fromVariable(this)._masked(cond, { coeff: 1, const: 0 });
+  };
   Variable.prototype.toExpr = function toExprMethod() {
     return LinearExpression.fromVariable(this);
   };

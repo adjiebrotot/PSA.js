@@ -87,7 +87,9 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
   tangent-line, incremental and SOS2 formulations, `piecewise_options`; SOS
   constraints are solved through linopy's binary reformulation with
   `reformulate_sos: true`, as HiGHS has no native SOS support), custom
-  constraints through a linopy-style expression API.
+  constraints through a linopy-style expression API (`sel`, `isel`, `sum`,
+  `shift`, `roll`, `diff`, `rolling().sum()`, `cumsum`, `where`, `fillna`,
+  `groupby().sum()`, with linopy's term layout).
 - **Statistics**: capex, opex, capacities, supply/withdrawal, energy balance,
   transmission, curtailment, capacity factor, revenue, market value, prices,
   with PyPSA's groupers and rounding/drop_zero semantics.

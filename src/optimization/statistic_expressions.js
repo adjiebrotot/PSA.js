@@ -16,7 +16,7 @@
  */
 
 import { Index, compareLabels, labelKey } from "../core/index.js";
-import { LinearExpression } from "./expressions.js";
+import { LinearExpression, groupSum } from "./expressions.js";
 import { LOOKUP, denseValues } from "./common.js";
 import { groupers, resolve_at_port, get_transmission_branches, statisticsOptions, normalizeCarrierNiceNames, contains, isNa } from "../statistics/accessor.js";
 import { scenarioView } from "../network/scenarios.js";
@@ -392,60 +392,7 @@ export function transposeExpr(e, dims) {
 }
 
 function groupbySumLast(e, dim, keys, names, { inPlace = false } = {}) {
-  const d = e.dims.indexOf(dim);
-  if (d < 0) throw new Error(`Dimension ${dim} not in expression`);
-  const groups = new Map();
-  const labels = [];
-  keys.forEach((k, i) => {
-    if (k === null) return;
-    const lk = labelKey(k);
-    let g = groups.get(lk);
-    if (!g) {
-      g = [];
-      groups.set(lk, g);
-      labels.push(k);
-    }
-    g.push(i);
-  });
-  labels.sort(compareGroupKeys);
-  const members = labels.map((l) => groups.get(labelKey(l)));
-  const M = members.reduce((m, g) => Math.max(m, g.length), 0);
-  // the group dimension comes last (DataFrame groupers), or takes the place of
-  // the grouped dimension when grouping by one of its coordinates
-  const g0 = inPlace ? d : e.dims.length - 1;
-  const dims = e.dims.filter((x) => x !== dim);
-  const coords = e.coords.filter((_, i) => i !== d);
-  dims.splice(g0, 0, "group");
-  coords.splice(g0, 0, new Index(labels, names));
-  const shape = shapeOf(coords);
-  const size = sizeOf(shape);
-  const strides = stridesOf(shape);
-  const nt = e.nterm;
-  const nterm = nt * M;
-  const vars = new Int32Array(size * nterm).fill(-1);
-  const coeffs = new Float64Array(size * nterm).fill(NaN);
-  const consts = new Float64Array(size);
-  for (let c = 0; c < size; c++) {
-    const pos = unravel(c, shape, strides);
-    const g = members[pos[g0]];
-    let base = 0;
-    for (let i = 0; i < dims.length; i++) {
-      if (i === g0) continue;
-      const j = i < g0 ? i : i - 1; // position among the kept dims
-      base += pos[i] * e.strides[j < d ? j : j + 1];
-    }
-    let s = 0;
-    for (let j = 0; j < g.length; j++) {
-      const ec = base + g[j] * e.strides[d];
-      for (let t = 0; t < nt; t++) {
-        vars[c * nterm + t * M + j] = e.vars[ec * nt + t];
-        coeffs[c * nterm + t * M + j] = e.coeffs[ec * nt + t];
-      }
-      s += fill0(e.consts[ec]);
-    }
-    consts[c] = s;
-  }
-  return expr(e.model, dims, coords, nterm, vars, coeffs, consts);
+  return groupSum(e, dim, keys, names, { inPlace, compare: compareGroupKeys });
 }
 
 /** Sort order of group keys: per level, missing (NaN) keys last. */

@@ -5,7 +5,7 @@
  */
 
 import assert from "node:assert/strict";
-import { Network, NetworkCollection, DataFrame, Series, Index } from "../src/index.js";
+import { Network, NetworkCollection, DataFrame, Series, Index, LinearExpression } from "../src/index.js";
 import path from "node:path";
 import { ROOT, examplePath, decode as decodeFixture, assertFrameClose, assertSeriesClose, assertNetworkMatches, isClose, fmtLabel } from "./helpers.js";
 
@@ -47,6 +47,19 @@ export function decodeValue(v, n) {
       spec.columns.forEach((c, j) => data.set(c, spec.data.map((row) => decodeValue(row[j], n))));
       const columns = spec.column_names ? new Index(spec.columns, spec.column_names) : spec.columns;
       return new DataFrame({ index: new Index(spec.index), columns, data });
+    }
+    if ("$da" in v) {
+      // a constant with named dims: a Series (1-D) or DataFrame (2-D) whose
+      // index/column names carry the dims
+      const spec = v.$da;
+      const coord = (d) => (d === "snapshot" && !spec.coords?.snapshot ? n.snapshots.rename("snapshot") : new Index(spec.coords[d], d));
+      const data = decodeValue(spec.data, n);
+      if (spec.dims.length === 1) return new Series(data, coord(spec.dims[0]), spec.name ?? null);
+      const rows = coord(spec.dims[0]);
+      const cols = coord(spec.dims[1]);
+      const m = new Map();
+      cols.values.forEach((c, j) => m.set(c, data.map((row) => row[j])));
+      return new DataFrame({ index: rows, columns: cols, data: m });
     }
     if ("$series" in v) {
       const spec = v.$series;
@@ -223,6 +236,16 @@ export async function runScenario(scenario, onRecord = null) {
         let e = n.optimize.expressions[stat](decodeValue(kwargs ?? {}, n));
         if (post !== null) e = post === "all" ? e.sum() : e.sum(post);
         results[outKey] = e;
+        break;
+      }
+      case "linexpr": {
+        // a chain of linopy calls starting from a model variable or an earlier result
+        const [, outKey, start, chain] = op;
+        let obj = "var" in start ? n.model.variables.get(start.var) : results[start.result];
+        for (const [name, args = [], kwargs = {}] of chain) {
+          obj = await callWithKwargs(obj, name, decodeValue(args, n), decodeValue(kwargs, n));
+        }
+        results[outKey] = obj instanceof LinearExpression ? obj : obj.toExpr();
         break;
       }
       case "expr_constraint": {

@@ -79,6 +79,15 @@ def decode(v, n):
             if spec.get("column_names"):
                 columns = pd.MultiIndex.from_tuples([tuple(c) for c in columns], names=spec["column_names"])
             return pd.DataFrame([[decode(x, n) for x in row] for row in spec["data"]], index=spec["index"], columns=columns)
+        if "$da" in v:
+            # DataArray with named dims; "snapshot" coordinates default to n.snapshots
+            import xarray as xr
+
+            spec = v["$da"]
+            coords = {d: (list(n.snapshots) if d == "snapshot" and d not in spec.get("coords", {}) else spec["coords"][d]) for d in spec["dims"]}
+            if "snapshot" in coords and not spec.get("coords", {}).get("snapshot"):
+                coords["snapshot"] = n.snapshots
+            return xr.DataArray(np.array(decode(spec["data"], n)), dims=spec["dims"], coords=coords, name=spec.get("name"))
         if "$series" in v:
             spec = v["$series"]
             idx = spec.get("index")
@@ -246,6 +255,20 @@ def _run_op(op, state, records, results):
             if post is not None:
                 e = e.sum() if post == "all" else e.sum(dim=post)
             results[out_key] = e
+        elif kind == "linexpr":
+            # a chain of linopy calls starting from a model variable or an earlier result
+            _, out_key, start, chain = op
+            import linopy
+
+            obj = n.model.variables[start["var"]] if "var" in start else results[start["result"]]
+            for step in chain:
+                name = step[0]
+                args = step[1] if len(step) > 1 else []
+                kwargs = step[2] if len(step) > 2 else {}
+                obj = getattr(obj, name)(*decode(args, n), **decode(kwargs, n))
+            if isinstance(obj, linopy.Variable):
+                obj = obj.to_linexpr()
+            results[out_key] = obj
         elif kind == "expr_constraint":
             _, out_key, sign, rhs, cname = op
             n.model.add_constraints(results[out_key], sign, decode(rhs, n), name=cname)

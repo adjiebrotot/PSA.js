@@ -82,11 +82,17 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
 
 ## 3. Parity gaps to close
 
-- [ ] `linopy` expression API: only the subset needed by PyPSA workflows
-      (`sel`, `mul`, `add`, `sub`, `sum`, `le/ge/eq`, `set_objective`, plus the
-      internal helpers of the statistic expressions: outer merges,
-      `groupby().sum()`, `where`, `@`). Missing as public API: `shift`,
-      `rolling`, quadratic expressions, `diff`; `groupby`/`where` as methods.
+- [ ] `linopy` expression API. Public: `sel`, `isel`, `mul`, `add`, `sub`,
+      `sum`, `shift`, `roll`, `diff`, `rolling().sum()`, `cumsum` (one
+      dimension, as linopy), `where`, `fillna`, `groupby(series).sum()`,
+      `le/ge/eq`, `set_objective` (scenario `opt_linexpr`: term layout incl.
+      -1/NaN padding, LP rows, solution). Missing: quadratic expressions
+      (`x * y`, quadratic objectives from custom code), `groupby` with a
+      DataFrame/multi-key grouper, centred rolling windows, `where` with a
+      condition over dimensions the expression lacks, `Variable.fillna`, and
+      chains on Variable-returning operations (JS `Variable.shift/where`
+      return expressions, so a following `shift` pads with NaN instead of a
+      coefficient of 1).
 - [ ] Statistics: `aggregate_across_components`, `groupby_method` other than
       sum/mean/min/max, callable groupers with multi-index results. (Done: the
       overview table `n.statistics()` passes all arguments like PyPSA, the
