@@ -1,5 +1,5 @@
 {
-  "description": "More statistics options on solved networks: groupby_method aggregations (mean, max, min, median, first, last, std, var, prod, count, sem, nunique), time aggregations other than sum (incl. sem, nunique), aggregation across components, ports, carrier and bus carrier filters (strings, patterns, lists), nice names, storage capacities, price weightings and the overview table with options.",
+  "description": "More statistics options on solved networks: groupby_method aggregations (mean, max, min, median, first, last, std, var, prod, count, sem, nunique), time aggregations other than sum (incl. sem, nunique), aggregation across components, ports, carrier and bus carrier filters (strings, patterns, lists), nice names, storage capacities, price weightings, callable groupers (one Series or a list of Series) and the overview table with options.",
   "tolerance": {"rtol": 1e-06, "atol": 1e-06},
   "ops": [
     ["load_example", "ac-dc-meshed"],
@@ -52,6 +52,11 @@
     ["record", "acdc_43_supply", "path", ["statistics", ["supply", [], {"groupby_time": "sem"}]]],
     ["record", "acdc_44_optimal_capacity", "path", ["statistics", ["optimal_capacity", [], {"groupby_method": "nunique"}]]],
     ["record", "acdc_45_supply", "path", ["statistics", ["supply", [], {"groupby_time": "nunique"}]]],
+    ["record", "acdc_46_capex", "path", ["statistics", ["capex", [], {"groupby": {"$grouper": {"columns": ["carrier", "bus{port}"], "names": ["carrier", "b"], "list": true}}}]]],
+    ["record", "acdc_47_supply", "path", ["statistics", ["supply", [], {"groupby": {"$grouper": {"columns": ["carrier", "bus{port}"], "names": ["carrier", "b"], "list": true}}, "at_port": "all"}]]],
+    ["record", "acdc_48_opex", "path", ["statistics", ["opex", [], {"groupby": {"$grouper": {"columns": ["carrier"], "names": ["c"]}}}]]],
+    ["record", "acdc_49_capex", "path", ["statistics", ["capex", [], {"groupby": [{"$grouper": {"columns": ["carrier"], "names": ["c"]}}, "bus_carrier"]}]]],
+    ["expect_error", "acdc_grouper_frame", ["record", "acdc_grouper_frame_x", "path", ["statistics", ["capex", [], {"groupby": {"$grouper": {"columns": ["carrier", "bus{port}"], "frame": true}}}]]]],
     ["record", "acdc_overview", "path", ["statistics", ["__call__", [], {}]]],
     ["record", "acdc_overview_period", "path", ["statistics", ["__call__", [], {"groupby": "bus_carrier", "aggregate_across_components": true}]]],
     ["load_example", "model-energy"],

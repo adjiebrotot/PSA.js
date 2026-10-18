@@ -80,6 +80,19 @@ def decode(v, n):
                 columns = pd.MultiIndex.from_tuples([tuple(c) for c in columns], names=spec["column_names"])
             index = pd.Index(spec["index"], name=spec.get("index_name"))
             return pd.DataFrame([[decode(x, n) for x in row] for row in spec["data"]], index=index, columns=columns)
+        if "$grouper" in v:
+            # a callable grouper over static columns ("{port}" is replaced by the port)
+            spec = v["$grouper"]
+
+            def grouper(n, c, port="", nice_names=True):
+                st = n.c[c].static
+                cols = [col.replace("{port}", port) for col in spec["columns"]]
+                series = [st[col].rename(name) for col, name in zip(cols, spec.get("names", cols))]
+                if spec.get("frame"):
+                    return pd.concat(series, axis=1)
+                return series if spec.get("list") else series[0]
+
+            return grouper
         if "$pandapower" in v:
             # a pandapower net stored with `pandapower.to_json` (path relative to the repository)
             import pandapower

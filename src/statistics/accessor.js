@@ -219,8 +219,14 @@ export class Groupers {
   /** Resolve a groupby spec into a list of {name, values}. */
   resolve(n, c, keys, { port = "", nice_names = false } = {}) {
     const list = typeof keys === "string" || typeof keys === "function" ? [keys] : keys;
-    return list.map((key) => {
-      if (typeof key === "function") return normalizeGrouper(key(n, c, { port, nice_names }), "group");
+    return list.flatMap((key) => {
+      if (typeof key === "function") {
+        const g = key(n, c, { port, nice_names });
+        // a list of Series groups by several keys (one level each), like pandas
+        if (Array.isArray(g) && g.length && g.every((x) => x instanceof Series)) return g.map((x) => normalizeGrouper(x, "group"));
+        if (g instanceof DataFrame) throw new Error("ValueError: Grouper for '<class 'pandas.DataFrame'>' not 1-dimensional");
+        return [normalizeGrouper(g, "group")];
+      }
       if (typeof this[key] === "function" && key !== "resolve" && key !== "add_grouper" && key !== "list_groupers") {
         return normalizeGrouper(this[key](n, c, { port, nice_names }), key);
       }
