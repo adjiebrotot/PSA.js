@@ -656,13 +656,12 @@ export function busmap_by_greedy_modularity(n, n_clusters, buses_i = null) {
 
 /**
  * Busmap by hierarchical agglomerative clustering (scikit-learn's Ward,
- * complete or average linkage) of `feature` rows, constrained to buses
- * connected by branches.
+ * complete, average or single linkage) of `feature` rows, constrained to
+ * buses connected by branches.
  * Without a feature all buses are equally similar.
  */
 export function busmap_by_hac(n, n_clusters, { buses_i = null, branch_components = null, feature = null, affinity = "euclidean", linkage = "ward" } = {}) {
-  if (linkage === "single") throw new Error("NotImplementedError: busmap_by_hac with linkage='single' (scipy's minimum spanning tree) is not available in PSA.js");
-  if (!["ward", "complete", "average"].includes(linkage)) throw new Error(`ValueError: Unknown linkage type ${linkage}.`);
+  if (!["ward", "complete", "average", "single"].includes(linkage)) throw new Error(`ValueError: Unknown linkage type ${linkage}.`);
   if (!["euclidean", "l2", "manhattan", "l1", "cosine"].includes(affinity)) throw new Error(`NotImplementedError: metric '${affinity}' is not available in PSA.js`);
   if (linkage === "ward" && affinity !== "euclidean" && affinity !== "l2") {
     throw new Error(`ValueError: ${affinity} was provided as metric. Ward can only work with euclidean distances (i.e. 'euclidean' and 'l2').`);

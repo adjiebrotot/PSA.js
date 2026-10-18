@@ -368,10 +368,82 @@ function linkageTree(X, rows, nClusters, linkage, metric) {
 }
 
 /**
+ * `_single_linkage_tree`: scipy's `minimum_spanning_tree` of the
+ * connectivity graph (Kruskal over a stable sort of the CSR entries; zero
+ * distances count as machine epsilon), its edges stably sorted by weight and
+ * merged with sklearn's `_single_linkage_label` union-find.
+ */
+function singleLinkageTree(X, rows, nClusters, metric) {
+  const nSamples = X.length;
+  const nNodes = nClusters === null ? 2 * nSamples - 1 : 2 * nSamples - nClusters;
+  const eps = Number.EPSILON;
+  const edges = [];
+  rows.forEach((r, i) => {
+    for (const j of r) {
+      if (j === i) continue;
+      const d = pairedDistance(X[i], X[j], metric);
+      edges.push([i, j, d === 0 ? eps : d]);
+    }
+  });
+  const byWeight = (list) => list.map((_, k) => k).sort((a, b) => list[a][2] - list[b][2] || a - b);
+  // Kruskal: keep an entry when it joins two trees
+  const root = Int32Array.from({ length: nSamples }, (_, i) => i);
+  const find = (x) => {
+    while (root[x] !== x) {
+      root[x] = root[root[x]];
+      x = root[x];
+    }
+    return x;
+  };
+  const keep = new Uint8Array(edges.length);
+  for (const k of byWeight(edges)) {
+    const a = find(edges[k][0]);
+    const b = find(edges[k][1]);
+    if (a !== b) {
+      root[a] = b;
+      keep[k] = 1;
+    }
+  }
+  // the tree's entries in CSR order, epsilon undone, stably sorted by weight
+  const mst = edges.filter((_, k) => keep[k]).map(([i, j, d]) => [i, j, d === eps ? 0 : d]);
+  const sorted = byWeight(mst).map((k) => mst[k]);
+  // `_single_linkage_label` (UnionFind with path shortcuts)
+  const parentUF = new Int32Array(2 * nSamples - 1).fill(-1);
+  let nextLabel = nSamples;
+  const fastFind = (n0) => {
+    let n = n0;
+    while (parentUF[n] !== -1) n = parentUF[n];
+    let p = n0;
+    while (p !== n && parentUF[p] !== n) {
+      const q = parentUF[p];
+      parentUF[p] = n;
+      p = q;
+    }
+    return n;
+  };
+  const children = sorted.map(([a, b]) => {
+    const l = fastFind(a);
+    const r = fastFind(b);
+    parentUF[l] = nextLabel;
+    parentUF[r] = nextLabel;
+    nextLabel++;
+    return [l, r];
+  });
+  const parent = Int32Array.from({ length: nNodes }, (_, i) => i);
+  children.forEach(([l, r], k) => {
+    const i = nSamples + k;
+    if (nClusters !== null && i >= nNodes) return;
+    if (l < nNodes) parent[l] = i;
+    if (r < nNodes) parent[r] = i;
+  });
+  return { children, parent };
+}
+
+/**
  * Labels of `AgglomerativeClustering(n_clusters, connectivity, linkage,
  * metric).fit_predict(X)`: `X` rows are samples, `adjacency` a list of
- * `[i, j]` connected sample pairs. Linkages "ward", "complete" and
- * "average"; metrics "euclidean"/"l2", "manhattan"/"l1" and "cosine".
+ * `[i, j]` connected sample pairs. Linkages "ward", "complete", "average"
+ * and "single"; metrics "euclidean"/"l2", "manhattan"/"l1" and "cosine".
  */
 export function agglomerativeClustering(X, adjacency, nClusters, { linkage = "ward", metric = "euclidean" } = {}) {
   const nSamples = X.length;
@@ -380,7 +452,8 @@ export function agglomerativeClustering(X, adjacency, nClusters, { linkage = "wa
   }
   const { rows } = fixConnectivity(X, adjacency, linkage === "ward" ? "euclidean" : metric);
   const full = nClusters < Math.max(100, 0.02 * nSamples);
-  const tree = linkage === "ward" ? wardTree(X, rows, full ? null : nClusters) : linkageTree(X, rows, full ? null : nClusters, linkage, metric);
+  const k = full ? null : nClusters;
+  const tree = linkage === "ward" ? wardTree(X, rows, k) : linkage === "single" ? singleLinkageTree(X, rows, k, metric) : linkageTree(X, rows, k, linkage, metric);
   return full ? hcCut(nClusters, tree.children, nSamples) : headLabels(tree.parent, nSamples);
 }
 

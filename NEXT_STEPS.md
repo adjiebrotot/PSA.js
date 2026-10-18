@@ -18,9 +18,9 @@ browser smoke test are run separately.
 
 ## 0. Suggested next steps
 
-1. ~~`busmap_by_hac` with complete/average linkage~~ done (scenario
-   `clustering_hac`); single linkage stays open (scipy's MST with numpy's
-   unstable argsort for ties).
+1. ~~`busmap_by_hac` with complete, average and single linkage~~ done
+   (scenario `clustering_hac`; single linkage follows scipy's Kruskal over a
+   stable edge sort, so ties resolve identically).
 2. ~~HDF5 IO~~ done (see section 2, IO formats).
 3. ~~URL inputs~~ done: `from_netcdf` / `from_hdf5` (and the `import_from_*`
    methods) accept http(s) URLs (`fetch`, PyPSA's `_retrieve_from_url`
@@ -158,8 +158,9 @@ browser smoke test are run separately.
       complete and average linkage and euclidean/manhattan/cosine metrics
       (port of scikit-learn's connectivity-constrained `ward_tree` and
       `linkage_tree` with its weight-only edge heap and ordered
-      `max_merge` / `average_merge`, component completion, `_hc_cut` /
-      `hc_get_heads`; scenario
+      `max_merge` / `average_merge`, single linkage via scipy's minimum
+      spanning tree and `_single_linkage_label`, component completion,
+      `_hc_cut` / `hc_get_heads`; scenario
       `clustering_hac`; the completion compares squared distances computed
       like numpy's BLAS `dot` with FMA, so on CPUs without FMA the fixture
       could differ for coincident buses); `segment` / `get_segment_result`
@@ -169,9 +170,8 @@ browser smoke test are run separately.
 - [ ] **Clustering** open: `segment` for snapshots that are not hourly (PyPSA
       passes the snapshot count to tsam as hours, so tsam forms several
       periods and only part of the series is segmented, an upstream bug;
-      PSA.js raises); `busmap_by_hac` with single linkage (scipy's minimum
-      spanning tree, ties ordered by numpy's unstable argsort) or a callable /
-      precomputed metric (PSA.js raises NotImplementedError); parity for
+      PSA.js raises); `busmap_by_hac` with a callable or precomputed metric
+      (PSA.js raises NotImplementedError); parity for
       `busmap_by_kmeans` (a seeded Lloyd/k-means++, not scikit-learn's, whose
       threaded chunk reductions make exact parity unlikely); multiples of
       calendar offsets in `resample` ("2W", "3ME"; PSA.js raises).
