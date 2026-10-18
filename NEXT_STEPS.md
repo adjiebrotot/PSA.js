@@ -216,10 +216,10 @@ browser smoke test are run separately.
       coefficient 1 and constant 0 until another operation makes an
       expression). Missing: quadratic constraints (HiGHS cannot solve them)
       and `where` with a condition over dimensions the expression lacks.
-- [ ] Statistics: pandas aggregations beyond sum/mean/min/max/median/first/
-      last/std/var/prod/count/sem/nunique (e.g. `skew`). Callable groupers
-      returning one Series or a list of Series (one index level each; a
-      DataFrame raises like pandas) are covered. (Done: scenario `statistics_more` covers
+- [x] Statistics: aggregations sum/mean/min/max/median/first/last/std/var/
+      prod/count/sem/nunique/skew/kurt (pandas' nanops formulas) and callable
+      groupers returning one Series or a list of Series (one index level
+      each; a DataFrame raises like pandas). (Done: scenario `statistics_more` covers
       `groupby_method` and `groupby_time` aggregations, aggregation across
       components, ports, carrier/bus-carrier filters, nice names, storage
       capacities and price weightings; the overview table `n.statistics()`

@@ -173,6 +173,39 @@ export function aggregate(values, agg) {
       return v.length > 1 ? Math.sqrt(aggregate(v, "var")) / Math.sqrt(v.length) : NaN;
     case "nunique":
       return new Set(v.map((x) => (Object.is(x, -0) ? 0 : x))).size;
+    case "skew":
+    case "kurt": {
+      // pandas' nanskew / nankurt (bias-corrected, near-constant data -> 0)
+      const count = v.length;
+      if (!count) return NaN;
+      let sum = 0;
+      let maxAbs = 0;
+      for (const x of v) {
+        sum += x;
+        maxAbs = Math.max(maxAbs, Math.abs(x));
+      }
+      const mean = sum / count;
+      let m2 = 0;
+      let mk = 0;
+      for (const x of v) {
+        const a = x - mean;
+        const a2 = a * a;
+        m2 += a2;
+        mk += agg === "skew" ? a2 * a : a2 * a2;
+      }
+      const tol = (p) => (Number.EPSILON * maxAbs) ** p * count;
+      if (Math.abs(m2) < tol(2)) m2 = 0;
+      if (Math.abs(mk) < tol(agg === "skew" ? 3 : 4)) mk = 0;
+      if (agg === "skew") {
+        if (count < 3) return NaN;
+        return m2 === 0 ? 0 : ((count * (count - 1) ** 0.5) / (count - 2)) * (mk / m2 ** 1.5);
+      }
+      if (count < 4) return NaN;
+      const adj = (3 * (count - 1) ** 2) / ((count - 2) * (count - 3));
+      const denominator = (count - 2) * (count - 3) * m2 ** 2;
+      if (denominator === 0) return 0;
+      return (count * (count + 1) * (count - 1) * mk) / denominator - adj;
+    }
     default:
       throw new Error(`Unsupported aggregation '${agg}'`);
   }
