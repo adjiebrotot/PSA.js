@@ -115,7 +115,8 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
 - **Consistency checks** (`consistency_check`, strict mode, scenario-invariant
   attributes), `sanitize`, carrier colours.
 - **Clustering**: spatial (`get_clustering_from_busmap` with all aggregation
-  strategies) and temporal (`resample`, `downsample`, `from_snapshot_map`).
+  strategies) and temporal (`resample` with fixed and calendar offsets such as
+  `3h`, `W`, `ME`, `QS`, `YE`; `downsample`, `from_snapshot_map`).
 
 ## Parity testing
 
@@ -161,7 +162,7 @@ from libm by one ulp on some CPUs).
 See [`NEXT_STEPS.md`](NEXT_STEPS.md) for the remaining work list. In short:
 Excel/HDF5 IO, pandapower/PYPOWER importers, plotting, `to_crs`, tsam segmentation,
 HAC/greedy-modularity busmaps (k-means is a seeded approximation, not
-scikit-learn's), weekly/monthly resampling, solvers other than HiGHS.
+scikit-learn's), solvers other than HiGHS.
 
 PyPSA v1.4.0 behaviour that PSA.js mirrors on stochastic networks (likely
 upstream bugs): `n.buses_t.p` is all zero after optimisation, voltage angles

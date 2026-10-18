@@ -53,24 +53,89 @@ function fmtTs(ms) {
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
 }
 
-/** Fixed-frequency pandas offsets (e.g. "3h", "30min", "D", "2D", "1s"). */
+const DAY = 864e5;
+const WEEKDAYS = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
+const MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
+
+const dayOf = (t) => Math.floor(t / DAY) * DAY; // normalize (UTC midnight)
+const ymd = (t) => {
+  const d = new Date(t);
+  return [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()];
+};
+const monthStart = (y, m) => Date.UTC(y, m, 1);
+const monthEnd = (y, m) => Date.UTC(y, m + 1, 0);
+
+/**
+ * pandas offsets: fixed frequencies ("3h", "30min", "D", "2D", "1s") and the
+ * calendar anchors weekly ("W", "W-MON", ...), month ("ME", "MS"), quarter
+ * ("QE", "QS", "QE-NOV", ...) and year ("YE", "YS", "YE-JUN", ...).
+ *
+ * A fixed frequency gives `{step}`. An anchor gives `{label(t), next(label)}`:
+ * pandas closes (and labels) week, month, quarter and year *ends* on the
+ * right, so a timestamp belongs to the first end on or after its day, and
+ * *starts* on the left (the last start on or before its day).
+ */
 function parseOffset(offset) {
-  const m = /^(\d*)\s*(s|S|min|T|h|H|D|d|W)$/.exec(String(offset).trim());
-  if (!m) throw new Error(`Unsupported resample offset '${offset}' (use multiples of s, min, h, D or W)`);
-  const k = m[1] ? Number(m[1]) : 1;
-  const unit = { s: 1e3, S: 1e3, min: 6e4, T: 6e4, h: 36e5, H: 36e5, D: 864e5, d: 864e5, W: 7 * 864e5 }[m[2]];
-  return { step: k * unit, weekly: m[2] === "W" };
+  const str = String(offset).trim();
+  const tick = /^(\d*)\s*(s|S|min|T|h|H|D|d)$/.exec(str);
+  if (tick) {
+    const k = tick[1] ? Number(tick[1]) : 1;
+    const unit = { s: 1e3, S: 1e3, min: 6e4, T: 6e4, h: 36e5, H: 36e5, D: DAY, d: DAY }[tick[2]];
+    return { step: k * unit };
+  }
+  const m = /^(\d*)(W|ME|MS|QE|QS|YE|YS)(?:-([A-Z]{3}))?$/.exec(str);
+  if (!m) throw new Error(`Unsupported resample offset '${offset}' (use multiples of s, min, h or D, or W, ME, MS, QE, QS, YE, YS)`);
+  if (m[1] && Number(m[1]) !== 1) throw new Error(`NotImplementedError: multiples of anchored offsets ('${offset}') are not supported`);
+  const [, , kind, anchor] = m;
+  if (kind === "W") {
+    const wd = WEEKDAYS[anchor ?? "SUN"];
+    if (wd === undefined) throw new Error(`Invalid weekly anchor '${anchor}'`);
+    return { label: (t) => dayOf(t) + (((wd - new Date(t).getUTCDay()) % 7) + 7) % 7 * DAY, next: (a) => a + 7 * DAY };
+  }
+  if (kind === "ME" || kind === "MS") {
+    if (anchor) throw new Error(`Invalid offset '${offset}'`);
+    if (kind === "ME") return { label: (t) => monthEnd(...ymd(t).slice(0, 2)), next: (a) => monthEnd(ymd(a)[0], ymd(a)[1] + 1) };
+    return { label: (t) => monthStart(...ymd(t).slice(0, 2)), next: (a) => monthStart(ymd(a)[0], ymd(a)[1] + 1) };
+  }
+  // quarters and years, anchored on a month (default DEC for ends, JAN for starts)
+  const end = kind.endsWith("E");
+  const am = MONTHS[anchor ?? (end ? "DEC" : "JAN")];
+  if (am === undefined) throw new Error(`Invalid anchor '${anchor}'`);
+  const months = kind[0] === "Q" ? 3 : 12;
+  const shift = (y, mo, k) => [y + Math.floor((mo + k) / 12), (((mo + k) % 12) + 12) % 12];
+  if (end) {
+    const label = (t) => {
+      const [y, mo] = ymd(t);
+      const k = (((am - mo) % months) + months) % months; // months to the next anchor month
+      return monthEnd(...shift(y, mo, k));
+    };
+    return { label, next: (a) => monthEnd(...shift(ymd(a)[0], ymd(a)[1], months)) };
+  }
+  const label = (t) => {
+    const [y, mo] = ymd(t);
+    const k = (((mo - am) % months) + months) % months; // months since the last anchor month
+    return monthStart(...shift(y, mo, -k));
+  };
+  return { label, next: (a) => monthStart(...shift(ymd(a)[0], ymd(a)[1], months)) };
 }
 
 /**
- * Resample bins (label=left, closed=left, origin start of the first day) of
- * the given timestamps; returns bin start (ms) per timestamp and all bins.
+ * Resample bins of the given timestamps (fixed frequencies: label=left,
+ * closed=left, origin start of the first day; calendar anchors as pandas);
+ * returns the bin label (ms) per timestamp and all bins from the first to the
+ * last one.
  */
 function binTimestamps(times, offset) {
-  const { step, weekly } = parseOffset(offset);
-  if (weekly) throw new Error("Weekly ('W') resampling is not supported in PSA.js");
+  const off = parseOffset(offset);
   const first = times[0];
-  const day = Date.UTC(new Date(first).getUTCFullYear(), new Date(first).getUTCMonth(), new Date(first).getUTCDate());
+  if (off.step === undefined) {
+    const bins = [];
+    const last = off.label(times[times.length - 1]);
+    for (let b = off.label(first); b <= last; b = off.next(b)) bins.push(b);
+    return { binOf: off.label, bins };
+  }
+  const { step } = off;
+  const day = dayOf(first);
   const binOf = (t) => day + Math.floor((t - day) / step) * step;
   const bins = [];
   const last = binOf(times[times.length - 1]);

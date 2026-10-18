@@ -69,8 +69,11 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       (h5wasm in-memory files), shapes/geometry (WKT) round trip.
 - [ ] `to_crs` (coordinate transformation; needs a proj4 equivalent).
 - [ ] **Clustering**: `segment` (tsam), `busmap_by_hac`, `busmap_by_greedy_modularity`,
-      weekly/monthly resample offsets, parity for `busmap_by_kmeans`
-      (current implementation is a seeded Lloyd/k-means++, not scikit-learn).
+      parity for `busmap_by_kmeans` (current implementation is a seeded
+      Lloyd/k-means++, not scikit-learn), multiples of calendar offsets in
+      `resample` ("2W", "3ME"; PSA.js raises). Done: calendar offsets `W`,
+      `W-<day>`, `ME`, `MS`, `QE[-<month>]`, `QS[-<month>]`, `YE[-<month>]`,
+      `YS[-<month>]` (scenario `clustering_resample`).
 - [ ] Plotting (`n.plot`, `n.explore`, statistics plots) — out of scope or a
       separate package.
 - [ ] Solvers other than HiGHS; solver option passthrough is only tested for
