@@ -59,3 +59,48 @@ export function xsDynamic(df, scenario) {
   const data = new Map(cols.map((t) => [t[1], df.col(t)]));
   return new DataFrame({ index: df.index, columns: new Index(cols.map((t) => t[1]), "name"), data });
 }
+
+// ----------------------------------------------------------------------
+// pandas' level order of the `name` level
+// ----------------------------------------------------------------------
+//
+// xarray's `unstack` of the `(scenario, name)` columns yields the `name`
+// coordinate in the order of the MultiIndex level; when `c.da` then reindexes
+// it to the component order, the result's dims become (snapshot, scenario,
+// name) instead of (scenario, name, snapshot). `set_scenarios` keeps the
+// names in component order; adding components afterwards unions the levels
+// like `MultiIndex.append` (`Index.union`: sorted unless equal or empty).
+
+/** Unique `name` labels of a `(scenario, name)` index, in row order. */
+export function uniqueNames(index) {
+  const seen = new Set();
+  const out = [];
+  for (const t of index.values) {
+    const nm = index.isMulti ? t[1] : t;
+    if (!seen.has(nm)) {
+      seen.add(nm);
+      out.push(nm);
+    }
+  }
+  return out;
+}
+
+/** `Index.union(other)` with `sort=None`. */
+export function unionLevel(a, b) {
+  if (!a.length) return b.slice();
+  if (!b.length || (a.length === b.length && a.every((x, i) => x === b[i]))) return a.slice();
+  return [...new Set([...a, ...b])].sort();
+}
+
+/**
+ * Whether the operational data of a stochastic component is laid out
+ * (snapshot, scenario, name) by `c.da` (its `name` level, without unused
+ * names, is not in component order).
+ */
+export function isSnapshotMajor(c) {
+  if (!c.static.index.isMulti || !c._nameLevel) return false;
+  const names = uniqueNames(c.static.index);
+  const present = new Set(names);
+  const level = c._nameLevel.filter((nm) => present.has(nm));
+  return level.length !== names.length || level.some((nm, i) => nm !== names[i]);
+}

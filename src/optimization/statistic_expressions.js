@@ -15,6 +15,7 @@
  * (weighted time sums), `groupby(...).sum()` and `merge`.
  */
 
+import { isSnapshotMajor } from "../network/scenario_frames.js";
 import { Index, compareLabels, labelKey } from "../core/index.js";
 import { LinearExpression, groupSum } from "./expressions.js";
 import { LOOKUP, denseValues } from "./common.js";
@@ -1214,10 +1215,11 @@ function scenarioData(c, scenario) {
  */
 function scenarioMajor(c, attr, scenarios) {
   const dyn = c.dynamic[attr];
-  if (!dyn || dyn.columns.length === 0) return true;
+  // without static fill-ins the columns carry the levels of the static index
+  if (!dyn || dyn.columns.length === 0) return !isSnapshotMajor(c);
   const have = new Set(dyn.columns.values.map(labelKey));
   const diff = c.static.index.values.filter((t) => !have.has(labelKey(t)));
-  if (diff.length === 0) return true;
+  if (diff.length === 0) return !isSnapshotMajor(c);
   const ordered = (tuples, i) => [...new Map(tuples.map((t) => [labelKey(t[i]), t[i]])).values()];
   const sorted = (xs) => xs.slice().sort(compareLabels);
   const same = (a, b) => a.length === b.length && a.every((x, i) => labelKey(x) === labelKey(b[i]));

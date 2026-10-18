@@ -11,7 +11,7 @@
 import { Network } from "./network.js";
 import { DataFrame, Series } from "../core/frame.js";
 import { Index } from "../core/index.js";
-import { broadcastStatic, broadcastDynamic, xsStatic, xsDynamic } from "./scenario_frames.js";
+import { broadcastStatic, broadcastDynamic, xsStatic, xsDynamic, uniqueNames } from "./scenario_frames.js";
 
 export { broadcastStatic, broadcastDynamic, xsStatic, xsDynamic };
 
@@ -103,6 +103,7 @@ Network.prototype.set_scenarios = function setScenarios(scenarios = null) {
   }
   const index = new Index(names.map(String), "scenario");
   for (const c of this.components.values()) {
+    c._nameLevel = uniqueNames(c.static.index);
     c.static = broadcastStatic(c.static, index);
     for (const [k, v] of Object.entries(c.dynamic)) c.dynamic[k] = broadcastDynamic(v, index);
   }

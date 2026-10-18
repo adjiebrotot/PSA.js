@@ -12,7 +12,7 @@ import { pyFloatRepr } from "../core/csv.js";
 import { ComponentsStore, installStoreAccessors } from "./store.js";
 import { NOMINAL_ATTRS } from "../components/components.js";
 import { importPiecewiseFromDf, piecewiseFromAddValue } from "../components/piecewise.js";
-import { broadcastStatic, broadcastDynamic } from "./scenario_frames.js";
+import { broadcastStatic, broadcastDynamic, uniqueNames, unionLevel } from "./scenario_frames.js";
 import { PySet } from "../core/pyset.js";
 import { logger } from "../logger.js";
 
@@ -776,6 +776,7 @@ export class Network {
     }
 
     // pandas only concatenates if the old static frame has rows
+    if (multi) c._nameLevel = c.static.index.length > 0 ? unionLevel(c._nameLevel ?? uniqueNames(c.static.index), uniqueNames(names)) : uniqueNames(names);
     let combined = c.static.index.length > 0 ? concatStatic(c.static, newStatic) : newStatic;
     const ordered = sortAttrs(combined.columns, [...attrs.keys()]);
     combined = combined.loc(null, ordered);
@@ -835,6 +836,8 @@ export class Network {
       ordered = sortAttrs(df.columns.union(dyn.columns), dyn.columns.values);
       dyn = dyn.reindex({ columns: ordered, fill: NaN });
     }
+    // keep the (scenario, name) levels of stochastic columns
+    if (df.columns.isMulti || staticIdx.isMulti) dyn.columns = new Index(dyn.columns.values, ["scenario", "name"]);
     const rowPos = df.index.getIndexer(this.snapshots);
     for (const col of df.columns) {
       const src = df.col(col);
@@ -1270,6 +1273,7 @@ function deepCopyNetwork(src) {
     const dst = n.c.get(ln);
     dst.ctype = comp.ctype === dst.ctype ? comp.ctype : comp.ctype.clone();
     dst.static = copyFrame(comp.static);
+    if (comp._nameLevel) dst._nameLevel = comp._nameLevel.slice();
     dst.dynamic = {};
     for (const [k, v] of Object.entries(comp.dynamic)) dst.dynamic[k] = copyFrame(v);
     dst.piecewise = {};

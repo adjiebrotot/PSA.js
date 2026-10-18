@@ -1,6 +1,6 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 119 tests: the parity
+State at hand-off: all PSA.js tests pass (`npm test`: 120 tests: the parity
 scenarios, IO tests and the example scripts; `npm run test:browser` passes in
 headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
 of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
@@ -31,7 +31,8 @@ browser smoke test are run separately.
    numbers were checked against PyPSA). Still open: an API reference
    (e.g. generated from the JSDoc comments).
 5. Report the upstream bugs listed in section 3 (PyPSA issues).
-6. Stochastic leftovers (components added after `set_scenarios`).
+6. ~~Stochastic leftovers (components added after `set_scenarios`)~~ done
+   (scenario `stochastic_added`); remaining stochastic items in section 2.
 
 ## 1. Housekeeping
 
@@ -71,11 +72,18 @@ browser smoke test are run separately.
         other dimensions.
   - [ ] Assigning duals of custom constraints on stochastic networks (PyPSA
         raises too).
-  - [ ] Statistic expressions of components added after `set_scenarios`
-        (their static levels may be unordered, which changes `c.da`'s layout
-        in PyPSA; untested).
-  - [ ] Ungrouped statistics (`groupby=False`) of components added after
-        `set_scenarios` follow PyPSA's row order only for scenario-major data.
+  - [x] Components added after `set_scenarios` (scenario `stochastic_added`,
+        29 records incl. the LP file): their static rows follow both
+        scenarios' original rows and `MultiIndex.append` sorts the `name`
+        level, so PyPSA's `c.da` (and with it the operational variables, their
+        bounds and the nodal balance led by that component) becomes
+        (snapshot, scenario, name); PSA.js tracks pandas' level order per
+        component (`_nameLevel`, `isSnapshotMajor`) and merges the scenario
+        models accordingly. Ungrouped statistics follow the static rows, and
+        time series of `sign * p` (energy balance with `groupby_time=False`)
+        PyPSA's sorted column union. Fixed on the way: time series of such
+        components lost their (scenario, name) levels, so e.g. loads added
+        after `set_scenarios` were dropped from the nodal balance.
   - [ ] Iterative transmission expansion, power flow and spatial clustering
         raise (they fail or are unsupported in PyPSA v1.4.0 too).
 - [x] **NetworkCollection** (scenario `collection`): construction from lists,

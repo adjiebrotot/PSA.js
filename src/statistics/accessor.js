@@ -550,7 +550,15 @@ export class StatisticsAccessor {
         for (const m of perMember) for (const [port] of m.get(cn) ?? []) if (!ports.includes(port)) ports.push(port);
         const values = ports.map((port) => {
           const parts = order.map(([key, s]) => [key, perMember[s].get(cn)?.find(([q]) => q === port)?.[1]]).filter(([, t]) => t !== undefined);
-          return prefixRows(parts, members.names);
+          const tab = prefixRows(parts, members.names);
+          if (groupby !== false || !n.has_scenarios) return tab;
+          // ungrouped values of stochastic networks follow the static rows
+          // (components added after `set_scenarios` come after both
+          // scenarios); time series of `sign * p` keep the sorted union of
+          // the static rows and the scenario-major result columns
+          const st = n.c.get(cn).static;
+          if (opts._signAligned && tab.cols !== null && st.has("sign") && !isScenarioMajor(st.index)) return sortedRows(tab);
+          return staticRowOrder(tab, st.index);
         });
         return [cn, this._combine_ports(values, opts.agg ?? "sum")];
       });
@@ -882,7 +890,7 @@ export class StatisticsAccessor {
       return this._aggregate_timeseries(p, weights, o.groupby_time);
     };
     void n;
-    return this._aggregate_components(func, { ...o, agg: o.groupby_method });
+    return this._aggregate_components(func, { ...o, agg: o.groupby_method, _signAligned: true });
   }
 
   /** Energy balance (supply positive, withdrawal negative). */
@@ -1240,6 +1248,35 @@ export class StatisticsAccessor {
 }
 
 /** Concatenate `[[key, Tab]]` with the (scalar or tuple) keys as leading levels. */
+/** Whether `(scenario, name)` rows run scenario by scenario over the same names. */
+function isScenarioMajor(index) {
+  const names = [];
+  const scen = [];
+  for (const [sc, nm] of index.values) {
+    if (!scen.length || scen[scen.length - 1] !== sc) scen.push(sc);
+    if (scen.length === 1) names.push(nm);
+  }
+  if (new Set(scen).size !== scen.length || index.length !== scen.length * names.length) return false;
+  return index.values.every(([sc, nm], i) => sc === scen[Math.floor(i / names.length)] && nm === names[i % names.length]);
+}
+
+/** Rows of `tab` sorted by their labels (pandas' sorted union). */
+function sortedRows(tab) {
+  const take = tab.index.values.map((_, i) => i).sort((i, j) => compareLabels(tab.index.values[i], tab.index.values[j]));
+  return new Tab(new Index(take.map((i) => tab.index.values[i]), tab.index.names), tab.cols, take.map((i) => tab.rows[i]));
+}
+
+/** Rows `(scenario, name)` of `tab` in the order of the static index (others last). */
+function staticRowOrder(tab, staticIndex) {
+  if (!tab.index.isMulti || tab.index.names.length !== 2 || !staticIndex.isMulti) return tab;
+  const pos = new Map(staticIndex.values.map((t, i) => [`${t[0]}\u0000${t[1]}`, i]));
+  const keyed = tab.index.values.map((t, i) => [pos.get(`${t[0]}\u0000${t[1]}`) ?? Infinity, i]);
+  if (keyed.every(([p], i) => i === 0 || p >= keyed[i - 1][0])) return tab;
+  keyed.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const take = keyed.map(([, i]) => i);
+  return new Tab(new Index(take.map((i) => tab.index.values[i]), tab.index.names), tab.cols, take.map((i) => tab.rows[i]));
+}
+
 function prefixRows(parts, names) {
   const tuple = (k) => (Array.isArray(k) ? k : [k]);
   const tabs = parts.map(([, t]) => t);
