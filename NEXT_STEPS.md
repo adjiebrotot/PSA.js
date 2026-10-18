@@ -1,6 +1,6 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 124 tests: the parity
+State at hand-off: all PSA.js tests pass (`npm test`: 127 tests: the parity
 scenarios, IO tests and the example scripts; `npm run test:browser` passes in
 headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
 of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
@@ -134,6 +134,14 @@ browser smoke test are run separately.
       failures on unnamed loads (`case9`) and on buses removed twice
       (`example_multivoltage`) are mirrored. `n.remove` now raises for
       unknown names like pandas' `drop`.
+- [x] Package options like `pypsa.options` (`src/options.js`, exported
+      `options`, `get_option`, `set_option`, `option_context`): the statistics,
+      consistency and IO defaults (the older `statisticsOptions`,
+      `consistencyOptions`, `ioOptions` are views onto them), `add`'s
+      `return_names` and the optimisation defaults (`solver_name`,
+      `solver_options`, `log_to_console`, `include_objective_constant`);
+      `optimization.model_snapshot_index`, `warnings.*` and `api.*` are
+      stored only. Tests: `test/options.test.js`.
 - [x] SubNetwork API (scenario `topology_subnetwork_api`): `sub.lpf()`,
       `sub.pf()` (iterations, errors, convergence per snapshot) and PyPSA's
       deprecated accessors (`buses_i()` ... `stores_i()`, `buses()`,

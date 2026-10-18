@@ -19,7 +19,9 @@ import { Tab, KeyError, isKeyError, groupRows, groupByLevels, concatRows, roundT
 import { scenarioView } from "../network/scenarios.js";
 import { PySet } from "../core/pyset.js";
 
-export const statisticsOptions = { nice_names: true, drop_zero: true, round: 5 };
+import { statisticsOptions } from "../options.js";
+
+export { statisticsOptions };
 
 // ----------------------------------------------------------------------
 // helpers

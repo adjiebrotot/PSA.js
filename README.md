@@ -63,6 +63,8 @@ objective), `stochastic`, `clustering`, `power_flow`, `io`, `mga`,
 
 API names follow PyPSA (snake_case). Python keyword arguments become a trailing
 options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
+Package options mirror `pypsa.options` (`options.params.statistics.round =
+3`, `get_option`, `set_option`, `option_context(name, value, fn)`).
 The API reference is in [`docs/API.md`](docs/API.md) (generated from the
 sources with `npm run docs`).
 
@@ -93,8 +95,7 @@ sources with `npm run docs`).
   (`import_from_pypower_ppc`) and pandapower networks
   (`import_from_pandapower_net`, from the JSON `pandapower.to_json` writes).
   netCDF and HDF5 files also load from http(s) URLs
-  (`ioOptions.allow_network_requests`, PyPSA's
-  `options.general.allow_network_requests`).
+  (`options.general.allow_network_requests`, as in PyPSA).
 - **Topology and power flow**: sub-networks, cycle matrices (networkx-ordered
   `bfs-refined` default and `paton` cycle bases), PTDF/BODF, linear power flow,
   contingency analysis, Newton-Raphson AC power flow incl. distributed slack,

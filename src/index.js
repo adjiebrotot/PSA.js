@@ -32,6 +32,7 @@ export { Components } from "./components/components.js";
 export { componentTypes, getComponentType } from "./components/types.js";
 export { annuity, periodizedCost } from "./costs.js";
 export { logger } from "./logger.js";
+export { options, get_option, set_option, option_context } from "./options.js";
 export { NodeFolder, MemoryFolder, PYPSA_VERSION, ioOptions } from "./network/io.js";
 export { consistencyOptions, generate_colors, ConsistencyError } from "./consistency.js";
 export { ClusteringAccessor, Clustering, TemporalClustering, get_clustering_from_busmap, aggregatebuses, aggregatelines, aggregateoneport, busmap_by_stubs, busmap_by_kmeans, resample, downsample, from_snapshot_map, segment } from "./clustering/index.js";

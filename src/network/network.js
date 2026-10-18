@@ -10,6 +10,7 @@ import { DataFrame, Series, isNumberArray, makeFilled } from "../core/frame.js";
 import { Index, asIndex, labelKey } from "../core/index.js";
 import { pyFloatRepr } from "../core/csv.js";
 import { epsgOf, wktOf, transformer } from "../core/crs.js";
+import { get_option } from "../options.js";
 import { ComponentsStore, installStoreAccessors } from "./store.js";
 import { NOMINAL_ATTRS } from "../components/components.js";
 import { importPiecewiseFromDf, piecewiseFromAddValue } from "../components/piecewise.js";
@@ -609,7 +610,7 @@ export class Network {
    * @param {object} [opts] { suffix, overwrite, return_names }
    */
   add(class_name, name, kwargs = {}, opts = {}) {
-    const { suffix = "", overwrite = false, return_names = false } = opts;
+    const { suffix = "", overwrite = false, return_names = get_option("params.add.return_names") } = opts;
     const c = this.c.get(class_name);
     const single = isScalar(name) && typeof suffix === "string";
     const names = buildSuffixedNames(name, suffix);

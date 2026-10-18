@@ -9,7 +9,9 @@ import { Network, ConsistencyError, checkForUnknownBuses } from "./network/netwo
 import { NOMINAL_ATTRS, Components } from "./components/components.js";
 import { logger } from "./logger.js";
 
-export const consistencyOptions = { numerical_tolerance: 1e-9 };
+import { consistencyOptions } from "./options.js";
+
+export { consistencyOptions };
 
 const RE_PORTS_FILTER = /^bus\d*$/;
 const RE_PORTS_GE_2 = /^bus([2-9]|[1-9]\d+)$/;

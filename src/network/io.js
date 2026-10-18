@@ -14,8 +14,9 @@ import { logger } from "../logger.js";
 import { PYPSA_VERSION } from "../components/types.js";
 import { wktOf } from "../core/crs.js";
 
-/** IO options (PyPSA: `pypsa.options.general.allow_network_requests`). */
-export const ioOptions = { allow_network_requests: true };
+import { ioOptions } from "../options.js";
+
+export { ioOptions };
 
 /** `validators.url`: a scheme and a host. */
 export const isUrl = (p) => typeof p === "string" && /^[a-z][a-z0-9+.-]*:\/\/[^\s/?#]+/i.test(p);
