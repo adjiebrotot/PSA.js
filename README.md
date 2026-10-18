@@ -14,8 +14,9 @@ PSA.js report `pypsa_version = 1.4.0`.
 Requires Node.js >= 22.3 (plain ES modules, no build step). PSA.js also runs
 in browsers through a bundler: HiGHS loads its WebAssembly next to the
 module (copy `highs.wasm` beside the bundle), CSV folders go through
-`MemoryFolder` and Excel workbooks through bytes (`export_to_excel(null)`,
-`Network.from_excel(bytes)`); netCDF needs Node.js for now. `npm run
+`MemoryFolder`, Excel workbooks and netCDF files through bytes
+(`export_to_excel(null)`, `Network.from_excel(bytes)`, `await
+export_to_netcdf(null)`, `Network.from_netcdf(bytes)`). `npm run
 test:browser` bundles a smoke test with esbuild and runs it in headless
 Chromium (`test/browser/entry.js`).
 

@@ -279,3 +279,13 @@ test("pure-JS inflate matches zlib on PyPSA's workbook entries", async () => {
   }
   assert.ok(checked > 5);
 });
+
+test("netCDF from and to bytes", async () => {
+  const { readFileSync } = await import("node:fs");
+  const fx = loadFixture("io_solved");
+  const n = await Network.from_netcdf(new Uint8Array(readFileSync(ncPath("ac-dc-meshed-solved"))));
+  assertNetworkMatches(n, fx.network_nc, { rtol: 0, atol: 0 });
+  const bytes = await n.export_to_netcdf(null);
+  assert.ok(bytes instanceof Uint8Array && bytes.length > 1000);
+  assertNetworkMatches(await Network.from_netcdf(bytes), fx.network_nc, { rtol: 0, atol: 0 });
+});

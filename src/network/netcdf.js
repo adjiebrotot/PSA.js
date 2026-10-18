@@ -17,21 +17,60 @@ import { Index } from "../core/index.js";
 import { Network } from "./network.js";
 import { collectExport, importFromImporter } from "./io.js";
 
+const IS_NODE = Boolean(globalThis.process?.versions?.node);
+
 let h5Promise = null;
+/** h5wasm (its Node.js build on Node, the browser build with an in-memory FS elsewhere). */
 async function getH5() {
   if (!h5Promise) {
-    h5Promise = import("h5wasm/node")
+    h5Promise = (IS_NODE ? import("h5wasm/node") : import("h5wasm"))
       .catch(() => {
         throw new Error("netCDF support requires the optional dependency 'h5wasm' (npm install h5wasm).");
       })
       .then(async (m) => {
         const h5 = m.default ?? m;
-        await h5.ready;
-        return h5;
+        const mod = await h5.ready;
+        return { h5, FS: mod.FS };
       });
   }
-  return h5Promise;
+  return (await h5Promise).h5;
 }
+
+let tmpCounter = 0;
+/**
+ * Run `fn(path)` on a scratch file: in a temporary directory on Node.js, in
+ * h5wasm's in-memory file system elsewhere. `bytes` are written to it first;
+ * with `readBack` the file's bytes are returned.
+ */
+async function withScratchFile(bytes, fn, { readBack = false } = {}) {
+  await getH5();
+  const { FS } = await h5Promise;
+  const name = `psa_${Date.now()}_${tmpCounter++}.nc`;
+  if (IS_NODE) {
+    const fs = globalThis.process.getBuiltinModule("node:fs");
+    const os = globalThis.process.getBuiltinModule("node:os");
+    const path = globalThis.process.getBuiltinModule("node:path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "psa-nc-"));
+    const file = path.join(dir, name);
+    try {
+      if (bytes) fs.writeFileSync(file, bytes);
+      await fn(file);
+      return readBack ? new Uint8Array(fs.readFileSync(file)) : undefined;
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const file = `/${name}`;
+  try {
+    if (bytes) FS.writeFile(file, bytes);
+    await fn(file);
+    return readBack ? FS.readFile(file) : undefined;
+  } finally {
+    if (FS.analyzePath(file).exists) FS.unlink(file);
+  }
+}
+
+const isBytes = (x) => x instanceof Uint8Array || x instanceof ArrayBuffer;
 
 // ----------------------------------------------------------------------
 // datetime (CF) helpers
@@ -425,20 +464,31 @@ async function exportToNetCDF(n, path, { export_standard_types = false, compress
 }
 
 Object.assign(Network.prototype, {
-  /** Import from a netCDF file written by PyPSA or PSA.js (async). */
+  /**
+   * Import from a netCDF file written by PyPSA or PSA.js (async): a path, or
+   * the file's bytes (Uint8Array / ArrayBuffer, e.g. in browsers).
+   */
   async import_from_netcdf(path, { skip_time = false } = {}) {
     const h5 = await getH5();
-    const f = new h5.File(String(path), "r");
-    try {
-      importFromImporter(this, new ImporterNetCDF(f), skip_time);
-    } finally {
-      f.close();
-    }
+    const read = (file) => {
+      const f = new h5.File(String(file), "r");
+      try {
+        importFromImporter(this, new ImporterNetCDF(f), skip_time);
+      } finally {
+        f.close();
+      }
+    };
+    if (isBytes(path)) await withScratchFile(path instanceof ArrayBuffer ? new Uint8Array(path) : path, read);
+    else read(path);
     return this;
   },
 
-  /** Export to a netCDF file readable by PyPSA / xarray (async). */
-  async export_to_netcdf(path, opts = {}) {
+  /**
+   * Export to a netCDF file readable by PyPSA / xarray (async). With `path`
+   * null the file's bytes are returned.
+   */
+  async export_to_netcdf(path = null, opts = {}) {
+    if (path === null) return withScratchFile(null, (file) => exportToNetCDF(this, file, opts), { readBack: true });
     await exportToNetCDF(this, String(path), opts);
     return path;
   },

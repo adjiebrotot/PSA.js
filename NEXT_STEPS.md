@@ -91,10 +91,9 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       (areas, buffers, `to_crs`) are not available.
 - [x] Browser support: `npm run test:browser` (esbuild bundle in headless
       Chromium, also a CI job): optimisation with HiGHS WASM, statistics,
-      CSV via `MemoryFolder`, Excel via bytes (bundled inflate when no zlib).
-- [ ] netCDF extras: URL inputs, browser support (h5wasm's browser build with
-      in-memory files; `from_netcdf` / `export_to_netcdf` use `h5wasm/node`),
-      float32 variables stored as float32
+      CSV via `MemoryFolder`, Excel via bytes (bundled inflate when no zlib),
+      netCDF via bytes (h5wasm's browser build and in-memory file system).
+- [ ] netCDF extras: URL inputs, float32 variables stored as float32
       (PSA.js rounds the values but writes float64). Done: `float32` and
       PyPSA's `compression` dict (`io.test.js`, fixture `io_float32`).
 - [ ] `to_crs` (coordinate transformation; needs a proj4 equivalent).
