@@ -13,7 +13,8 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
-    "test:browser": "node scripts/browser_smoke.mjs"
+    "test:browser": "node scripts/browser_smoke.mjs",
+    "docs": "node scripts/gen_api_docs.mjs"
   },
   "engines": {
     "node": ">=22.3"

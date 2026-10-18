@@ -445,6 +445,7 @@ export class Model {
     }
   }
 
+  /** Add quadratic objective terms `coeffs * v1 * v2` (variable labels). */
   add_quadratic_objective_terms(v1, v2, coeffs) {
     for (let t = 0; t < v1.length; t++) {
       this.objective.q1.push(v1[t]);
@@ -484,6 +485,7 @@ export class Model {
     return [vs, cs];
   }
 
+  /** The quadratic objective terms as `[[v1, v2, coeff], ...]`. */
   quadraticTerms() {
     const o = this.objective;
     const v1 = [];

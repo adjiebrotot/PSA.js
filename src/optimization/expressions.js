@@ -389,6 +389,7 @@ export class LinearExpression {
     return new LinearExpression(this.model, dims, coords, this.nterm, vars, coeffs, consts);
   }
 
+  /** Negated expression. */
   neg() {
     return this.mul(-1);
   }
@@ -466,6 +467,7 @@ export class LinearExpression {
     return new LinearExpression(this.model, dims, coords, nterm, vars, coeffs, consts);
   }
 
+  /** Difference with an expression, variable or constant (linopy's outer alignment). */
   sub(other) {
     if (typeof other === "number") return this.add(-other);
     if (other instanceof QuadraticExpression) return other.neg().add(this);
@@ -526,14 +528,17 @@ export class LinearExpression {
     return new LinearExpression(this.model, keep, keepCoords, nterm, vars, coeffs, consts);
   }
 
+  /** Constraint `expr <= rhs` (pass it to `m.add_constraints(spec, {name})`). */
   le(rhs) {
     return new ConstraintSpec(this, "<=", rhs);
   }
 
+  /** Constraint `expr >= rhs`. */
   ge(rhs) {
     return new ConstraintSpec(this, ">=", rhs);
   }
 
+  /** Constraint `expr == rhs`. */
   eq(rhs) {
     return new ConstraintSpec(this, "=", rhs);
   }
@@ -628,6 +633,7 @@ export class QuadraticExpression {
     return this._map((e) => e.mul(c));
   }
 
+  /** Negated expression. */
   neg() {
     return this.mul(-1);
   }
@@ -643,6 +649,7 @@ export class QuadraticExpression {
     return QuadraticExpression._fromFactors(a1.add(b1), a2.add(b2));
   }
 
+  /** Difference with an expression, variable or constant (linopy's outer alignment). */
   sub(other) {
     if (typeof other === "number") return this.add(-other);
     if (other instanceof QuadraticExpression) return this.add(other.neg());
@@ -951,6 +958,7 @@ export function installExpressions(Variable, Model) {
     e._variableLike = true;
     return e.fillna(value);
   };
+  /** The variable as a linear expression (coefficient 1, constant 0). */
   Variable.prototype.toExpr = function toExprMethod() {
     return LinearExpression.fromVariable(this);
   };

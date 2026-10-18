@@ -63,6 +63,8 @@ objective), `stochastic`, `clustering`, `power_flow`, `io`, `mga`,
 
 API names follow PyPSA (snake_case). Python keyword arguments become a trailing
 options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
+The API reference is in [`docs/API.md`](docs/API.md) (generated from the
+sources with `npm run docs`).
 
 ### Dependencies (JS equivalents of PyPSA's Python stack)
 

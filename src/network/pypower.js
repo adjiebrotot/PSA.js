@@ -25,6 +25,9 @@ function pick(df, idx) {
   return Object.fromEntries(Object.entries(df).map(([k, v]) => [k, idx.map((i) => v[i])]));
 }
 
+/**
+ * Import a PYPOWER case (`{version, baseMVA, bus, gen, branch, ...}` with matrices as arrays), like PyPSA's importer.
+ */
 Network.prototype.import_from_pypower_ppc = function importFromPypowerPpc(ppc, { overwrite_zero_s_nom = null } = {}) {
   if (Math.trunc(Number(ppc.version)) !== 2) logger.warning("Warning, importing from PYPOWER may not work if PPC version is not 2!");
   logger.warning("Warning: Note that when importing from PYPOWER, some PYPOWER features not supported: areas, gencosts, component status");

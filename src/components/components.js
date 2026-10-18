@@ -362,6 +362,7 @@ export class Components {
     return this.names.difference(this.active_assets);
   }
 
+  /** Restrict `data` (indexed by component names) to the active assets. */
   filter_by_active_assets(data, investment_period = null) {
     if (typeof investment_period === "number" && Number.isNaN(investment_period)) investment_period = null;
     if (data instanceof Index || Array.isArray(data)) {
@@ -605,11 +606,13 @@ export class Components {
   // Mutation helpers
   // ------------------------------------------------------------------
 
+  /** Add components of this class (`n.add(<class>, name, kwargs, opts)`). */
   add(name, kwargs = {}, opts = {}) {
     if (!this.attached) throw new Error("Components must be attached to a network to add components.");
     return this.n.add(this.name, name, kwargs, opts);
   }
 
+  /** Rename components (`{old: new}`) in static, dynamic and referencing data of the network. */
   rename_component_names(mapping) {
     for (const v of Object.values(mapping)) if (typeof v !== "string") throw new Error("New names must be strings.");
     this.static = this.static.renameIndex((v) => mapping[v] ?? v);
@@ -633,6 +636,7 @@ export class Components {
 
   // Buses -------------------------------------------------------------
 
+  /** Add the buses referenced by the components but missing from the network. */
   add_missing_buses(kwargs = {}) {
     if (this.name !== "Bus") throw new Error("add_missing_buses is only defined for buses");
     const n = this.n;
@@ -654,6 +658,7 @@ export class Components {
     return this.add(missing, kwargs, { return_names: true });
   }
 
+  /** Add the carriers referenced by the components but missing from the network. */
   add_missing_carriers(kwargs = {}) {
     if (this.name !== "Carrier") throw new Error("add_missing_carriers is only defined for carriers");
     const all = new Set();

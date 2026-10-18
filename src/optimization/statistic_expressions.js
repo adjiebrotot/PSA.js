@@ -1083,12 +1083,14 @@ export class StatisticExpressionsAccessor {
     return this._aggregate_components(func, o);
   }
 
+  /** Supply (positive part of the energy balance) as an expression. */
   supply(opts = {}) {
     const o = { ...(opts ?? {}) };
     if (o.groupby === null || o.groupby === undefined) o.groupby = ["carrier", "bus_carrier"];
     return this.energy_balance({ ...o, direction: "supply" });
   }
 
+  /** Withdrawal (negative part of the energy balance) as an expression. */
   withdrawal(opts = {}) {
     const o = { ...(opts ?? {}) };
     if (o.groupby === null || o.groupby === undefined) o.groupby = ["carrier", "bus_carrier"];

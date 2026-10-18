@@ -465,34 +465,46 @@ export class TemporalClusteringAccessor {
     this._n = n;
   }
 
+  /**
+   * The network resampled to a coarser frequency (`3h`, `D`, `W`, `ME`, `QS`, ...), weightings summed.
+   */
   resample(offset, opts = {}) {
     return resample(this._n, offset, opts).n;
   }
 
+  /** `TemporalClustering` result of `resample` (network and snapshot map). */
   get_resample_result(offset, opts = {}) {
     return resample(this._n, offset, opts);
   }
 
+  /** The network with every `stride`-th snapshot, weightings scaled. */
   downsample(stride) {
     return downsample(this._n, stride).n;
   }
 
+  /** `TemporalClustering` result of `downsample`. */
   get_downsample_result(stride) {
     return downsample(this._n, stride);
   }
 
+  /** The network aggregated along a snapshot map (snapshot -> representative snapshot). */
   from_snapshot_map(snapshot_map, opts = {}) {
     return from_snapshot_map(this._n, snapshot_map, opts).n;
   }
 
+  /** `TemporalClustering` result of `from_snapshot_map`. */
   get_from_snapshot_map_result(snapshot_map, opts = {}) {
     return from_snapshot_map(this._n, snapshot_map, opts);
   }
 
+  /**
+   * The network reduced to `num_segments` segments of adjacent similar snapshots (tsam's segmentation).
+   */
   segment(num_segments, opts = {}) {
     return segment(this._n, num_segments, opts).n;
   }
 
+  /** `TemporalClustering` result of `segment`. */
   get_segment_result(num_segments, opts = {}) {
     return segment(this._n, num_segments, opts);
   }

@@ -446,6 +446,7 @@ export class Network {
     return this.snapshots;
   }
 
+  /** Set the investment periods; the snapshots become (period, timestep) pairs. */
   set_investment_periods(periods) {
     const p = new Index(Array.from(periods instanceof Index ? periods.values : periods), "period");
     if (p.length === 0) return;
@@ -859,10 +860,12 @@ export class Network {
   // Descriptors
   // ------------------------------------------------------------------
 
+  /** Attribute as a (snapshots x names) frame: time series where given, static values elsewhere. */
   get_switchable_as_dense(component, attr, snapshots = null, inds = null) {
     return this.c.get(component)._as_dynamic(attr, snapshots, inds);
   }
 
+  /** Generator over the snapshots of `get_switchable_as_dense`, one row at a time. */
   *get_switchable_as_iter(component, attr, snapshots, inds = null) {
     const df = this.get_switchable_as_dense(component, attr, snapshots, inds);
     // the series follow the order of `inds` (unique, known names only)
@@ -876,22 +879,27 @@ export class Network {
     }
   }
 
+  /** Names of the extendable components of class `c`. */
   get_extendable_i(c) {
     return this.c.get(c).extendables;
   }
 
+  /** Names of the non-extendable components of class `c`. */
   get_non_extendable_i(c) {
     return this.c.get(c).fixed;
   }
 
+  /** Names of the committable components of class `c`. */
   get_committable_i(c) {
     return this.c.get(c).committables;
   }
 
+  /** Boolean Series of the components of class `c` that are active (in `investment_period`). */
   get_active_assets(c, investment_period = null) {
     return this.c.get(c).get_active_assets(investment_period);
   }
 
+  /** Unit of the buses with carrier `bus_carrier` (one unit, else an error). */
   bus_carrier_unit(bus_carrier) {
     if (bus_carrier === null || bus_carrier === undefined) return "carrier dependent";
     const bcs = typeof bus_carrier === "string" ? [bus_carrier] : bus_carrier;
@@ -942,11 +950,13 @@ export class Network {
     return this._concatBranches(comps);
   }
 
+  /** Lines and transformers as one `(component, name)` indexed frame. */
   passive_branches() {
     const comps = [...this.passive_branch_components].filter((c) => !this.c.get(c).empty).sort();
     return this._concatBranches(comps);
   }
 
+  /** Links (and processes) as one `(component, name)` indexed frame. */
   controllable_branches() {
     const comps = [...this.controllable_branch_components].filter((c) => !this.c.get(c).empty).sort();
     return this._concatBranches(comps);
@@ -1046,6 +1056,7 @@ export class Network {
     return inplace ? null : neu;
   }
 
+  /** Rename components of a class (`{old: new}`) in all static, dynamic and referencing data. */
   rename_component_names(component, mapping) {
     this.c.get(component).rename_component_names(mapping);
   }

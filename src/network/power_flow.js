@@ -157,6 +157,9 @@ export function apply_transformer_t_model(n) {
   }
 }
 
+/**
+ * Compute derived attributes (per-unit impedances, line type values, dependent bus data) like `n.calculate_dependent_values()`.
+ */
 function calculate_dependent_values() {
   apply_line_types(this);
   apply_transformer_types(this);
@@ -357,12 +360,16 @@ export class SubNetwork {
     return new Index(out, ["type", "name"]);
   }
 
+  /** Passive branches of the sub-network as a `(component, name)` indexed frame. */
   branches() {
     const b = this.n.passive_branches();
     if (b.index.length === 0) return b;
     return b.filter(b.col("sub_network").map((s) => s === this.name));
   }
 
+  /**
+   * Choose the slack bus (the bus of the slack generator, else the first bus) and set `slack_generator`.
+   */
   find_slack_bus() {
     const n = this.n;
     const gens = this.c.get("generators").static;
@@ -388,6 +395,7 @@ export class SubNetwork {
     n.c.sub_networks.static.setAt(this.name, "slack_bus", this.slack_bus);
   }
 
+  /** Assign the PV/PQ/Slack control of the buses from their generators. */
   find_bus_controls() {
     const n = this.n;
     this.find_slack_bus();
@@ -441,6 +449,7 @@ export class SubNetwork {
     return out;
   }
 
+  /** Bus susceptance matrix `B` and branch matrix `H` of the linear power flow. */
   calculate_B_H({ skip_pre = false } = {}) {
     const n = this.n;
     if (!skip_pre) {
@@ -469,6 +478,7 @@ export class SubNetwork {
     this.p_bus_shift = this.K.matvec(this.p_branch_shift);
   }
 
+  /** Power transfer distribution factors (`sub.PTDF`, branches x buses). */
   calculate_PTDF({ skip_pre = false } = {}) {
     if (!skip_pre) this.calculate_B_H();
     const npvpq = this.pvpqs.length;
@@ -501,6 +511,7 @@ export class SubNetwork {
     this.PTDF = ptdf;
   }
 
+  /** Branch outage distribution factors (`sub.BODF`, branches x branches). */
   calculate_BODF({ skip_pre = false } = {}) {
     if (!skip_pre) this.calculate_PTDF();
     const ptdf = this.PTDF;
@@ -521,6 +532,7 @@ export class SubNetwork {
     this.BODF = bodf;
   }
 
+  /** Bus admittance matrix `Y` and the branch admittances for the AC power flow. */
   calculate_Y({ skip_pre = false, active_branches_only = true } = {}) {
     const n = this.n;
     if (!skip_pre) n.calculate_dependent_values();
@@ -1699,6 +1711,10 @@ Object.assign(Network.prototype, GraphMixin, {
   },
 });
 
+/**
+ * Determine the sub-networks (connected components of passive branches per carrier) and their buses and branches.
+ * `{investment_period, skip_isolated_buses, cycle_basis_method}` as in PyPSA.
+ */
 Network.prototype.determine_network_topology = function determineTopologyWrapper(opts = {}) {
   return determine_network_topology.call(this, opts);
 };

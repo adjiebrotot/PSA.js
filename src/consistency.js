@@ -599,6 +599,7 @@ Network.prototype.consistency_check = function consistencyCheck({ check_dtypes =
   check_stochastic_slack_bus_consistency(this, s.includes("slack_bus_consistency"));
 };
 
+/** Consistency checks needed for plotting (bus coordinates). */
 Network.prototype.consistency_check_plots = function consistencyCheckPlots({ strict = [] } = {}) {
   const s = strict.includes("all") ? ["unknown_carriers", "missing_carrier_colors"] : strict;
   for (const c of this.components.values()) check_for_unknown_carriers(this, c, s.includes("unknown_carriers"));

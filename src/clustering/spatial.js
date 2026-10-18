@@ -710,47 +710,60 @@ export class SpatialClusteringAccessor {
     this._n = n;
   }
 
+  /**
+   * Clustering result (`Clustering` with the clustered network, busmap and linemap) for a busmap; aggregation strategies as in PyPSA.
+   */
   get_clustering_from_busmap(busmap, opts = {}) {
     scenariosNotImplemented(this._n, "get_clustering_from_busmap");
     return get_clustering_from_busmap(this._n, busmap, opts);
   }
 
+  /** The network clustered along `busmap` (bus -> cluster). */
   cluster_by_busmap(busmap, opts = {}) {
     scenariosNotImplemented(this._n, "cluster_by_busmap");
     return get_clustering_from_busmap(this._n, busmap, opts).n;
   }
 
+  /** Busmap by weighted k-means of the bus coordinates (a seeded k-means++, not scikit-learn's). */
   busmap_by_kmeans(bus_weightings, n_clusters, opts = {}) {
     scenariosNotImplemented(this._n, "busmap_by_kmeans");
     return busmap_by_kmeans(this._n, bus_weightings, n_clusters, opts);
   }
 
+  /** The network clustered by `busmap_by_kmeans`. */
   cluster_by_kmeans(bus_weightings, n_clusters, { line_length_factor = 1.0, ...opts } = {}) {
     scenariosNotImplemented(this._n, "cluster_by_kmeans");
     const busmap = busmap_by_kmeans(this._n, bus_weightings, n_clusters, opts);
     return get_clustering_from_busmap(this._n, busmap, { line_length_factor }).n;
   }
 
+  /** Busmap that merges stub buses (degree one) into their neighbours. */
   busmap_by_stubs(matching_attrs = null) {
     return busmap_by_stubs(this._n, matching_attrs);
   }
 
+  /**
+   * Busmap by hierarchical agglomerative clustering of `feature` rows constrained to connected buses (`linkage`: ward, complete, average, single; `affinity`: euclidean, manhattan, cosine).
+   */
   busmap_by_hac(n_clusters, opts = {}) {
     scenariosNotImplemented(this._n, "busmap_by_hac");
     return busmap_by_hac(this._n, n_clusters, opts);
   }
 
+  /** The network clustered by `busmap_by_hac`. */
   cluster_by_hac(n_clusters, { line_length_factor = 1.0, ...opts } = {}) {
     scenariosNotImplemented(this._n, "cluster_by_hac");
     const busmap = busmap_by_hac(this._n, n_clusters, opts);
     return get_clustering_from_busmap(this._n, busmap, { line_length_factor }).n;
   }
 
+  /** Busmap by greedy modularity communities (Clauset-Newman-Moore) of the bus graph. */
   busmap_by_greedy_modularity(n_clusters, buses_i = null) {
     scenariosNotImplemented(this._n, "busmap_by_greedy_modularity");
     return busmap_by_greedy_modularity(this._n, n_clusters, buses_i);
   }
 
+  /** The network clustered by `busmap_by_greedy_modularity`. */
   cluster_by_greedy_modularity(n_clusters, buses_i = null, { line_length_factor = 1.0 } = {}) {
     scenariosNotImplemented(this._n, "cluster_by_greedy_modularity");
     if (buses_i && !(buses_i instanceof Index) && !Array.isArray(buses_i)) ({ buses_i = null, line_length_factor = 1.0 } = buses_i);

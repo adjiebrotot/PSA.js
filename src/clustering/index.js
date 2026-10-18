@@ -13,34 +13,42 @@ export class ClusteringAccessor {
   }
 
   // deprecated aliases kept for compatibility with PyPSA < 1.1 style calls
+  /** Deprecated alias of `n.cluster.spatial.cluster_by_busmap`. */
   cluster_by_busmap(busmap, opts = {}) {
     return this.spatial.cluster_by_busmap(busmap, opts);
   }
 
+  /** Deprecated alias of `n.cluster.spatial.get_clustering_from_busmap`. */
   get_clustering_from_busmap(busmap, opts = {}) {
     return this.spatial.get_clustering_from_busmap(busmap, opts);
   }
 
+  /** Deprecated alias of `n.cluster.spatial.busmap_by_kmeans`. */
   busmap_by_kmeans(bus_weightings, n_clusters, opts = {}) {
     return this.spatial.busmap_by_kmeans(bus_weightings, n_clusters, opts);
   }
 
+  /** Deprecated alias of `n.cluster.spatial.cluster_by_kmeans`. */
   cluster_spatially_by_kmeans(bus_weightings, n_clusters, opts = {}) {
     return this.spatial.cluster_by_kmeans(bus_weightings, n_clusters, opts);
   }
 
+  /** Deprecated alias of `n.cluster.spatial.busmap_by_hac`. */
   busmap_by_hac(n_clusters, opts = {}) {
     return this.spatial.busmap_by_hac(n_clusters, opts);
   }
 
+  /** Deprecated alias of `n.cluster.spatial.cluster_by_hac`. */
   cluster_spatially_by_hac(n_clusters, opts = {}) {
     return this.spatial.cluster_by_hac(n_clusters, opts);
   }
 
+  /** Deprecated alias of `n.cluster.spatial.busmap_by_greedy_modularity`. */
   busmap_by_greedy_modularity(n_clusters, buses_i = null) {
     return this.spatial.busmap_by_greedy_modularity(n_clusters, buses_i);
   }
 
+  /** Deprecated alias of `n.cluster.spatial.cluster_by_greedy_modularity`. */
   cluster_spatially_by_greedy_modularity(n_clusters, buses_i = null, opts = {}) {
     return this.spatial.cluster_by_greedy_modularity(n_clusters, buses_i, opts);
   }
