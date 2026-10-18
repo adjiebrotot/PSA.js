@@ -214,8 +214,9 @@ browser smoke test are run separately.
       rolling windows (`center`), chains of the operations linopy keeps on a
       Variable (`shift`, `where`, `roll`, `sel`, `isel`: absent slots keep
       coefficient 1 and constant 0 until another operation makes an
-      expression). Missing: quadratic constraints (HiGHS cannot solve them)
-      and `where` with a condition over dimensions the expression lacks.
+      expression), `where` with a condition over dimensions the expression
+      lacks (broadcast like xarray). Missing: quadratic constraints (HiGHS
+      cannot solve them).
 - [x] Statistics: aggregations sum/mean/min/max/median/first/last/std/var/
       prod/count/sem/nunique/skew/kurt (pandas' nanops formulas) and callable
       groupers returning one Series or a list of Series (one index level

@@ -259,6 +259,19 @@ export class LinearExpression {
 
   _masked(cond, fill) {
     if (typeof cond === "function") cond = cond(this);
+    // a condition over further dimensions broadcasts the expression (xarray:
+    // the expression's dims first, then the condition's new ones)
+    if (typeof cond !== "boolean" && !(Array.isArray(cond) || ArrayBuffer.isView(cond))) {
+      const op = constantOperand(cond, this);
+      const extra = op.dims.map((d, i) => [d, op.coords[i]]).filter(([d]) => !this.dims.includes(d));
+      if (extra.length) {
+        const dims = [...this.dims, ...extra.map(([d]) => d)];
+        const coords = [...this.coords, ...extra.map(([, c]) => c)];
+        const size = sizeOf(shapeOf(coords));
+        const target = new LinearExpression(this.model, dims, coords, 0, new Int32Array(0), new Float64Array(0), new Float64Array(size));
+        return this._like(broadcastTo(this, target))._masked(cond, fill);
+      }
+    }
     const keep = this._condition(cond);
     const nt = this.nterm;
     const vars = Int32Array.from(this.vars);
