@@ -56,7 +56,9 @@ console.log(nc.statistics.capex().toString());         // (component, network, c
 Runnable examples (ported from PyPSA's documentation topics) are in
 [`examples/scripts`](examples/scripts): `quickstart`, `capacity_expansion`,
 `unit_commitment`, `custom_constraints` (linopy-style API incl. a quadratic
-objective), `stochastic`, `clustering`, `power_flow` and `io`, e.g.
+objective), `stochastic`, `clustering`, `power_flow`, `io`, `mga`,
+`security_constrained`, `rolling_horizon`, `multi_investment` and
+`transmission_losses`, e.g.
 `node examples/scripts/quickstart.mjs`. The test suite runs all of them.
 
 API names follow PyPSA (snake_case). Python keyword arguments become a trailing

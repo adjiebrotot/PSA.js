@@ -1,6 +1,6 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 114 tests: the parity
+State at hand-off: all PSA.js tests pass (`npm test`: 119 tests: the parity
 scenarios, IO tests and the example scripts; `npm run test:browser` passes in
 headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
 of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
@@ -26,8 +26,10 @@ browser smoke test are run separately.
    methods) accept http(s) URLs (`fetch`, PyPSA's `_retrieve_from_url`
    errors, `ioOptions.allow_network_requests`); the synchronous Excel and
    CSV loaders raise with instructions (fetch the bytes first).
-4. More examples from PyPSA's notebooks (MGA, SCLOPF, rolling horizon,
-   multi-period investment, losses) and an API reference.
+4. ~~More examples~~ done (`examples/scripts`: `mga`, `security_constrained`,
+   `rolling_horizon`, `multi_investment`, `transmission_losses`; their
+   numbers were checked against PyPSA). Still open: an API reference
+   (e.g. generated from the JSDoc comments).
 5. Report the upstream bugs listed in section 3 (PyPSA issues).
 6. Stochastic leftovers (components added after `set_scenarios`).
 
