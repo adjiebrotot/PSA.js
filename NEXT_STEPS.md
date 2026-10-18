@@ -208,6 +208,8 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
 
 ## 4. Documentation
 
-- [ ] API reference (JSDoc → generated docs) and examples ported from PyPSA's
-      documentation notebooks.
+- [ ] API reference (JSDoc → generated docs). Examples: eight runnable
+      scripts in `examples/scripts` (run by `test/examples.test.js`); more of
+      PyPSA's notebooks could follow (MGA, security-constrained OPF, rolling
+      horizon, multi-period investment, transmission losses).
 - [ ] Publish to npm (package name, versioning tied to PyPSA version).

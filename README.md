@@ -46,6 +46,12 @@ const nc = new NetworkCollection([n, m], { index: new Index(["a", "b"], "network
 console.log(nc.statistics.capex().toString());         // (component, network, carrier)
 ```
 
+Runnable examples (ported from PyPSA's documentation topics) are in
+[`examples/scripts`](examples/scripts): `quickstart`, `capacity_expansion`,
+`unit_commitment`, `custom_constraints` (linopy-style API incl. a quadratic
+objective), `stochastic`, `clustering`, `power_flow` and `io`, e.g.
+`node examples/scripts/quickstart.mjs`. The test suite runs all of them.
+
 API names follow PyPSA (snake_case). Python keyword arguments become a trailing
 options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
 
