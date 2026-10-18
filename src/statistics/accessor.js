@@ -17,6 +17,7 @@ import { LOOKUP } from "../optimization/common.js";
 import { logger } from "../logger.js";
 import { Tab, KeyError, isKeyError, groupRows, groupByLevels, concatRows, roundTo } from "./table.js";
 import { scenarioView } from "../network/scenarios.js";
+import { PySet } from "../core/pyset.js";
 
 export const statisticsOptions = { nice_names: true, drop_zero: true, round: 5 };
 
@@ -99,11 +100,11 @@ function mapValues(values, keys, mapped) {
   });
 }
 
-function isNa(v) {
+export function isNa(v) {
   return v === null || v === undefined || (typeof v === "number" && Number.isNaN(v));
 }
 
-function normalizeCarrierNiceNames(n, carrier) {
+export function normalizeCarrierNiceNames(n, carrier) {
   if (carrier === null || carrier === undefined) return carrier;
   const scalar = typeof carrier === "string";
   if (!scalar && !Array.isArray(carrier)) return carrier;
@@ -120,7 +121,7 @@ function normalizeCarrierNiceNames(n, carrier) {
 }
 
 /** Python `re.search` semantics for `str.contains`. */
-function contains(s, pattern) {
+export function contains(s, pattern) {
   if (typeof s !== "string") return false;
   try {
     return new RegExp(pattern).test(s);
@@ -277,15 +278,17 @@ export function get_transmission_branches(n, bus_carrier = null) {
   for (const c of n.branch_components) {
     const st = n.c.get(c).static;
     const busCols = st.columns.values.filter((col) => String(col).includes("bus"));
-    const res = new Set();
-    st.index.values.forEach((nm, i) => {
-      for (const carrier of carriers) {
+    // `res |= set(matching_idx)` per carrier: names in CPython set order
+    const res = new PySet();
+    for (const carrier of carriers) {
+      const matching = st.index.values.filter((nm, i) => {
         let cnt = 0;
         for (const col of busCols) if (busCarrier.get(st.col(col)[i]) === carrier) cnt++;
-        if (cnt > 1) res.add(nm);
-      }
-    });
-    for (const nm of st.index.values) if (res.has(nm)) out.push([c, nm]);
+        return cnt > 1;
+      });
+      res._merge(new PySet(matching));
+    }
+    for (const nm of res) out.push([c, nm]);
   }
   return new Index(out, ["component", "name"]);
 }

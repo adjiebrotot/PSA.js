@@ -30,16 +30,27 @@ IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       losses, SCLOPF, rolling horizon, statistics, netCDF IO (scenarios
       `network_stochastic`, `opt_stochastic`, `statistics_stochastic`,
       `io_stochastic`). Remaining:
-  - [ ] `n.optimize.expressions` with a `scenario` dimension (also missing for
-        deterministic networks, see below), assigning duals of custom
-        constraints (PyPSA raises too).
+  - [ ] `n.optimize.expressions` on stochastic networks (PyPSA adds a
+        `scenario` dimension from scenario-dependent data and the lifted
+        variables; PSA.js raises NotImplementedError), assigning duals of
+        custom constraints (PyPSA raises too).
   - [ ] Ungrouped statistics (`groupby=False`) of components added after
         `set_scenarios` follow PyPSA's row order only for scenario-major data.
   - [ ] Iterative transmission expansion, power flow and spatial clustering
         raise (they fail or are unsupported in PyPSA v1.4.0 too).
-- [ ] **NetworkCollection** (multi-network statistics).
-- [ ] **`n.optimize.expressions`** (statistic expressions on the linopy model,
-      incl. `_split_piecewise` / `_direct_piecewise`).
+- [x] **NetworkCollection** (scenario `collection`): construction from lists,
+      mappings or Series (custom index levels), combined component data and
+      statistics with the network levels, PyPSA's price quirks.
+- [x] **`n.optimize.expressions`** (scenarios `opt_expressions`,
+      `opt_expressions_more`): capex, capacity, opex, transmission, energy
+      balance, supply, withdrawal, curtailment and operation as linopy
+      expressions with identical layout (dims, coordinates, `_term` slots incl.
+      padding), groupers and filters, multi-investment periods, piecewise
+      costs and efficiencies (`_split_piecewise` / `_direct_piecewise`),
+      multi-port links and processes; constraints built from them give
+      byte-identical LP files. The linopy operations (legacy semantics: NaN
+      fills, outer joins, `groupby().sum()`, `@`, `merge`) live in
+      `src/optimization/statistic_expressions.js`.
 - [ ] Piecewise data on stochastic networks (PyPSA raises too).
 - [ ] **IO formats**: Excel (`import_from_excel`/`export_to_excel`, e.g. via
       SheetJS), HDF5 (pandas HDFStore layout), `import_from_pypower_ppc`,
@@ -62,8 +73,10 @@ IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
 ## 3. Parity gaps to close
 
 - [ ] `linopy` expression API: only the subset needed by PyPSA workflows
-      (`sel`, `mul`, `add`, `sub`, `sum`, `le/ge/eq`, `set_objective`). Missing:
-      `shift`, `groupby`, `rolling`, `where`, quadratic expressions, `diff`.
+      (`sel`, `mul`, `add`, `sub`, `sum`, `le/ge/eq`, `set_objective`, plus the
+      internal helpers of the statistic expressions: outer merges,
+      `groupby().sum()`, `where`, `@`). Missing as public API: `shift`,
+      `rolling`, quadratic expressions, `diff`; `groupby`/`where` as methods.
 - [ ] Statistics: `aggregate_across_components`, `groupby_method` other than
       sum/mean/min/max, callable groupers with multi-index results. (Done: the
       overview table `n.statistics()` passes all arguments like PyPSA, the
@@ -116,6 +129,16 @@ IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
          `optimize_transmission_expansion_iteratively` fail.
       8. netCDF export can reorder scenarios and components (xarray aligns the
          coordinates to sorted MultiIndex levels; see `io_stochastic`).
+- [ ] PyPSA v1.4.0 `n.optimize.expressions` bugs found while porting (PSA.js
+      mirrors them; consider reporting upstream):
+      1. Inactive assets (`active=False`) have no dispatch variables, but
+         `energy_balance`/`supply`/`withdrawal` align the port coefficients of
+         all assets with `join="exact"` (AlignmentError), `transmission`
+         selects inactive branches and `curtailment` inactive fixed assets
+         (KeyError).
+      2. `groupby_method` other than "sum" is only rejected when ports are
+         merged or time is aggregated (e.g. `capex(groupby_method="max")`
+         silently sums).
 - [ ] PyPSA bugs/quirks observed (mirrored or worked around in fixtures):
       clustering crashes under pandas 3 copy-on-write (runner patches
       `determine_network_topology`), loss variable order depends on Python's

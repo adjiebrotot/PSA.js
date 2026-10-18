@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import pypsa
 
-from common import EXAMPLES, ROOT, dump_network, frame, index_json, series, value, write_fixture
+from common import EXAMPLES, ROOT, dump_network, frame, index_json, label, series, value, write_fixture
 
 logging.disable(logging.WARNING)
 warnings.filterwarnings("ignore")
@@ -90,7 +90,34 @@ def decode(v, n):
     return v
 
 
+def nan_label(v):
+    if isinstance(v, list):
+        return [nan_label(x) for x in v]
+    return None if isinstance(v, float) and v != v else v
+
+
+def linexpr_json(e) -> dict:
+    """A linopy LinearExpression: dims/coords plus C-ordered term arrays (`_term` innermost)."""
+    dims = [d for d in e.dims if d != "_term"]
+    vars_ = e.vars.transpose(*dims, "_term").values
+    coeffs = e.coeffs.transpose(*dims, "_term").values
+    const = e.const.transpose(*dims).values
+    return {
+        "dims": dims,
+        # NaN labels (e.g. missing group keys) as null
+        "coords": [{"names": list(e.indexes[d].names), "values": [nan_label(label(v)) for v in e.indexes[d]]} for d in dims],
+        "nterm": int(e.sizes["_term"]),
+        "vars": [int(x) for x in vars_.ravel()],
+        "coeffs": [value(x) for x in coeffs.ravel()],
+        "const": [value(x) for x in const.ravel()],
+    }
+
+
 def to_json(obj):
+    import linopy
+
+    if isinstance(obj, linopy.LinearExpression):
+        return {"$type": "linexpr", **linexpr_json(obj)}
     if isinstance(obj, pd.DataFrame):
         return {"$type": "frame", **frame(obj)}
     if isinstance(obj, pd.Series):
@@ -211,6 +238,17 @@ def _run_op(op, state, records, results):
                 dims = dims.get("sum", "all")
             expr = v.sum() if dims == "all" else (1 * v if dims is None else v.sum(dim=dims))
             n.model.add_constraints(expr, sign, decode(rhs, n), name=cname)
+        elif kind == "expression":
+            # n.optimize.expressions.<stat>(**kwargs), optionally summed
+            _, out_key, stat, kwargs = op[:4]
+            e = getattr(n.optimize.expressions, stat)(**decode(kwargs, n))
+            post = op[4] if len(op) > 4 else None
+            if post is not None:
+                e = e.sum() if post == "all" else e.sum(dim=post)
+            results[out_key] = e
+        elif kind == "expr_constraint":
+            _, out_key, sign, rhs, cname = op
+            n.model.add_constraints(results[out_key], sign, decode(rhs, n), name=cname)
         elif kind == "add_variable":
             n.model.add_variables(name=op[1])
         elif kind == "solve_model":

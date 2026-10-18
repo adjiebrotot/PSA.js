@@ -217,6 +217,19 @@ export async function runScenario(scenario, onRecord = null) {
         n.model.add_constraints(expr, sign, decodeValue(rhs, n), { name: cname });
         break;
       }
+      case "expression": {
+        // n.optimize.expressions[stat](kwargs), optionally summed
+        const [, outKey, stat, kwargs, post = null] = op;
+        let e = n.optimize.expressions[stat](decodeValue(kwargs ?? {}, n));
+        if (post !== null) e = post === "all" ? e.sum() : e.sum(post);
+        results[outKey] = e;
+        break;
+      }
+      case "expr_constraint": {
+        const [, outKey, sign, rhs, cname] = op;
+        n.model.add_constraints(results[outKey], sign, decodeValue(rhs, n), { name: cname });
+        break;
+      }
       case "add_variable":
         n.model.add_variables({ name: op[1] });
         break;
@@ -325,6 +338,9 @@ export function assertRecordMatches(actual, expected, opts) {
     case "lp":
       assertLpMatches(actual.$lp, expected.text, opts);
       break;
+    case "linexpr":
+      assertLinexprMatches(actual, expected, { ...opts, path: where });
+      break;
     case "dict":
       for (const [k, v] of Object.entries(expected.items)) {
         const a = actual instanceof Map ? actual.get(k) : actual[k];
@@ -337,6 +353,36 @@ export function assertRecordMatches(actual, expected, opts) {
     default:
       throw new Error(`unknown record type ${expected.$type}`);
   }
+}
+
+/**
+ * Compare a LinearExpression with linopy's: dims, coordinates (labels and
+ * level names), the `_term` slot layout (variable labels incl. -1 padding),
+ * coefficients of the present terms and constants.
+ */
+export function assertLinexprMatches(actual, expected, { exprRtol = 1e-12, path: where = "linexpr" } = {}) {
+  assert.ok(actual && actual.vars && actual.dims, `${where}: expected a LinearExpression, got ${actual?.constructor?.name}`);
+  assert.deepEqual(actual.dims, expected.dims, `${where}: dims differ`);
+  expected.coords.forEach((c, d) => {
+    const idx = actual.coords[d];
+    const norm = (v) => JSON.stringify(v, (_, x) => (typeof x === "number" && Number.isNaN(x) ? null : x));
+    assert.deepEqual(idx.values.map(norm), c.values.map(norm), `${where}: coords of ${expected.dims[d]} differ`);
+    assert.deepEqual(idx.names, c.names, `${where}: level names of ${expected.dims[d]} differ`);
+  });
+  assert.equal(actual.nterm, expected.nterm, `${where}: nterm differs`);
+  assert.deepEqual(Array.from(actual.vars), expected.vars, `${where}: term variables differ`);
+  const close = (a, b) => a === b || (Number.isNaN(a) && Number.isNaN(b)) || Math.abs(a - b) <= exprRtol * Math.max(Math.abs(a), Math.abs(b));
+  expected.vars.forEach((v, i) => {
+    if (v < 0) return;
+    const b = decodeFixture(expected.coeffs[i]);
+    if (!close(actual.coeffs[i], b)) assert.fail(`${where}: coeff[${i}] (var ${v}) PSA.js=${actual.coeffs[i]} PyPSA=${b}`);
+  });
+  assert.equal(actual.consts.length, expected.const.length, `${where}: const size differs`);
+  expected.const.forEach((v, i) => {
+    const b = decodeFixture(v);
+    const a = actual.consts[i];
+    if (!(close(a, b) || (Number.isNaN(a) && Number.isNaN(b)))) assert.fail(`${where}: const[${i}] PSA.js=${a} PyPSA=${b}`);
+  });
 }
 
 function parseNum(t) {

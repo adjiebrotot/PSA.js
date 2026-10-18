@@ -12,6 +12,7 @@ import { as_index, isOptions } from "../common.js";
 import { getDelaySourceIndexer } from "../components/components.js";
 import { Model } from "./linopy.js";
 import { NOMINAL_ATTRS, LOOKUP, lookupQuery, activityMask, denseValues, staticValues, objectiveWeighting, getBusCounts, weightings, npSum } from "./common.js";
+import { StatisticExpressionsAccessor } from "./statistic_expressions.js";
 
 export { npSum };
 import { labeler1, labeler2 } from "./variables.js";
@@ -1075,6 +1076,8 @@ Network._accessorInitialisers.push((n) => {
     fn[name] = acc[name].bind(acc);
   }
   fn._accessor = acc;
+  // statistics as linear expressions of `n.model` (PyPSA `n.optimize.expressions`)
+  Object.defineProperty(fn, "expressions", { get: () => new StatisticExpressionsAccessor(n), configurable: true, enumerable: false });
   Object.defineProperty(n, "optimize", { value: fn, writable: true, configurable: true, enumerable: false });
 });
 

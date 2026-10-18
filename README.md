@@ -14,7 +14,7 @@ PSA.js report `pypsa_version = 1.4.0`.
 Requires Node.js >= 22.3 (plain ES modules, no build step).
 
 ```js
-import { Network } from "psa.js";
+import { Network, NetworkCollection, Index } from "psa.js";
 
 const n = Network.from_csv_folder("examples/networks/ac-dc-meshed/ac-dc-meshed");
 await n.optimize();                       // HiGHS (WebAssembly)
@@ -34,6 +34,15 @@ s.c.generators.static.setAt(["high", "Manchester Gas"], "marginal_cost", 80);
 s.set_risk_preference({ alpha: 0.9, omega: 0.5 });   // optional CVaR
 await s.optimize();
 console.log(s.statistics.optimal_capacity().toString()); // (component, scenario, carrier)
+
+// statistics as linear expressions of the model (n.optimize.expressions)
+n.optimize.create_model();
+const capex = n.optimize.expressions.capex();          // dims ["group"]
+n.model.add_constraints(capex.sum().le(1e9), { name: "capex_budget" });
+
+// collections of networks with combined statistics
+const nc = new NetworkCollection([n, m], { index: new Index(["a", "b"], "network") });
+console.log(nc.statistics.capex().toString());         // (component, network, carrier)
 ```
 
 API names follow PyPSA (snake_case). Python keyword arguments become a trailing
@@ -92,6 +101,14 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
   are byte-identical to PyPSA's: PSA.js builds the deterministic model of
   every scenario and merges them in PyPSA's dimension order and numbering
   (see `src/optimization/stochastic.js`).
+- **Statistic expressions** (`n.optimize.expressions`): capex, capacity, opex,
+  transmission, energy balance, supply, withdrawal, curtailment and
+  operation as linopy expressions with the same layout as PyPSA's (dims,
+  coordinates, term slots), including multi-investment periods, piecewise
+  costs/efficiencies and multi-port components; constraints built from them
+  write the same LP rows.
+- **NetworkCollection**: several networks indexed by custom levels, with
+  combined component data and statistics.
 - **Consistency checks** (`consistency_check`, strict mode, scenario-invariant
   attributes), `sanitize`, carrier colours.
 - **Clustering**: spatial (`get_clustering_from_busmap` with all aggregation
@@ -139,7 +156,7 @@ from libm by one ulp on some CPUs).
 ## Not implemented / known differences
 
 See [`NEXT_STEPS.md`](NEXT_STEPS.md) for the remaining work list. In short:
-NetworkCollection, `n.optimize.expressions`,
+`n.optimize.expressions` on stochastic networks,
 Excel/HDF5 IO, pandapower/PYPOWER importers, plotting, `to_crs`, tsam segmentation,
 HAC/greedy-modularity busmaps (k-means is a seeded approximation, not
 scikit-learn's), weekly/monthly resampling, solvers other than HiGHS.
@@ -149,4 +166,6 @@ upstream bugs): `n.buses_t.p` is all zero after optimisation, voltage angles
 are not computed, global constraint duals (`mu`) are not assigned,
 `meshed_thresholds` count bus usage over the rows of all scenarios, and
 power flow, iterative transmission expansion and spatial clustering are not
-available. See NEXT_STEPS.md for the full list.
+available. `n.optimize.expressions` fails for inactive assets in the energy
+balance, transmission and curtailment (mirrored). See NEXT_STEPS.md for the
+full list.
