@@ -25,5 +25,12 @@ openpyxl==3.1.5
 python-calamine==0.9.0
 # PYPOWER cases for the io_pypower scenario (data only)
 PYPOWER==5.1.21
-# temporal segmentation (clustering_segment)
-tsam==4.1.1
+# HDF5 IO fixtures (gen_io.py) and check_js_hdf5.py
+tables==3.11.1
+# temporal segmentation (clustering_segment). tsam's metadata caps numpy and
+# pandas below the pins above (numpy<=2.4.6, pandas<=3.0.5, which change
+# solver-derived values such as voltage angles in the last bits), so install
+# it without its dependencies after the rest:
+#   pip install --no-deps tsam==4.1.1
+pyomo==6.10.1
+tqdm==4.70.1

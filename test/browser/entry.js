@@ -1,5 +1,5 @@
 // Browser smoke test entry: build, optimise and inspect a network, write and
-// read CSV, Excel and netCDF in memory. Results are reported on `window.__psa`.
+// read CSV, Excel, netCDF and HDF5 in memory. Results are reported on `window.__psa`.
 import { Network, MemoryFolder, logger } from "../../src/index.js";
 
 logger.setLevel("error");
@@ -28,6 +28,9 @@ async function run() {
   const nc = await n.export_to_netcdf(null);
   out.netcdfBytes = nc.length;
   out.netcdfRoundTrip = (await Network.from_netcdf(nc)).objective;
+  const h5 = await n.export_to_hdf5(null);
+  out.hdf5Bytes = h5.length;
+  out.hdf5RoundTrip = (await Network.from_hdf5(h5)).objective;
   return out;
 }
 

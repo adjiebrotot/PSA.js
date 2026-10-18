@@ -1,5 +1,5 @@
-// Import and export: CSV folders, netCDF (PyPSA's layout, needs h5wasm),
-// Excel workbooks and PYPOWER cases. Run: node examples/scripts/io.mjs
+// Import and export: CSV folders, netCDF and HDF5 (PyPSA's layouts, need
+// h5wasm), Excel workbooks and PYPOWER cases. Run: node examples/scripts/io.mjs
 import os from "node:os";
 import path from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -13,9 +13,11 @@ try {
   n.export_to_csv_folder(path.join(dir, "csv"));
   n.export_to_excel(path.join(dir, "network.xlsx"));
   await n.export_to_netcdf(path.join(dir, "network.nc"));
+  await n.export_to_hdf5(path.join(dir, "network.h5"));
   const fromXlsx = Network.from_excel(path.join(dir, "network.xlsx"));
   const fromNc = await Network.from_netcdf(path.join(dir, "network.nc"));
-  console.log("buses:", n.c.buses.static.index.length, fromXlsx.c.buses.static.index.length, fromNc.c.buses.static.index.length);
+  const fromH5 = await Network.from_hdf5(path.join(dir, "network.h5"));
+  console.log("buses:", [n, fromXlsx, fromNc, fromH5].map((m) => m.c.buses.static.index.length));
 
   // a PYPOWER case (here a tiny 3-bus system given inline)
   const ppc = {

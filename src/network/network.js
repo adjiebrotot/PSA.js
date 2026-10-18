@@ -166,7 +166,8 @@ export class Network {
    * @param {object} [opts]
    * @param {string} [opts.name]
    * @param {boolean} [opts.ignore_standard_types]
-   * @param {string} [opts.import_name] path to a CSV folder or an .xlsx file (Node.js only)
+   * @param {string} [opts.import_name] path to a CSV folder or an .xlsx file (Node.js only;
+   *   netCDF and HDF5 files: `await Network.from_netcdf(path)` / `Network.from_hdf5(path)`)
    */
   constructor(opts = {}) {
     if (typeof opts === "string") opts = { import_name: opts };
@@ -196,7 +197,11 @@ export class Network {
 
     if (import_name) {
       if (typeof import_name === "string" && /\.xlsx$/i.test(import_name)) this.import_from_excel(import_name);
-      else this.import_from_csv_folder(import_name);
+      else if (typeof import_name === "string" && /\.(nc|h5|hdf5)$/i.test(import_name)) {
+        // h5wasm loads asynchronously
+        const loader = /\.nc$/i.test(import_name) ? "from_netcdf" : "from_hdf5";
+        throw new Error(`ValueError: netCDF and HDF5 files load asynchronously; use \`await Network.${loader}(path)\``);
+      } else this.import_from_csv_folder(import_name);
     }
 
     for (const [k, v] of Object.entries(rest)) this[k] = v;

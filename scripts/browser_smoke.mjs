@@ -59,6 +59,7 @@ try {
     const res = await page.evaluate(() => window.__psa);
     console.log(JSON.stringify(res, null, 2));
     if (!res.ok || !res.status.startsWith("ok")) process.exitCode = 1;
+    else if (res.netcdfRoundTrip !== res.objective || res.hdf5RoundTrip !== res.objective) process.exitCode = 1;
   } finally {
     await browser.close();
     server.close();

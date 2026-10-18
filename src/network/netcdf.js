@@ -21,7 +21,7 @@ const IS_NODE = Boolean(globalThis.process?.versions?.node);
 
 let h5Promise = null;
 /** h5wasm (its Node.js build on Node, the browser build with an in-memory FS elsewhere). */
-async function getH5() {
+export async function getH5() {
   if (!h5Promise) {
     h5Promise = (IS_NODE ? import("h5wasm/node") : import("h5wasm"))
       .catch(() => {
@@ -42,7 +42,7 @@ let tmpCounter = 0;
  * h5wasm's in-memory file system elsewhere. `bytes` are written to it first;
  * with `readBack` the file's bytes are returned.
  */
-async function withScratchFile(bytes, fn, { readBack = false } = {}) {
+export async function withScratchFile(bytes, fn, { readBack = false } = {}) {
   await getH5();
   const { FS } = await h5Promise;
   const name = `psa_${Date.now()}_${tmpCounter++}.nc`;
@@ -70,7 +70,7 @@ async function withScratchFile(bytes, fn, { readBack = false } = {}) {
   }
 }
 
-const isBytes = (x) => x instanceof Uint8Array || x instanceof ArrayBuffer;
+export const isBytes = (x) => x instanceof Uint8Array || x instanceof ArrayBuffer;
 
 // ----------------------------------------------------------------------
 // datetime (CF) helpers

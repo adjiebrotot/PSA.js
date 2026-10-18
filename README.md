@@ -16,7 +16,7 @@ in browsers through a bundler: HiGHS loads its WebAssembly next to the
 module (copy `highs.wasm` beside the bundle), CSV folders go through
 `MemoryFolder`, Excel workbooks and netCDF files through bytes
 (`export_to_excel(null)`, `Network.from_excel(bytes)`, `await
-export_to_netcdf(null)`, `Network.from_netcdf(bytes)`). `npm run
+export_to_netcdf(null)`, `Network.from_netcdf(bytes)`, likewise for HDF5). `npm run
 test:browser` bundles a smoke test with esbuild and runs it in headless
 Chromium (`test/browser/entry.js`).
 
@@ -72,6 +72,7 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
 | networkx              | bespoke graph / cycle basis (networkx ordering)                    |
 | pandas CSV            | `papaparse` + Python-compatible float formatting                   |
 | netCDF4 / xarray IO   | `h5wasm` (optional dependency)                                     |
+| pandas HDFStore (PyTables) | `h5wasm` + a small pickle reader/writer (`src/core/pickle.js`) |
 
 ## What is implemented (and parity tested)
 
@@ -82,8 +83,10 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
   in PyPSA's layout (files written by PSA.js re-import identically in PyPSA),
   including piecewise breakpoint data (`<list>-<attr>-pw.csv`,
   `<list>_pw_<attr>`), Excel workbooks (`import_from_excel`,
-  `export_to_excel`; PyPSA's sheet layout, no extra dependency) and PYPOWER
-  cases (`import_from_pypower_ppc`).
+  `export_to_excel`; PyPSA's sheet layout, no extra dependency), HDF5 stores
+  in pandas' `HDFStore` layout (`import_from_hdf5`, `export_to_hdf5`; files
+  written by PSA.js re-import identically in PyPSA) and PYPOWER cases
+  (`import_from_pypower_ppc`).
 - **Topology and power flow**: sub-networks, cycle matrices (networkx-ordered
   `bfs-refined` default and `paton` cycle bases), PTDF/BODF, linear power flow,
   contingency analysis, Newton-Raphson AC power flow incl. distributed slack,
@@ -156,7 +159,7 @@ the reference PyPSA checkout installed (with its release tags, `git fetch
 scripts/parity/generate_all.sh          # definitions + every fixture
 cd scripts/parity
 python run_scenarios.py [scenario ...]   # optimisation/statistics/clustering scenarios
-python gen_io.py                         # IO fixtures (CSV + netCDF)
+python gen_io.py                         # IO fixtures (CSV, netCDF, Excel, HDF5)
 python gen_networks.py                   # network fixtures
 python diff_fixtures.py [--rtol 1e-9]    # what changed vs. the committed fixtures
 ```
@@ -164,7 +167,7 @@ python diff_fixtures.py [--rtol 1e-9]    # what changed vs. the committed fixtur
 Fixtures are deterministic (fixed hash seed, `mtime=0` gzip): with the pinned
 environment a full regeneration rewrites every JSON fixture byte-identically
 unless PyPSA's behaviour changed. Two exceptions show up in `git status`
-without being changes: the netCDF and Excel files (HDF5 metadata and
+without being changes: the netCDF, HDF5 and Excel files (HDF5 metadata and
 workbook timestamps differ between runs; the IO tests check their content) and the SOS section of
 `scenario_opt_piecewise` (linopy writes it in non-deterministic order; the
 comparator treats it as a set). `diff_fixtures.py` compares fixture contents
@@ -179,7 +182,7 @@ from libm by one ulp on some CPUs).
 ## Not implemented / known differences
 
 See [`NEXT_STEPS.md`](NEXT_STEPS.md) for the remaining work list. In short:
-HDF5 IO, the pandapower importer, plotting, `to_crs`, segmentation of
+the pandapower importer, plotting, `to_crs`, segmentation of
 non-hourly snapshots, single-linkage HAC, k-means busmaps (a seeded approximation,
 not scikit-learn's), solvers other than HiGHS.
 

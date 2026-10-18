@@ -1,5 +1,5 @@
 """Reference fixtures: importing the example CSV networks and exporting them
-again (CSV and netCDF) with PyPSA."""
+again (CSV, netCDF, Excel and HDF5) with PyPSA."""
 
 import logging
 import tempfile
@@ -105,3 +105,20 @@ for name, n in excel_sources.items():
     excel_records[name] = {"network": dump_network(m), "piecewise": dump_piecewise(m)}
 write_fixture("io_excel", excel_records)
 print("wrote excel fixtures")
+
+# HDF5 (pandas HDFStore / PyTables): PyPSA's export of the networks above and
+# PyPSA's re-import of it
+HDF5 = ROOT / "test" / "fixtures" / "hdf5"
+HDF5.mkdir(parents=True, exist_ok=True)
+hdf5_sources = dict(excel_sources)
+hdf5_sources["shapes"] = pypsa.Network(NETCDF / "shapes.nc")
+hdf5_sources["ac-dc-meshed-meta"] = pypsa.Network(EXAMPLES / "ac-dc-meshed" / "ac-dc-meshed")
+hdf5_sources["ac-dc-meshed-meta"].meta = {"note": "Größe €", "values": [1, 2.5, None], "nested": {"a": True}}
+hdf5_records = {}
+for name, n in hdf5_sources.items():
+    fn = HDF5 / f"{name}.h5"
+    n.export_to_hdf5(fn)
+    m = pypsa.Network(fn)
+    hdf5_records[name] = {"network": dump_network(m), "piecewise": dump_piecewise(m), "meta": m.meta}
+write_fixture("io_hdf5", hdf5_records)
+print("wrote hdf5 fixtures")

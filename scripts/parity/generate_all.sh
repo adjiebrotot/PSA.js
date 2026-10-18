@@ -18,6 +18,15 @@ echo "PyPSA ${version}"
 case "$version" in
   0.0*) echo "warning: PyPSA version unresolved; run 'git fetch --tags' in the PyPSA checkout" >&2 ;;
 esac
+# installing tsam with its dependencies downgrades numpy/pandas (see requirements.txt)
+python - <<'EOF'
+import re, sys
+from importlib.metadata import version
+for pkg in ("numpy", "pandas", "scipy", "highspy", "linopy"):
+    pin = re.search(rf"^{pkg}==(\S+)", open("requirements.txt").read(), re.M)
+    if pin and version(pkg) != pin.group(1):
+        print(f"warning: {pkg} {version(pkg)} installed, requirements.txt pins {pin.group(1)}", file=sys.stderr)
+EOF
 
 python ../generate_definitions.py
 python gen_networks.py

@@ -289,3 +289,29 @@ test("netCDF from and to bytes", async () => {
   assert.ok(bytes instanceof Uint8Array && bytes.length > 1000);
   assertNetworkMatches(await Network.from_netcdf(bytes), fx.network_nc, { rtol: 0, atol: 0 });
 });
+
+// HDF5 (pandas HDFStore layout): PyPSA's stores import identically; PSA.js
+// stores round-trip (and import in PyPSA: scripts/parity/check_js_hdf5.py)
+const h5Path = (name) => path.join(ROOT, "test", "fixtures", "hdf5", `${name}.h5`);
+const hdf5Fx = loadFixture("io_hdf5");
+for (const [name, fx] of Object.entries(hdf5Fx).filter(([k]) => !k.startsWith("_"))) {
+  test(`import ${name} from PyPSA HDF5`, async () => {
+    const n = await Network.from_hdf5(h5Path(name));
+    assertNetworkMatches(n, fx.network, { rtol: 0, atol: 0 });
+    assertPiecewiseMatches(n, fx.piecewise, `${name} hdf5`);
+    assert.deepEqual(n.meta, fx.meta);
+  });
+
+  test(`HDF5 round trip ${name}`, async () => {
+    const n = await Network.from_hdf5(h5Path(name));
+    const m = await Network.from_hdf5(await n.export_to_hdf5(null));
+    assertNetworkMatches(m, fx.network, { rtol: 0, atol: 0 });
+    assertPiecewiseMatches(m, fx.piecewise, `${name} hdf5 round trip`);
+    assert.deepEqual(m.meta, fx.meta);
+  });
+}
+
+test("HDF5 export of a stochastic network raises", async () => {
+  const n = await Network.from_netcdf(ncPath("stochastic"));
+  await assert.rejects(() => n.export_to_hdf5(null), /NotImplementedError: Stochastic networks are not supported in the HDF5 exporter/);
+});

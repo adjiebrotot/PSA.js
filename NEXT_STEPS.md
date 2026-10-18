@@ -1,22 +1,27 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 94 tests: the parity
+State at hand-off: all PSA.js tests pass (`npm test`: 113 tests: the parity
 scenarios, IO tests and the example scripts; `npm run test:browser` passes in
 headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
 of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
 
 Fixture environment: `scripts/parity/requirements.txt` now also pins
-scikit-learn (HAC), openpyxl and python-calamine (Excel), PYPOWER and tsam.
-`generate_all.sh` regenerates every fixture; `check_js_excel.py` (PyPSA reads
-PSA.js workbooks) and the browser smoke test are run separately.
+scikit-learn (HAC), openpyxl and python-calamine (Excel), PyTables (HDF5),
+PYPOWER and tsam. tsam's metadata caps numpy/pandas below the pins (installing
+it normally downgrades them to numpy 2.4.6 / pandas 3.0.5, which moves
+solver-derived voltage angles by an ulp), so it is installed with `--no-deps`;
+`generate_all.sh` now warns when numpy, pandas, scipy, highspy or linopy differ
+from the pins. With the pins every JSON fixture regenerates identically.
+`generate_all.sh` regenerates every fixture; `check_js_excel.py` and
+`check_js_hdf5.py` (PyPSA reads PSA.js workbooks / HDF5 stores) and the
+browser smoke test are run separately.
 
 ## 0. Suggested next steps
 
 1. ~~`busmap_by_hac` with complete/average linkage~~ done (scenario
    `clustering_hac`); single linkage stays open (scipy's MST with numpy's
    unstable argsort for ties).
-2. HDF5 IO (`import_from_hdf5` / `export_to_hdf5`): PyTables table layout plus
-   a minimal pickle reader/writer for the `meta` / `crs` object arrays.
+2. ~~HDF5 IO~~ done (see section 2, IO formats).
 3. netCDF URL inputs (`fetch` then `from_netcdf(bytes)`), CSV/Excel URLs.
 4. More examples from PyPSA's notebooks (MGA, SCLOPF, rolling horizon,
    multi-period investment, losses) and an API reference.
@@ -93,16 +98,29 @@ PSA.js workbooks) and the browser smoke test are run separately.
       Like the netCDF files, regenerated workbooks differ in metadata bytes.
 - [x] `import_from_pypower_ppc` (scenario `io_pypower`: pypower's case9,
       case14, case30 and case39 imported and solved by AC power flow).
-- [ ] **IO formats**: HDF5 (pandas HDFStore: PyTables "table" groups with
-      compound datasets and pandas/PyTables attributes, and `meta`/`crs`
-      stored as pickled object arrays, so reading or writing them needs a
-      minimal pickle implementation on top of h5wasm),
-      `import_from_pandapower_net` (needs a pandapower net, i.e. Python).
+- [x] HDF5 (`import_from_hdf5`, `export_to_hdf5`, `Network.from_hdf5`;
+      paths or bytes): pandas `HDFStore` layout read and written with h5wasm
+      (`src/network/hdf5.js`) and a pickle reader/protocol-0 writer
+      (`src/core/pickle.js`) for the PyTables attributes and the pickled
+      object arrays of `/meta` and `/crs`. h5wasm cannot write HDF5 array
+      member types, so PSA.js writes one column per values block (scalar
+      members, as pandas does for data columns) and `/meta`/`/crs` as
+      fixed-length strings; pandas reads both. Booleans are stored as uint8
+      (pandas casts by the `_dtype` attribute), no shuffle filter (h5wasm
+      offers deflate only). Tests: PyPSA stores of 9 networks (incl.
+      multi-period, piecewise, shapes, non-ASCII names and a Unicode `meta`)
+      import identically and round-trip (`io.test.js`, fixtures in
+      `test/fixtures/hdf5`); `scripts/parity/check_js_hdf5.py` confirms that
+      PyPSA imports PSA.js stores identically (run manually; all 9 pass).
+      Like PyPSA, stochastic networks raise NotImplementedError. `new
+      Network("x.nc" | "x.h5")` raises (the loaders are async).
+- [ ] **IO formats**: `import_from_pandapower_net` (needs a pandapower net,
+      i.e. Python).
 - [x] Small API gaps found by diffing `dir(pypsa.Network())`: deprecated
       `n.cluster` aliases (`busmap_by_hac`, `busmap_by_greedy_modularity`,
       `cluster_spatially_by_*`), `n.statistics.n` / `.is_multi_indexed`,
       `Network.get_network` (raises outside collections). Remaining: `plot`,
-      `explore`, `to_crs`, HDF5, pandapower.
+      `explore`, `to_crs`, pandapower.
 - [x] Shapes: WKT geometries kept in shapely's canonical form and written
       rounded like `GeoSeries.to_wkt()` (GEOS number formatting, ties to
       even; `src/core/wkt.js`), identical through CSV, netCDF and Excel

@@ -15,6 +15,7 @@ import "./clustering/index.js";
 import "./network/compat.js";
 import "./network/netcdf.js";
 import "./network/excel.js";
+import "./network/hdf5.js";
 import "./network/pypower.js";
 export { Model as LinopyModel, Variable as LinopyVariable } from "./optimization/linopy.js";
 export { LinearExpression, QuadraticExpression, ConstraintSpec, merge as mergeExpressions } from "./optimization/expressions.js";
