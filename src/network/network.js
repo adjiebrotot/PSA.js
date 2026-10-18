@@ -3,15 +3,20 @@
  * Network container (mirrors `pypsa.Network`).
  */
 
+import { canonicalWkt, parseWkt, writeWkt } from "../core/wkt.js";
 import { Components, RE_PORTS_GE_2 } from "../components/components.js";
 import { componentTypes, getComponentType, allStandardAttrs, typToDtype, PYPSA_VERSION } from "../components/types.js";
 import { DataFrame, Series, isNumberArray, makeFilled } from "../core/frame.js";
 import { Index, asIndex, labelKey } from "../core/index.js";
 import { pyFloatRepr } from "../core/csv.js";
+import { pyJsonClone } from "../core/pyjson.js";
+import { normalizeCarrierNiceNames } from "../statistics/nice_names.js";
+import { epsgOf, wktOf, transformer } from "../core/crs.js";
+import { get_option } from "../options.js";
 import { ComponentsStore, installStoreAccessors } from "./store.js";
 import { NOMINAL_ATTRS } from "../components/components.js";
 import { importPiecewiseFromDf, piecewiseFromAddValue } from "../components/piecewise.js";
-import { broadcastStatic, broadcastDynamic } from "./scenario_frames.js";
+import { broadcastStatic, broadcastDynamic, uniqueNames, unionLevel } from "./scenario_frames.js";
 import { PySet } from "../core/pyset.js";
 import { logger } from "../logger.js";
 
@@ -160,12 +165,38 @@ function copyFrame(df) {
   return df.copy();
 }
 
+/** A parsed WKT geometry with every coordinate pair mapped by `fn(x, y)`. */
+function mapCoordinates(g, fn) {
+  const pt = (c) => {
+    const [x, y] = fn(c[0], c[1]);
+    return [x, y, ...c.slice(2)];
+  };
+  if (g.parts === null) return g;
+  const walk = (parts, depth) => (depth === 0 ? pt(parts) : parts.map((p) => walk(p, depth - 1)));
+  const depth = { POINT: 0, LINESTRING: 1, MULTIPOINT: 1, POLYGON: 2, MULTILINESTRING: 2, MULTIPOLYGON: 3 }[g.type];
+  if (depth === undefined) return { ...g, parts: g.parts.map((p) => mapCoordinates(p, fn)) };
+  return { ...g, parts: walk(g.parts, depth) };
+}
+
+const CRS_PROTO = {
+  to_epsg() {
+    return this.epsg;
+  },
+  to_wkt() {
+    return this._crs ?? wktOf(this.epsg);
+  },
+  toString() {
+    return `EPSG:${this.epsg}`;
+  },
+};
+
 export class Network {
   /**
    * @param {object} [opts]
    * @param {string} [opts.name]
    * @param {boolean} [opts.ignore_standard_types]
-   * @param {string} [opts.import_name] path to a CSV folder (Node.js only)
+   * @param {string} [opts.import_name] path to a CSV folder or an .xlsx file (Node.js only;
+   *   netCDF and HDF5 files: `await Network.from_netcdf(path)` / `Network.from_hdf5(path)`)
    */
   constructor(opts = {}) {
     if (typeof opts === "string") opts = { import_name: opts };
@@ -193,7 +224,14 @@ export class Network {
 
     if (!ignore_standard_types) this._read_in_default_standard_types();
 
-    if (import_name) this.import_from_csv_folder(import_name);
+    if (import_name) {
+      if (typeof import_name === "string" && /\.xlsx$/i.test(import_name)) this.import_from_excel(import_name);
+      else if (typeof import_name === "string" && /\.(nc|h5|hdf5)$/i.test(import_name)) {
+        // h5wasm loads asynchronously
+        const loader = /\.nc$/i.test(import_name) ? "from_netcdf" : "from_hdf5";
+        throw new Error(`ValueError: netCDF and HDF5 files load asynchronously; use \`await Network.${loader}(path)\``);
+      } else this.import_from_csv_folder(import_name);
+    }
 
     for (const [k, v] of Object.entries(rest)) this[k] = v;
 
@@ -291,12 +329,31 @@ export class Network {
     return this._crs.epsg;
   }
 
+  /**
+   * Set the EPSG code of the coordinates. Like PyPSA (geopandas' `set_crs`
+   * without `allow_override`), changing it raises; use `to_crs`.
+   */
   set srid(v) {
-    this._crs = { _crs: null, epsg: Number(v) };
+    this.crs = Number(v);
   }
 
+  /**
+   * Coordinate reference system: `{epsg, _crs}` (WKT) with pyproj-like
+   * `to_epsg()` / `to_wkt()`.
+   */
   get crs() {
-    return this._crs;
+    const c = this._crs;
+    return Object.assign(Object.create(CRS_PROTO), c);
+  }
+
+  /** Set the CRS (EPSG code, "EPSG:<code>" or WKT); a different CRS raises like PyPSA. */
+  set crs(v) {
+    const epsg = epsgOf(v);
+    if (epsg !== this._crs.epsg) {
+      throw new Error(
+        "ValueError: The GeoSeries already has a CRS which is not equal to the passed CRS. Specify 'allow_override=True' to allow replacing the existing CRS without doing any transformation. If you actually want to transform the geometries, use 'GeoSeries.to_crs' instead.",
+      );
+    }
   }
 
   get model() {
@@ -317,6 +374,11 @@ export class Network {
 
   get is_collection() {
     return false;
+  }
+
+  /** A single network of a NetworkCollection (only collections have members). */
+  get_network() {
+    throw new Error("ValueError: This method can only be used on a NetworkCollection.");
   }
 
   toString() {
@@ -432,6 +494,7 @@ export class Network {
     return this.snapshots;
   }
 
+  /** Set the investment periods; the snapshots become (period, timestep) pairs. */
   set_investment_periods(periods) {
     const p = new Index(Array.from(periods instanceof Index ? periods.values : periods), "period");
     if (p.length === 0) return;
@@ -549,7 +612,7 @@ export class Network {
    * @param {object} [opts] { suffix, overwrite, return_names }
    */
   add(class_name, name, kwargs = {}, opts = {}) {
-    const { suffix = "", overwrite = false, return_names = false } = opts;
+    const { suffix = "", overwrite = false, return_names = get_option("params.add.return_names") } = opts;
     const c = this.c.get(class_name);
     const single = isScalar(name) && typeof suffix === "string";
     const names = buildSuffixedNames(name, suffix);
@@ -677,6 +740,13 @@ export class Network {
     const names = buildSuffixedNames(name, suffix);
     // stochastic networks: remove the components from all scenarios
     const labels = c.static.index.isMulti ? Index.fromProduct([this.scenarios.values, names.values], ["scenario", "name"]) : names;
+    // pandas' `drop` raises for unknown labels
+    const present = new Set(c.static.index.values.map(labelKey));
+    const missing = labels.values.filter((l) => !present.has(labelKey(l)));
+    if (missing.length) {
+      const repr = (v) => (Array.isArray(v) ? `(${v.map(repr).join(", ")})` : typeof v === "string" ? `'${v}'` : String(v));
+      throw new Error(`KeyError: "[${missing.map(repr).join(", ")}] not found in axis"`);
+    }
     c.static = c.static.dropRows(labels);
     for (const k of Object.keys(c.dynamic)) {
       const df = c.dynamic[k];
@@ -726,6 +796,9 @@ export class Network {
           arr = arr.map((v) =>
             typeof v === "number" ? (Number.isNaN(v) ? "" : allInt ? String(v) : pyFloatRepr(v)) : castValue(v, "str"),
           );
+        } else if (def.type === "geometry") {
+          // WKT in shapely's canonical form (lossless)
+          arr = arr.map((v) => (typeof v === "string" ? canonicalWkt(v) : v === null || v === undefined || (typeof v === "number" && Number.isNaN(v)) ? "" : v));
         } else arr = arr.map((v) => castValue(v, typ));
         dtypes[col] = typToDtype(typ);
         cols.set(col, dtypes[col] === "float" || dtypes[col] === "int" ? Float64Array.from(arr) : arr);
@@ -759,6 +832,7 @@ export class Network {
     }
 
     // pandas only concatenates if the old static frame has rows
+    if (multi) c._nameLevel = c.static.index.length > 0 ? unionLevel(c._nameLevel ?? uniqueNames(c.static.index), uniqueNames(names)) : uniqueNames(names);
     let combined = c.static.index.length > 0 ? concatStatic(c.static, newStatic) : newStatic;
     const ordered = sortAttrs(combined.columns, [...attrs.keys()]);
     combined = combined.loc(null, ordered);
@@ -818,6 +892,8 @@ export class Network {
       ordered = sortAttrs(df.columns.union(dyn.columns), dyn.columns.values);
       dyn = dyn.reindex({ columns: ordered, fill: NaN });
     }
+    // keep the (scenario, name) levels of stochastic columns
+    if (df.columns.isMulti || staticIdx.isMulti) dyn.columns = new Index(dyn.columns.values, ["scenario", "name"]);
     const rowPos = df.index.getIndexer(this.snapshots);
     for (const col of df.columns) {
       const src = df.col(col);
@@ -832,10 +908,12 @@ export class Network {
   // Descriptors
   // ------------------------------------------------------------------
 
+  /** Attribute as a (snapshots x names) frame: time series where given, static values elsewhere. */
   get_switchable_as_dense(component, attr, snapshots = null, inds = null) {
     return this.c.get(component)._as_dynamic(attr, snapshots, inds);
   }
 
+  /** Generator over the snapshots of `get_switchable_as_dense`, one row at a time. */
   *get_switchable_as_iter(component, attr, snapshots, inds = null) {
     const df = this.get_switchable_as_dense(component, attr, snapshots, inds);
     // the series follow the order of `inds` (unique, known names only)
@@ -849,30 +927,36 @@ export class Network {
     }
   }
 
+  /** Names of the extendable components of class `c`. */
   get_extendable_i(c) {
     return this.c.get(c).extendables;
   }
 
+  /** Names of the non-extendable components of class `c`. */
   get_non_extendable_i(c) {
     return this.c.get(c).fixed;
   }
 
+  /** Names of the committable components of class `c`. */
   get_committable_i(c) {
     return this.c.get(c).committables;
   }
 
+  /** Boolean Series of the components of class `c` that are active (in `investment_period`). */
   get_active_assets(c, investment_period = null) {
     return this.c.get(c).get_active_assets(investment_period);
   }
 
+  /** Unit of the buses with carrier `bus_carrier` (one unit, else an error). */
   bus_carrier_unit(bus_carrier) {
+    bus_carrier = normalizeCarrierNiceNames(this, bus_carrier);
     if (bus_carrier === null || bus_carrier === undefined) return "carrier dependent";
     const bcs = typeof bus_carrier === "string" ? [bus_carrier] : bus_carrier;
     const buses = this.c.buses.static;
     const carriers = buses.col("carrier");
     const present = new Set(carriers);
-    const missing = bcs.filter((b) => !present.has(b));
-    if (missing.length) throw new Error(`Bus carriers ${missing} not in network`);
+    const missing = [...new Set(bcs.filter((b) => !present.has(b)))];
+    if (missing.length) throw new Error(`ValueError: Bus carriers {${missing.map((b) => `'${b}'`).join(", ")}} not in network`);
     const units = [...new Set(buses.col("unit").filter((u, i) => bcs.includes(carriers[i])))];
     if (units.length > 1) {
       logger.warning(`Multiple units found for carrier ${bcs}: ${units}`);
@@ -915,11 +999,13 @@ export class Network {
     return this._concatBranches(comps);
   }
 
+  /** Lines and transformers as one `(component, name)` indexed frame. */
   passive_branches() {
     const comps = [...this.passive_branch_components].filter((c) => !this.c.get(c).empty).sort();
     return this._concatBranches(comps);
   }
 
+  /** Links (and processes) as one `(component, name)` indexed frame. */
   controllable_branches() {
     const comps = [...this.controllable_branch_components].filter((c) => !this.c.get(c).empty).sort();
     return this._concatBranches(comps);
@@ -932,6 +1018,38 @@ export class Network {
   /**
    * Deep copy. With `snapshots` / `investment_periods`, only these are copied.
    */
+  /**
+   * Transform the shape geometries and bus coordinates to another CRS (EPSG
+   * code or "EPSG:<code>"; supported: 4326, 4258, 3857, 3035, 32632, 32633,
+   * 25832, 25833). Like PyPSA, shapes are transformed in x/y order while the
+   * bus coordinates go through `Transformer.from_crs(current, new)` without
+   * `always_xy`, i.e. in each CRS's axis order (latitude first for
+   * geographic CRS), which swaps them; see NEXT_STEPS.
+   */
+  to_crs(newCrs) {
+    const from = this.srid;
+    const to = epsgOf(newCrs);
+    if (to === null) throw new Error(`CRSError: Invalid projection: ${newCrs}`);
+    const shapes = transformer(from, to, { always_xy: true });
+    const buses = transformer(from, to);
+    const st = this.c.shapes.static;
+    if (st.index.length && st.has("geometry")) {
+      st.set(
+        "geometry",
+        Array.from(st.col("geometry"), (g) => (typeof g === "string" && g.trim() ? writeWkt(mapCoordinates(parseWkt(g), shapes)) : g)),
+      );
+    }
+    this._crs = { _crs: wktOf(to), epsg: to };
+    const b = this.c.buses.static;
+    if (b.index.length) {
+      const xs = b.col("x");
+      const ys = b.col("y");
+      const out = Array.from(xs, (x, i) => buses(x, ys[i]));
+      b.set("x", Float64Array.from(out, (o) => o[0]));
+      b.set("y", Float64Array.from(out, (o) => o[1]));
+    }
+  }
+
   copy({ snapshots = null, investment_periods = null, ignore_standard_types = false } = {}) {
     if (snapshots === null && investment_periods === null && !ignore_standard_types) {
       return deepCopyNetwork(this);
@@ -972,7 +1090,7 @@ export class Network {
     }
     n.name = this.name;
     n._crs = { ...this._crs };
-    n._meta = structuredClone(this._meta);
+    n._meta = pyJsonClone(this._meta);
     n._linearized_uc = this._linearized_uc;
     n._multi_invest = this._multi_invest;
     n._committable_big_m = this._committable_big_m;
@@ -1019,6 +1137,7 @@ export class Network {
     return inplace ? null : neu;
   }
 
+  /** Rename components of a class (`{old: new}`) in all static, dynamic and referencing data. */
   rename_component_names(component, mapping) {
     this.c.get(component).rename_component_names(mapping);
   }
@@ -1236,7 +1355,7 @@ export class ConsistencyError extends Error {
 function deepCopyNetwork(src) {
   const n = new Network({ ignore_standard_types: true, name: src.name });
   n._pypsa_version = src._pypsa_version;
-  n._meta = structuredClone(src._meta);
+  n._meta = pyJsonClone(src._meta);
   n._crs = { ...src._crs };
   n._snapshots_data = copyFrame(src._snapshots_data);
   n._investment_periods_data = copyFrame(src._investment_periods_data);
@@ -1253,6 +1372,7 @@ function deepCopyNetwork(src) {
     const dst = n.c.get(ln);
     dst.ctype = comp.ctype === dst.ctype ? comp.ctype : comp.ctype.clone();
     dst.static = copyFrame(comp.static);
+    if (comp._nameLevel) dst._nameLevel = comp._nameLevel.slice();
     dst.dynamic = {};
     for (const [k, v] of Object.entries(comp.dynamic)) dst.dynamic[k] = copyFrame(v);
     dst.piecewise = {};

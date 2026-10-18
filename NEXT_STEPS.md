@@ -1,7 +1,56 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 35 parity scenarios plus
-IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
+State at hand-off: all PSA.js tests pass (`npm test`: 137 tests: the parity
+scenarios, IO tests and the example scripts; `npm run test:browser` passes in
+headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
+of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
+
+Fixture environment: `scripts/parity/requirements.txt` now also pins
+scikit-learn (HAC), openpyxl and python-calamine (Excel), PyTables (HDF5),
+PYPOWER and tsam, and names the CBC / GLPK executables (`coinor-cbc`,
+`glpk-utils`) that `opt_cli_solvers` needs. tsam's metadata caps numpy/pandas below the pins (installing
+it normally downgrades them to numpy 2.4.6 / pandas 3.0.5, which moves
+solver-derived voltage angles by an ulp), so it is installed with `--no-deps`;
+`generate_all.sh` now warns when numpy, pandas, scipy, highspy or linopy differ
+from the pins. With the pins every JSON fixture regenerates identically.
+`generate_all.sh` regenerates every fixture; `check_js_excel.py` and
+`check_js_hdf5.py` (PyPSA reads PSA.js workbooks / HDF5 stores) and the
+browser smoke test are run separately.
+
+## 0. Suggested next steps
+
+Done in earlier sessions: HAC linkages (incl. precomputed / callable
+metrics), HDF5 IO, URL inputs, more examples and the API reference,
+stochastic components added after `set_scenarios`, package options, module
+helpers (`costs`, `geo`, `examples`), LP / statistics / solve parity on
+PyPSA's published example networks (incl. the 310 MB PyPSA-Eur LP), CBC and
+GLPK command-line solvers, `c.da` / `c.ds` views, all UTM zones and LCC
+projections in `to_crs` (see section 2).
+
+Candidates for the next session, roughly by value:
+
+1. **Decisions for the user** (outward-facing, not done without asking):
+   report the upstream PyPSA bugs listed in section 3; publish to npm
+   (package name, versioning tied to the PyPSA version).
+2. **Large models**: HiGHS-WASM is capped at 4 GB of memory. CBC and GLPK
+   executables are supported now (`solver_name: "cbc"` / `"glpk"`); a
+   native HiGHS binary (`highs --model_file problem.lp --solution_file
+   ...`) would be the fastest option for PyPSA-Eur-sized models, but
+   linopy has no command-line HiGHS path to mirror, so its results would
+   only be checkable against highspy's.
+3. **More CRS**: `to_crs` supports EPSG 4326, 4258, 3857, 3035, 3034, 2154
+   and all UTM zones. Other projections on these datums need their PROJ
+   code ported (the helpers `tsfn`, `phi2`, `qsfn` exist); datum shifts
+   (27700, 31467: Helmert transformations, grids) are harder.
+4. **Clustering leftovers**: ~~`busmap_by_hac` with a callable or
+   precomputed metric~~ done (scenario `clustering_hac`); `busmap_by_kmeans`
+   parity is unlikely (threaded scikit-learn reductions).
+5. ~~xarray views `c.da` / `c.ds`~~ done (`DataArray` / `Dataset`,
+   scenario `components_da`); arithmetic between DataArrays (broadcasting
+   by dims) is not implemented.
+6. Quadratic constraints in the linopy-style API (LP writing; HiGHS cannot
+   solve them) and the stochastic items in section 2 that PyPSA itself
+   does not support yet.
 
 ## 1. Housekeeping
 
@@ -30,12 +79,29 @@ IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       losses, SCLOPF, rolling horizon, statistics, netCDF IO (scenarios
       `network_stochastic`, `opt_stochastic`, `statistics_stochastic`,
       `io_stochastic`). Remaining:
-  - [ ] `n.optimize.expressions` on stochastic networks (PyPSA adds a
-        `scenario` dimension from scenario-dependent data and the lifted
-        variables; PSA.js raises NotImplementedError), assigning duals of
-        custom constraints (PyPSA raises too).
-  - [ ] Ungrouped statistics (`groupby=False`) of components added after
-        `set_scenarios` follow PyPSA's row order only for scenario-major data.
+  - [x] `n.optimize.expressions` on stochastic networks (scenario
+        `opt_expressions_stochastic`, 124 records incl. 5 LP files): constants
+        follow `c.da` (`(scenario, name)`; time series `(scenario, name,
+        snapshot)` or, when only some columns are time-varying,
+        `(snapshot, scenario, name)`, see `scenarioMajor`), groupers and
+        filters require scenario-invariant values, transmission branches use
+        PyPSA's multi-index path, grouped results put MultiIndex dimensions
+        first (multi-period snapshots) and a single regroup key before the
+        other dimensions.
+  - [ ] Assigning duals of custom constraints on stochastic networks (PyPSA
+        raises too).
+  - [x] Components added after `set_scenarios` (scenario `stochastic_added`,
+        29 records incl. the LP file): their static rows follow both
+        scenarios' original rows and `MultiIndex.append` sorts the `name`
+        level, so PyPSA's `c.da` (and with it the operational variables, their
+        bounds and the nodal balance led by that component) becomes
+        (snapshot, scenario, name); PSA.js tracks pandas' level order per
+        component (`_nameLevel`, `isSnapshotMajor`) and merges the scenario
+        models accordingly. Ungrouped statistics follow the static rows, and
+        time series of `sign * p` (energy balance with `groupby_time=False`)
+        PyPSA's sorted column union. Fixed on the way: time series of such
+        components lost their (scenario, name) levels, so e.g. loads added
+        after `set_scenarios` were dropped from the nodal balance.
   - [ ] Iterative transmission expansion, power flow and spatial clustering
         raise (they fail or are unsupported in PyPSA v1.4.0 too).
 - [x] **NetworkCollection** (scenario `collection`): construction from lists,
@@ -52,37 +118,223 @@ IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       fills, outer joins, `groupby().sum()`, `@`, `merge`) live in
       `src/optimization/statistic_expressions.js`.
 - [ ] Piecewise data on stochastic networks (PyPSA raises too).
-- [ ] **IO formats**: Excel (`import_from_excel`/`export_to_excel`, e.g. via
-      SheetJS), HDF5 (pandas HDFStore layout), `import_from_pypower_ppc`,
-      `import_from_pandapower_net` (likely out of scope without Python).
-- [ ] netCDF extras: `float32`, `compression=None`, URL inputs, browser support
-      (h5wasm in-memory files), shapes/geometry (WKT) round trip.
-- [ ] `to_crs` (coordinate transformation; needs a proj4 equivalent).
-- [ ] **Clustering**: `segment` (tsam), `busmap_by_hac`, `busmap_by_greedy_modularity`,
-      weekly/monthly resample offsets, parity for `busmap_by_kmeans`
-      (current implementation is a seeded Lloyd/k-means++, not scikit-learn).
+- [x] **Excel IO** (`import_from_excel` / `export_to_excel`, `Network.from_excel`,
+      `new Network("file.xlsx")`): bespoke zip + SpreadsheetML reader/writer
+      (`src/core/zip.js`, `src/network/excel.js`), PyPSA's sheet layout incl.
+      short sheet names, stacked piecewise sheets and append mode (unrelated
+      sheets kept, stale ones removed). Tests: PyPSA workbooks of 7 networks
+      import identically and round-trip (`io.test.js`, fixtures in
+      `test/fixtures/excel`); `scripts/parity/check_js_excel.py` confirms that
+      PyPSA imports PSA.js workbooks identically (run manually; all 7 pass).
+      Like the netCDF files, regenerated workbooks differ in metadata bytes.
+- [x] `import_from_pypower_ppc` (scenario `io_pypower`: pypower's case9,
+      case14, case30 and case39 imported and solved by AC power flow).
+- [x] HDF5 (`import_from_hdf5`, `export_to_hdf5`, `Network.from_hdf5`;
+      paths or bytes): pandas `HDFStore` layout read and written with h5wasm
+      (`src/network/hdf5.js`) and a pickle reader/protocol-0 writer
+      (`src/core/pickle.js`) for the PyTables attributes and the pickled
+      object arrays of `/meta` and `/crs`. h5wasm cannot write HDF5 array
+      member types, so PSA.js writes one column per values block (scalar
+      members, as pandas does for data columns) and `/meta`/`/crs` as
+      fixed-length strings; pandas reads both. Booleans are stored as uint8
+      (pandas casts by the `_dtype` attribute), no shuffle filter (h5wasm
+      offers deflate only). Tests: PyPSA stores of 9 networks (incl.
+      multi-period, piecewise, shapes, non-ASCII names and a Unicode `meta`)
+      import identically and round-trip (`io.test.js`, fixtures in
+      `test/fixtures/hdf5`); `scripts/parity/check_js_hdf5.py` confirms that
+      PyPSA imports PSA.js stores identically (run manually; all 9 pass).
+      Like PyPSA, stochastic networks raise NotImplementedError. `new
+      Network("x.nc" | "x.h5")` raises (the loaders are async).
+- [x] `import_from_pandapower_net` (scenario `io_pandapower`): reads the JSON
+      written by `pandapower.to_json` (path, text or object; test nets in
+      `test/networks/pandapower`), all of PyPSA's mapping incl. bus switch
+      amalgamation, `extra_line_data`, `use_pandapower_index`; PyPSA's
+      failures on unnamed loads (`case9`) and on buses removed twice
+      (`example_multivoltage`) are mirrored. `n.remove` now raises for
+      unknown names like pandas' `drop`.
+- [x] Package options like `pypsa.options` (`src/options.js`, exported
+      `options`, `get_option`, `set_option`, `option_context`): the statistics,
+      consistency and IO defaults (the older `statisticsOptions`,
+      `consistencyOptions`, `ioOptions` are views onto them), `add`'s
+      `return_names` and the optimisation defaults (`solver_name`,
+      `solver_options`, `log_to_console`, `include_objective_constant`);
+      `optimization.model_snapshot_index`, `warnings.*` and `api.*` are
+      stored only; `reset_option` and `PYPSA_<GROUP>__<NAME>` environment
+      variables as in PyPSA. Tests: `test/options.test.js`.
+- [x] LP parity on PyPSA's published example networks (checked by hand,
+      too large for fixtures): the LP files of `model_energy` (2920
+      snapshots), `stochastic_network` and the PyPSA-Eur sector-coupled
+      `carbon_management` network (2164 buses, 6830 links, 168 snapshots:
+      a 310 MB LP) are byte-identical to PyPSA's. Fixed on the way: linopy's
+      LP writer slices blocks whose size incl. the `_term` dimension exceeds
+      2,000,000 along their largest dimension (`lpRowOrder`, test
+      `lp_writer.test.js`), which needs linopy's `_term` size per constraint
+      (`Constraint.termCount`; KVL rows are compacted by linopy's sparse
+      `@`; scenario `lp_terms`), and operational-limit constants sum the
+      initial storage levels with numpy's pairwise summation. To repeat:
+      `await examples.carbon_management()`, `n.optimize.create_model().to_lp()`
+      against `n.optimize.create_model().to_file(..., io_api="lp")`
+      (`node --max-old-space-size=12000` for the full network).
+- [x] Solving PyPSA's published example networks (checked by hand):
+      `storage_hvdc`, `scigrid_de`, `model_energy` (2920 snapshots) and
+      `stochastic_network` give PyPSA's objective to the last digit and the
+      same network results, overview and energy balance (HiGHS-WASM takes
+      about as long as highspy). `carbon_management` was not solved: even
+      an 8-snapshot slice runs for more than 10 minutes in native HiGHS.
+- [x] Statistics on PyPSA's published example networks (checked by hand):
+      the overview and 21 statistics (capex variants, capacities, opex,
+      supply, withdrawal, transmission, energy balance incl. time series,
+      curtailment, capacity factor, revenue, market value, system cost,
+      prices) match PyPSA on all six networks, incl. the solved
+      `carbon_management` network. Fixed on the way (scenario
+      `statistics_quirks`): grouped sums and means are Kahan-compensated
+      like pandas' cython group kernels (cancellation in
+      `expanded_capex`), `market_value` without operation returns the
+      revenue under its "Revenue" name so PyPSA's overview has no Market
+      Value column (the overview keys columns by result name), and
+      `supply` / `withdrawal` reject bus carriers missing from the network
+      (through `energy_balance`'s `bus_carrier_unit`, which now also maps
+      nice names).
+- [x] Module helpers (scenario `module_helpers`): `costs.annuity` /
+      `costs.periodized_cost` on numbers, arrays and Series (pandas
+      alignment), `geo.haversine_pts` / `geo.haversine` / `geo.compute_bbox`
+      (`get_projection_from_crs` / `get_projected_area_factor` need cartopy
+      axes: plotting), `examples.*` (async loaders of PyPSA's published
+      example networks from data.pypsa.org with a per-user cache, the 404
+      fallback to `latest` and `clear_cache`; offline test in `io.test.js`).
+      All six example networks import identically to PyPSA (CSV exports are
+      byte-identical; the stochastic one round-trips through netCDF with
+      `n.equals`). Found on the way: metadata JSON written by Python holds
+      `NaN` / `Infinity` literals (`carbon_management`), now read and written
+      like Python's `json` module, keeping the float form of integral numbers
+      (`src/core/pyjson.js`).
+- [x] SubNetwork API (scenario `topology_subnetwork_api`): `sub.lpf()`,
+      `sub.pf()` (iterations, errors, convergence per snapshot) and PyPSA's
+      deprecated accessors (`buses_i()` ... `stores_i()`, `buses()`,
+      `generators()`, `loads()`, `shunt_impedances()`, `storage_units()`,
+      `stores()`, `component`, `df`, `static`, `pnl`, `dynamic`,
+      `iterate_components`), `investment_period_weightings`, `scenarios`;
+      `n.optimize.expressions.n`. A fresh diff of `dir()` against PyPSA now
+      leaves only `n.plot` and `n.explore`.
+- [x] Component views `c.da.<attr>` / `c.ds` and `c.n_save` (scenario
+      `components_da`, 30 records): a small labelled array
+      (`src/core/dataarray.js`: dims, coords, C-ordered values, `sel`,
+      `isel`, `transpose`, `to_pandas`) with PyPSA's dimensions: static
+      (name), time-varying (snapshot, name), the activity mask, multi-period
+      tuple snapshots; stochastic (scenario, name) and either (snapshot,
+      scenario, name) or (scenario, name, snapshot) following pandas' level
+      order (time series for only some components sort the `name` level).
+- [x] Small API gaps found by diffing `dir(pypsa.Network())`: deprecated
+      `n.cluster` aliases (`busmap_by_hac`, `busmap_by_greedy_modularity`,
+      `cluster_spatially_by_*`), `n.statistics.n` / `.is_multi_indexed`,
+      `Network.get_network` (raises outside collections). Remaining: `plot`,
+      `explore`.
+- [x] Shapes: WKT geometries kept in shapely's canonical form and written
+      rounded like `GeoSeries.to_wkt()` (GEOS number formatting, ties to
+      even; `src/core/wkt.js`), identical through CSV, netCDF and Excel
+      (`test/networks/shapes`, fixture `io_shapes`). Geometric operations
+      (areas, buffers) are not available. Non-finite coordinates are written
+      as `Infinity` / `NaN` like GEOS 3.14 (PSA.js wrote `Inf` before).
+- [x] Browser support: `npm run test:browser` (esbuild bundle in headless
+      Chromium, also a CI job): optimisation with HiGHS WASM, statistics,
+      CSV via `MemoryFolder`, Excel via bytes (bundled inflate when no zlib),
+      netCDF via bytes (h5wasm's browser build and in-memory file system).
+- [x] netCDF extras: http(s) URL inputs, `float32` (float64 data variables
+      stored as float32 like PyPSA's `typecast_float32`; PyPSA reads the file
+      identically to its own) and PyPSA's `compression` dict (`io.test.js`,
+      fixture `io_float32`).
+- [x] `to_crs`, `n.crs` / `n.srid` (scenario `crs`, 27 records): EPSG 4326,
+      4258, 3857, 3035, 3034 (LCC Europe), 2154 (Lambert-93; PROJ's `lcc`
+      with `pj_tsfn` / `pj_phi2`) and every UTM zone (WGS 84 32601-32660 / 32701-32760,
+      ETRS89 25828-25838; the zone WKTs come from one template plus the
+      zones' USAGE blocks generated from pyproj, `scripts/generate_crs_data.py`,
+      all 131 identical to pyproj's, `crs_utm_wkt.json.gz`) with pyproj's WKT
+      (`src/core/crs.js`: PROJ's webmerc, ellipsoidal oblique LAEA with an
+      exact authalic-latitude inverse, Poder/Engsager transverse Mercator,
+      `adjlon` and PROJ's range checks giving `Infinity`). Shapes are
+      transformed in x/y order, buses with PyPSA's axis-swapping
+      `Transformer.from_crs(current, new)` (mirrored). `n.crs` has
+      `to_epsg()` / `to_wkt()`; setting `n.srid` / `n.crs` to another CRS
+      raises like PyPSA (geopandas `set_crs`). Exports now carry the WKT of
+      any supported EPSG code. Other EPSG codes raise NotImplementedError.
+- [x] **Clustering** done: calendar offsets in `resample` (`W`, `W-<day>`,
+      `ME`, `MS`, `QE[-<month>]`, `QS[-<month>]`, `YE[-<month>]`,
+      `YS[-<month>]` and their multiples such as `2W` or `3ME`, with pandas'
+      bin edges; scenario `clustering_resample`);
+      `busmap_by_greedy_modularity` / `cluster_by_greedy_modularity` (port of
+      networkx's CNM algorithm incl. its heap tie-breaking; scenario
+      `clustering_modularity`); `busmap_by_hac` / `cluster_by_hac` with Ward,
+      complete and average linkage and euclidean/manhattan/cosine metrics
+      (port of scikit-learn's connectivity-constrained `ward_tree` and
+      `linkage_tree` with its weight-only edge heap and ordered
+      `max_merge` / `average_merge`, single linkage via scipy's minimum
+      spanning tree and `_single_linkage_label`, a precomputed distance
+      matrix or a callable metric (a JS function of two feature rows),
+      component completion,
+      `_hc_cut` / `hc_get_heads`; scenario
+      `clustering_hac`; the completion compares squared distances computed
+      like numpy's BLAS `dot` with FMA, so on CPUs without FMA the fixture
+      could differ for coincident buses); `segment` / `get_segment_result`
+      for hourly or non-datetime snapshots (tsam's pipeline with one typical
+      period: min-max scaling, Ward clustering of neighbouring snapshots,
+      segment means; scenario `clustering_segment`).
+- [ ] **Clustering** open: `segment` for snapshots that are not hourly (PyPSA
+      passes the snapshot count to tsam as hours, so tsam forms several
+      periods and only part of the series is segmented, an upstream bug;
+      PSA.js raises); parity for
+      `busmap_by_kmeans` (a seeded Lloyd/k-means++, not scikit-learn's, whose
+      threaded chunk reductions make exact parity unlikely).
 - [ ] Plotting (`n.plot`, `n.explore`, statistics plots) — out of scope or a
       separate package.
-- [ ] Solvers other than HiGHS; solver option passthrough is only tested for
-      basic options. HiGHS' QP solver is slow on larger quadratic problems
-      (also true in PyPSA).
+- [x] Command-line solvers CBC and GLPK (`src/optimization/cli_solvers.js`,
+      Node.js; scenario `opt_cli_solvers`, skipped when `cbc` / `glpsol` are
+      not on the PATH, CI installs them): linopy's `CBC` / `GLPK` classes
+      (command lines, solver options as `-key value` / `--key value`,
+      status mapping, solution-file parsing incl. pandas' fixed-width
+      inference for GLPK's report and linopy's truncation of each block,
+      values at the printed precision, objective from the report without
+      the objective constant, no duals for GLPK MILPs). Mirrored PyPSA quirk:
+      PyPSA passes `log_to_console` (when set) to every solver as an option;
+      glpsol rejects it and linopy fails on the empty solution file
+      (`EmptyDataError`). Checked by hand on `scigrid_de` and `model_energy`
+      (identical objectives and results).
+- [ ] Other solvers (Gurobi, CPLEX, Xpress, ...: Python APIs in linopy;
+      SCIP/COPT/Mosek command lines could follow the CBC pattern). HiGHS'
+      QP solver is slow on larger quadratic problems (also true in PyPSA).
 - [ ] Deprecated APIs not mirrored (e.g. `n.lopf`, old `n.generators_t`
-      style accessors beyond what exists) — check `scripts/parity` API diff:
-      run `/tmp`-style comparison of `dir(pypsa.Network())` vs PSA.js.
+      style accessors beyond what exists). `dir(pypsa.Network())` and the
+      `optimize`, `statistics`, `cluster` and `c` accessors were diffed
+      against PSA.js in this session (see the API gaps item above).
 
 ## 3. Parity gaps to close
 
-- [ ] `linopy` expression API: only the subset needed by PyPSA workflows
-      (`sel`, `mul`, `add`, `sub`, `sum`, `le/ge/eq`, `set_objective`, plus the
-      internal helpers of the statistic expressions: outer merges,
-      `groupby().sum()`, `where`, `@`). Missing as public API: `shift`,
-      `rolling`, quadratic expressions, `diff`; `groupby`/`where` as methods.
-- [ ] Statistics: `aggregate_across_components`, `groupby_method` other than
-      sum/mean/min/max, callable groupers with multi-index results. (Done: the
-      overview table `n.statistics()` passes all arguments like PyPSA, the
-      component sets iterate in CPython's set order, deprecated `comps` /
-      `aggregate_groups` / `aggregate_time` are renamed.)
-- [ ] Consistency checks: `check_dtypes`.
+- [ ] `linopy` expression API. Public: `sel`, `isel`, `mul`, `add`, `sub`,
+      `sum`, `shift`, `roll`, `diff`, `rolling().sum()`, `cumsum` (one
+      dimension, as linopy), `where`, `fillna`, `groupby(series).sum()`,
+      `le/ge/eq`, `set_objective` (scenario `opt_linexpr`: term layout incl.
+      -1/NaN padding, LP rows, solution), quadratic expressions (`x * y`,
+      `expr * var`, `pow(2)`, sums, mixing with linear terms) and quadratic
+      objectives via `set_objective` / `add_objective` (scenario
+      `opt_quadexpr`), `groupby` with a DataFrame (multi-key) grouper and
+      `Variable.fillna` (also after a Variable's `shift` / `where`), centred
+      rolling windows (`center`), chains of the operations linopy keeps on a
+      Variable (`shift`, `where`, `roll`, `sel`, `isel`: absent slots keep
+      coefficient 1 and constant 0 until another operation makes an
+      expression), `where` with a condition over dimensions the expression
+      lacks (broadcast like xarray). Missing: quadratic constraints (HiGHS
+      cannot solve them).
+- [x] Statistics: aggregations sum/mean/min/max/median/first/last/std/var/
+      prod/count/sem/nunique/skew/kurt (pandas' nanops formulas) and callable
+      groupers returning one Series or a list of Series (one index level
+      each; a DataFrame raises like pandas). (Done: scenario `statistics_more` covers
+      `groupby_method` and `groupby_time` aggregations, aggregation across
+      components, ports, carrier/bus-carrier filters, nice names, storage
+      capacities and price weightings; the overview table `n.statistics()`
+      passes all arguments like PyPSA, the component sets iterate in CPython's
+      set order, deprecated `comps` / `aggregate_groups` / `aggregate_time`
+      are renamed.)
+- [x] Consistency checks: `check_dtypes` (static dtypes judged by the
+      column values; scenario `consistency`).
 - [ ] SciGrid voltage angles after optimisation use an exact grounded solve while
       PyPSA uses `numpy.linalg.pinv` (differences ~1e-4 rad; documented
       tolerance in `test/scenarios/opt_scigrid_de.json`).
@@ -139,6 +391,25 @@ IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       2. `groupby_method` other than "sum" is only rejected when ports are
          merged or time is aggregated (e.g. `capex(groupby_method="max")`
          silently sums).
+      3. `operation(groupby=False, groupby_time=False)` fails with
+         `KeyError: 'const'` for every component except loads and storage
+         units: the operation is a plain linopy `Variable`, which
+         `linopy.merge` cannot concatenate (even a single one).
+- [ ] PyPSA v1.4.0 bugs found this session (not mirrored; consider reporting):
+      1. `to_crs` builds `Transformer.from_crs(current, new)` without
+         `always_xy=True` and passes (x, y), so for EPSG:4326 (lat/lon axis
+         order) longitudes are taken as latitudes: London (-0.13, 51.5) ends
+         up at (-1.19e6, 9.26e6) in EPSG:3035, x/y are swapped for EPSG:3857.
+      1b. A network exported after `to_crs` to anything but EPSG:4326 cannot
+         be imported again: the importer sets `n._crs` from `crs.json` and
+         then `n.srid`, whose `set_crs` raises because the shapes still have
+         the default CRS (PSA.js imports such files).
+      2. `segment` passes `period_duration=len(snapshots)` to tsam, which
+         reads it in hours: with 3-hourly snapshots tsam forms three periods
+         and the result covers only the first third of the series.
+      3. `segment` sets the snapshot weightings to the segment lengths in
+         snapshots, dropping the original weightings (3-hourly data loses
+         its factor 3).
 - [ ] PyPSA bugs/quirks observed (mirrored or worked around in fixtures):
       clustering crashes under pandas 3 copy-on-write (runner patches
       `determine_network_topology`), loss variable order depends on Python's
@@ -147,6 +418,10 @@ IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
 
 ## 4. Documentation
 
-- [ ] API reference (JSDoc → generated docs) and examples ported from PyPSA's
-      documentation notebooks.
+- [x] API reference: `docs/API.md`, generated by `npm run docs`
+      (`scripts/gen_api_docs.mjs`: member lists from the runtime objects,
+      JSDoc found by locating each function's source text; wrappers fall back
+      to the documented method); `test/docs.test.js` fails when it is stale.
+      Examples: thirteen runnable scripts in `examples/scripts` (run by
+      `test/examples.test.js`).
 - [ ] Publish to npm (package name, versioning tied to PyPSA version).

@@ -36,12 +36,24 @@ function fmtLabel(v) {
   return Array.isArray(v) ? v.join("|") : String(v);
 }
 
+const WKT_RE = /^(POINT|LINESTRING|POLYGON|MULTIPOINT|MULTILINESTRING|MULTIPOLYGON|GEOMETRYCOLLECTION)\b/;
+
+/** Two WKT geometries with the same structure whose coordinates are close (when rtol > 0). */
+function wktClose(a, b, rtol, atol) {
+  if (!(rtol > 0 || atol > 0) || typeof a !== "string" || typeof b !== "string" || !WKT_RE.test(a) || !WKT_RE.test(b)) return false;
+  const num = /-?\d+(?:\.\d+)?(?:e[-+]?\d+)?/gi;
+  if (a.replace(num, "#") !== b.replace(num, "#")) return false;
+  const xs = a.match(num) ?? [];
+  const ys = b.match(num) ?? [];
+  return xs.length === ys.length && xs.every((x, i) => isClose(Number(x), Number(ys[i]), rtol, atol));
+}
+
 export function isClose(a, b, rtol, atol) {
   if (Array.isArray(a) || Array.isArray(b)) {
     return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => isClose(x, b[i], rtol, atol));
   }
   if (typeof a === "boolean" || typeof b === "boolean") return a === b;
-  if (typeof a === "string" || typeof b === "string") return a === b;
+  if (typeof a === "string" || typeof b === "string") return a === b || wktClose(a, b, rtol, atol);
   if (Number.isNaN(a) && Number.isNaN(b)) return true;
   if (a === b) return true;
   if (!Number.isFinite(a) || !Number.isFinite(b)) return false;

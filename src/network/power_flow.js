@@ -157,6 +157,9 @@ export function apply_transformer_t_model(n) {
   }
 }
 
+/**
+ * Compute derived attributes (per-unit impedances, line type values, dependent bus data) like `n.calculate_dependent_values()`.
+ */
 function calculate_dependent_values() {
   apply_line_types(this);
   apply_transformer_types(this);
@@ -270,7 +273,7 @@ class SubNetworkComponents {
       const buses = this._sub.c.get("buses").static.index;
       return st.filter(st.col("bus").map((b) => buses.has(b)));
     }
-    throw new Error(`Component ${c.name} not supported for sub-networks`);
+    throw new Error(`ValueError: Component ${c.name} not supported for sub-networks`);
   }
 
   get dynamic() {
@@ -357,12 +360,16 @@ export class SubNetwork {
     return new Index(out, ["type", "name"]);
   }
 
+  /** Passive branches of the sub-network as a `(component, name)` indexed frame. */
   branches() {
     const b = this.n.passive_branches();
     if (b.index.length === 0) return b;
     return b.filter(b.col("sub_network").map((s) => s === this.name));
   }
 
+  /**
+   * Choose the slack bus (the bus of the slack generator, else the first bus) and set `slack_generator`.
+   */
   find_slack_bus() {
     const n = this.n;
     const gens = this.c.get("generators").static;
@@ -388,6 +395,7 @@ export class SubNetwork {
     n.c.sub_networks.static.setAt(this.name, "slack_bus", this.slack_bus);
   }
 
+  /** Assign the PV/PQ/Slack control of the buses from their generators. */
   find_bus_controls() {
     const n = this.n;
     this.find_slack_bus();
@@ -441,6 +449,7 @@ export class SubNetwork {
     return out;
   }
 
+  /** Bus susceptance matrix `B` and branch matrix `H` of the linear power flow. */
   calculate_B_H({ skip_pre = false } = {}) {
     const n = this.n;
     if (!skip_pre) {
@@ -469,6 +478,7 @@ export class SubNetwork {
     this.p_bus_shift = this.K.matvec(this.p_branch_shift);
   }
 
+  /** Power transfer distribution factors (`sub.PTDF`, branches x buses). */
   calculate_PTDF({ skip_pre = false } = {}) {
     if (!skip_pre) this.calculate_B_H();
     const npvpq = this.pvpqs.length;
@@ -501,6 +511,7 @@ export class SubNetwork {
     this.PTDF = ptdf;
   }
 
+  /** Branch outage distribution factors (`sub.BODF`, branches x branches). */
   calculate_BODF({ skip_pre = false } = {}) {
     if (!skip_pre) this.calculate_PTDF();
     const ptdf = this.PTDF;
@@ -521,6 +532,7 @@ export class SubNetwork {
     this.BODF = bodf;
   }
 
+  /** Bus admittance matrix `Y` and the branch admittances for the AC power flow. */
   calculate_Y({ skip_pre = false, active_branches_only = true } = {}) {
     const n = this.n;
     if (!skip_pre) n.calculate_dependent_values();
@@ -1699,8 +1711,114 @@ Object.assign(Network.prototype, GraphMixin, {
   },
 });
 
+/**
+ * Determine the sub-networks (connected components of passive branches per carrier) and their buses and branches.
+ * `{investment_period, skip_isolated_buses, cycle_basis_method}` as in PyPSA.
+ */
 Network.prototype.determine_network_topology = function determineTopologyWrapper(opts = {}) {
   return determine_network_topology.call(this, opts);
 };
+
+// ----------------------------------------------------------------------
+// SubNetwork power flow and (deprecated in PyPSA) component accessors
+// ----------------------------------------------------------------------
+
+const subStatic = (sub, name) => sub.c.get(name).static;
+
+Object.assign(SubNetwork.prototype, {
+  /** Linear power flow of this sub-network (`sub.lpf(snapshots, {skip_pre})`). */
+  lpf(snapshots = null, opts = {}) {
+    if (isOptions(snapshots)) [snapshots, opts] = [snapshots.snapshots ?? null, snapshots];
+    subLpf(this, as_index(this.n, snapshots, "snapshots"), opts.skip_pre ?? false);
+  },
+
+  /**
+   * Newton-Raphson power flow of this sub-network; returns the iterations,
+   * remaining errors and convergence flags per snapshot (Series).
+   */
+  pf(snapshots = null, opts = {}) {
+    if (isOptions(snapshots)) [snapshots, opts] = [snapshots.snapshots ?? null, snapshots];
+    const { slack_weights = "p_set" } = opts;
+    if (!(typeof slack_weights === "string" || slack_weights instanceof Series || (slack_weights && typeof slack_weights === "object"))) {
+      throw new TypeError(`Type of 'slack_weights' must be string, pd.Series or dict. Got ${typeof slack_weights}.`);
+    }
+    const sns = as_index(this.n, snapshots, "snapshots");
+    const [it, dif, cnv] = subPf(this, sns, opts);
+    return [new Series(Float64Array.from(it), sns), new Series(Float64Array.from(dif), sns), new Series(Array.from(cnv, Boolean), sns)];
+  },
+
+  /** Component of the sub-network (deprecated in PyPSA: `sub.c.<name>`). */
+  component(c_name) {
+    return this.c.get(c_name);
+  },
+
+  /** Static data of a component in the sub-network (deprecated in PyPSA). */
+  df(c_name) {
+    return subStatic(this, c_name);
+  },
+
+  /** Static data of a component in the sub-network (deprecated in PyPSA). */
+  static(c_name) {
+    return subStatic(this, c_name);
+  },
+
+  /** Time series of a component in the sub-network (deprecated in PyPSA). */
+  pnl(c_name) {
+    return this.c.get(c_name).dynamic;
+  },
+
+  /** Time series of a component in the sub-network (deprecated in PyPSA). */
+  dynamic(c_name) {
+    return this.c.get(c_name).dynamic;
+  },
+
+  /** Components of the sub-network (all, or `components`), skipping empty ones. */
+  *iterate_components(components = null, skip_empty = true) {
+    if (components && !Array.isArray(components) && typeof components === "object") [components, skip_empty] = [components.components ?? null, components.skip_empty ?? true];
+    for (const name of components ?? this.n.all_components) {
+      const c = this.c.get(name);
+      if (!(skip_empty && c.static.empty)) yield c;
+    }
+  },
+});
+
+Object.defineProperties(SubNetwork.prototype, {
+  investment_period_weightings: {
+    /** Investment period weightings of the network. */
+    get() {
+      return this.n.investment_period_weightings;
+    },
+    configurable: true,
+  },
+  scenarios: {
+    /** Scenarios of the network. */
+    get() {
+      return this.n.scenarios;
+    },
+    configurable: true,
+  },
+});
+
+for (const [listName, method] of [
+  ["buses", "buses"],
+  ["lines", null],
+  ["transformers", null],
+  ["generators", "generators"],
+  ["loads", "loads"],
+  ["shunt_impedances", "shunt_impedances"],
+  ["storage_units", "storage_units"],
+  ["stores", "stores"],
+]) {
+  /** Names of the components in the sub-network (deprecated in PyPSA). */
+  SubNetwork.prototype[`${listName}_i`] = function componentNames() {
+    return subStatic(this, listName).index;
+  };
+  if (method) {
+    /** Static data of the components in the sub-network (deprecated in PyPSA). */
+    SubNetwork.prototype[method] = function componentStatic() {
+      return subStatic(this, listName);
+    };
+  }
+}
 
 export { prepareAndRunPf, allocatePfOutputs, subLpf, subPf };

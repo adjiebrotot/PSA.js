@@ -1,0 +1,21 @@
+{
+  "description": "Statistics details found on PyPSA's example networks: grouped sums are Kahan-compensated like pandas' groupby (cancellation in a carrier group), market_value without operation returns the revenue under its name so the overview has no Market Value column, supply/withdrawal reject bus carriers that are not in the network.",
+  "ops": [
+    ["new_network"],
+    ["set_snapshots", [0, 1]],
+    ["add", "Carrier", ["AC", "wind"]],
+    ["add", "Bus", "b", {"carrier": "AC"}],
+    ["add", "Generator", ["g1", "g2", "g3", "g4"], {"bus": "b", "carrier": "wind", "p_nom": [1e16, 1.0, 1.0, 1e16], "capital_cost": [1.0, 1.0, 1.0, -1.0]}],
+    ["add", "Generator", ["h1", "h2"], {"bus": "b", "carrier": "AC", "p_nom": [0.1, 0.2], "capital_cost": [0.1, 0.1]}],
+    ["record", "installed_capex", "path", ["statistics", ["installed_capex", [], {}]]],
+    ["record", "installed_capex_mean", "path", ["statistics", ["installed_capex", [], {"groupby_method": "mean", "round": 17}]]],
+    ["record", "overview_new", "path", ["statistics", ["__call__", [], {}]]],
+    ["record", "market_value_new", "path", ["statistics", ["market_value", [], {}]]],
+    ["expect_error", "supply_missing_bus_carrier", ["call", "statistics.supply", [], {"bus_carrier": "H2"}]],
+    ["expect_error", "withdrawal_missing_bus_carrier", ["call", "statistics.withdrawal", [], {"bus_carrier": ["AC", "H2"]}]],
+    ["record", "supply_ac", "path", ["statistics", ["supply", [], {"bus_carrier": "AC"}]]],
+    ["load_example", "ac-dc-meshed"],
+    ["record", "overview_unsolved", "path", ["statistics", ["__call__", [], {}]]],
+    ["record", "market_value_unsolved", "path", ["statistics", ["market_value", [], {}]]]
+  ]
+}

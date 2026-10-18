@@ -18,4 +18,18 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
+      # CBC and GLPK executables for the command-line solver scenario
+      - run: sudo apt-get update && sudo apt-get install -y coinor-cbc glpk-utils
       - run: npm test
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright-core install --with-deps chromium
+      - run: npm run test:browser

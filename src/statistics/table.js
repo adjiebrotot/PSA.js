@@ -119,6 +119,37 @@ export class Tab {
 }
 
 /** Aggregation of an array of numbers like pandas (NaN skipped). */
+/** Kahan-compensated sum of the non-NaN values and their count (pandas' cython `group_sum`). */
+function kahanSum(values) {
+  let sum = 0;
+  let comp = 0;
+  let count = 0;
+  for (const x of values) {
+    if (Number.isNaN(x)) continue;
+    count++;
+    const y = x - comp;
+    const t = sum + y;
+    comp = t - sum - y;
+    // infinite values make the compensation NaN (pandas GH#53606)
+    if (Number.isNaN(comp)) comp = 0;
+    sum = t;
+  }
+  return [sum, count];
+}
+
+/**
+ * Aggregate the values of one group like pandas' `groupby().agg(agg)`: sums and
+ * means are Kahan-compensated as in pandas' cython group kernels.
+ */
+export function groupAggregate(values, agg) {
+  if (agg === "sum") return kahanSum(values)[0];
+  if (agg === "mean") {
+    const [sum, count] = kahanSum(values);
+    return count ? sum / count : NaN;
+  }
+  return aggregate(values, agg);
+}
+
 export function aggregate(values, agg) {
   if (typeof agg === "function") return agg(values);
   const v = values.filter((x) => !Number.isNaN(x));
@@ -149,6 +180,62 @@ export function aggregate(values, agg) {
       const s = [...v].sort((a, b) => a - b);
       const m = s.length >> 1;
       return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+    }
+    case "var":
+    case "std": {
+      // pandas' group_var: Welford's algorithm, ddof=1
+      let mean = 0;
+      let ssqdm = 0;
+      v.forEach((x, i) => {
+        const old = mean;
+        mean += (x - old) / (i + 1);
+        ssqdm += (x - old) * (x - mean);
+      });
+      const res = v.length > 1 ? ssqdm / (v.length - 1) : NaN;
+      return agg === "std" ? Math.sqrt(res) : res;
+    }
+    case "prod": {
+      let p = 1;
+      for (const x of v) p *= x;
+      return p;
+    }
+    case "sem":
+      // std (ddof=1) over the square root of the count
+      return v.length > 1 ? Math.sqrt(aggregate(v, "var")) / Math.sqrt(v.length) : NaN;
+    case "nunique":
+      return new Set(v.map((x) => (Object.is(x, -0) ? 0 : x))).size;
+    case "skew":
+    case "kurt": {
+      // pandas' nanskew / nankurt (bias-corrected, near-constant data -> 0)
+      const count = v.length;
+      if (!count) return NaN;
+      let sum = 0;
+      let maxAbs = 0;
+      for (const x of v) {
+        sum += x;
+        maxAbs = Math.max(maxAbs, Math.abs(x));
+      }
+      const mean = sum / count;
+      let m2 = 0;
+      let mk = 0;
+      for (const x of v) {
+        const a = x - mean;
+        const a2 = a * a;
+        m2 += a2;
+        mk += agg === "skew" ? a2 * a : a2 * a2;
+      }
+      const tol = (p) => (Number.EPSILON * maxAbs) ** p * count;
+      if (Math.abs(m2) < tol(2)) m2 = 0;
+      if (Math.abs(mk) < tol(agg === "skew" ? 3 : 4)) mk = 0;
+      if (agg === "skew") {
+        if (count < 3) return NaN;
+        return m2 === 0 ? 0 : ((count * (count - 1) ** 0.5) / (count - 2)) * (mk / m2 ** 1.5);
+      }
+      if (count < 4) return NaN;
+      const adj = (3 * (count - 1) ** 2) / ((count - 2) * (count - 3));
+      const denominator = (count - 2) * (count - 3) * m2 ** 2;
+      if (denominator === 0) return 0;
+      return (count * (count + 1) * (count - 1) * mk) / denominator - adj;
     }
     default:
       throw new Error(`Unsupported aggregation '${agg}'`);
@@ -185,7 +272,7 @@ export function groupRows(tab, keys, names, agg) {
   const rows = labels.map((l) => {
     const members = groups.get(labelKey(l));
     const out = new Float64Array(w);
-    for (let j = 0; j < w; j++) out[j] = aggregate(members.map((i) => tab.rows[i][j]), agg);
+    for (let j = 0; j < w; j++) out[j] = groupAggregate(members.map((i) => tab.rows[i][j]), agg);
     return out;
   });
   return new Tab(new Index(labels, multi ? names : names[0]), tab.cols, rows);

@@ -5,7 +5,9 @@
  */
 
 import assert from "node:assert/strict";
-import { Network, NetworkCollection, DataFrame, Series, Index } from "../src/index.js";
+import * as psa from "../src/index.js";
+import { DataArray, Dataset } from "../src/core/dataarray.js";
+import { Network, NetworkCollection, DataFrame, Series, Index, LinearExpression, QuadraticExpression } from "../src/index.js";
 import path from "node:path";
 import { ROOT, examplePath, decode as decodeFixture, assertFrameClose, assertSeriesClose, assertNetworkMatches, isClose, fmtLabel } from "./helpers.js";
 
@@ -46,7 +48,52 @@ export function decodeValue(v, n) {
       const data = new Map();
       spec.columns.forEach((c, j) => data.set(c, spec.data.map((row) => decodeValue(row[j], n))));
       const columns = spec.column_names ? new Index(spec.columns, spec.column_names) : spec.columns;
-      return new DataFrame({ index: new Index(spec.index), columns, data });
+      return new DataFrame({ index: new Index(spec.index, spec.index_name ?? null), columns, data });
+    }
+    if ("$metric" in v) {
+      // a callable distance of two feature rows, defined alike in run_scenarios.py
+      const metrics = {
+        chebyshev: (u, w) => Math.max(...u.map((x, i) => Math.abs(x - w[i]))),
+        weighted_l1: (u, w) => u.reduce((s, x, i) => s + Math.abs(x - w[i]) * (i + 1), 0),
+      };
+      return metrics[v.$metric];
+    }
+    if ("$grouper" in v) {
+      // a callable grouper over static columns ("{port}" is replaced by the port)
+      const spec = v.$grouper;
+      return (n, c, { port = "" } = {}) => {
+        const st = n.c.get(c).static;
+        const cols = spec.columns.map((col) => col.replace("{port}", port));
+        const series = cols.map((col, i) => {
+          const s = st.series(col);
+          s.name = (spec.names ?? cols)[i];
+          return s;
+        });
+        if (spec.frame) return new DataFrame({ index: st.index, columns: series.map((s) => s.name), data: Object.fromEntries(series.map((s) => [s.name, s.values])) });
+        return spec.list ? series : series[0];
+      };
+    }
+    if ("$pandapower" in v) return path.join(ROOT, v.$pandapower);
+    if ("$ppc" in v) return v.$ppc;
+    if ("$columns" in v) {
+      // a column subset of a frame reached by path
+      const df = getPathSync(n, v.$columns.path);
+      return new DataFrame({ index: df.index, columns: v.$columns.columns, data: new Map(v.$columns.columns.map((c) => [c, df.col(c)])) });
+    }
+    if ("$var" in v) return n.model.variables.get(v.$var);
+    if ("$result" in v) return currentResults[v.$result];
+    if ("$da" in v) {
+      // a constant with named dims: a Series (1-D) or DataFrame (2-D) whose
+      // index/column names carry the dims
+      const spec = v.$da;
+      const coord = (d) => (d === "snapshot" && !spec.coords?.snapshot ? n.snapshots.rename("snapshot") : new Index(spec.coords[d], d));
+      const data = decodeValue(spec.data, n);
+      if (spec.dims.length === 1) return new Series(data, coord(spec.dims[0]), spec.name ?? null);
+      const rows = coord(spec.dims[0]);
+      const cols = coord(spec.dims[1]);
+      const m = new Map();
+      cols.values.forEach((c, j) => m.set(c, data.map((row) => row[j])));
+      return new DataFrame({ index: rows, columns: cols, data: m });
     }
     if ("$series" in v) {
       const spec = v.$series;
@@ -60,6 +107,10 @@ export function decodeValue(v, n) {
 }
 
 function callWithKwargs(target, fnName, args, kwargs) {
+  // `obj(...)` (Python `__call__`) on callable accessors such as n.statistics
+  if (fnName === "__call__" && typeof target === "function") {
+    return kwargs && Object.keys(kwargs).length ? target(...args, kwargs) : target(...args);
+  }
   const fn = target[fnName];
   if (typeof fn !== "function") throw new Error(`${fnName} is not a function on ${target}`);
   if (kwargs && Object.keys(kwargs).length) return fn.call(target, ...args, kwargs);
@@ -103,11 +154,19 @@ export async function getPath(n, path) {
   return obj;
 }
 
+// results of the running scenario (for `$result` references)
+let currentResults = {};
+
+// Python operator methods used in scenario call chains
+const DUNDER = { __pow__: "pow", __neg__: "neg", __mul__: "mul", __add__: "add", __sub__: "sub" };
+
 export async function runScenario(scenario, onRecord = null) {
   let n = null;
   const records = {};
   const saved = {};
   const results = {};
+  const savedOptions = {};
+  currentResults = results;
   const runOp = async (op) => {
     const kind = op[0];
     switch (kind) {
@@ -202,6 +261,18 @@ export async function runScenario(scenario, onRecord = null) {
         if (op[4]) results[op[4]] = res;
         break;
       }
+      case "set_option":
+        if (!(op[1] in savedOptions)) savedOptions[op[1]] = psa.get_option(op[1]);
+        psa.set_option(op[1], decodeValue(op[2], n));
+        break;
+      case "call_module": {
+        // a function of the package, e.g. "costs.annuity"
+        const parts = op[1].split(".");
+        let target = psa;
+        for (const p of parts.slice(0, -1)) target = target[p];
+        results[op[4]] = await callWithKwargs(target, parts[parts.length - 1], decodeValue(op[2] ?? [], n), decodeValue(op[3] ?? {}, n));
+        break;
+      }
       case "create_model":
         n.optimize.create_model(decodeValue(op[1] ?? {}, n));
         break;
@@ -223,6 +294,24 @@ export async function runScenario(scenario, onRecord = null) {
         let e = n.optimize.expressions[stat](decodeValue(kwargs ?? {}, n));
         if (post !== null) e = post === "all" ? e.sum() : e.sum(post);
         results[outKey] = e;
+        break;
+      }
+      case "linexpr": {
+        // a chain of linopy calls starting from a model variable or an earlier result
+        const [, outKey, start, chain] = op;
+        let obj = "var" in start ? n.model.variables.get(start.var) : results[start.result];
+        for (const [name, args = [], kwargs = {}] of chain) {
+          obj = await callWithKwargs(obj, DUNDER[name] ?? name, decodeValue(args, n), decodeValue(kwargs, n));
+        }
+        results[outKey] = obj instanceof LinearExpression || obj instanceof QuadraticExpression ? obj : obj.toExpr();
+        break;
+      }
+      case "set_objective": {
+        // replace the objective by an expression (optionally added to the current one)
+        const [, key, opts = {}] = op;
+        let expr = results[key];
+        if (opts.add) expr = n.model.objective_expression().add(expr);
+        n.model.add_objective(expr, { overwrite: true, sense: opts.sense ?? "min" });
         break;
       }
       case "expr_constraint": {
@@ -268,7 +357,11 @@ export async function runScenario(scenario, onRecord = null) {
         else if (what === "result") records[key] = results[op[3]];
         else if (what === "result_path") records[key] = await getPath(results[op[3]], op[4]);
         else if (what === "path") records[key] = await getPath(n, op[3]);
-        else if (what === "model_lp") records[key] = { $lp: n.model.to_lp() };
+        else if (what === "dataarray") records[key] = await getPath(n, op[3]);
+        else if (what === "model_terms") {
+          const m = n.optimize.create_model(decodeValue(op[3] ?? {}, n));
+          records[key] = Object.fromEntries([...m.constraints].map(([k, c]) => [k, c.termCount]));
+        } else if (what === "model_lp") records[key] = { $lp: n.model.to_lp() };
         else if (what === "lp") records[key] = { $lp: n.optimize.create_model(decodeValue(op[3] ?? {}, n)).to_lp() };
         else throw new Error(`unknown record ${what}`);
         if (onRecord) onRecord(key, records[key]);
@@ -278,19 +371,24 @@ export async function runScenario(scenario, onRecord = null) {
         throw new Error(`unknown op ${kind}`);
     }
   };
-  for (const op of scenario.ops) {
-    if (op[0] === "expect_error") {
-      let raised = false;
-      try {
-        await runOp(op[2]);
-      } catch {
-        raised = true;
+  try {
+    for (const op of scenario.ops) {
+      if (op[0] === "expect_error") {
+        let raised = false;
+        try {
+          await runOp(op[2]);
+        } catch {
+          raised = true;
+        }
+        records[op[1]] = raised;
+        if (onRecord) onRecord(op[1], raised);
+        continue;
       }
-      records[op[1]] = raised;
-      if (onRecord) onRecord(op[1], raised);
-      continue;
+      await runOp(op);
     }
-    await runOp(op);
+  } finally {
+    // options set by the scenario do not leak into the next one
+    for (const [k, v] of Object.entries(savedOptions)) psa.set_option(k, v);
   }
   return { network: n, records };
 }
@@ -335,10 +433,34 @@ export function assertRecordMatches(actual, expected, opts) {
       });
       break;
     }
+    case "dataarray": {
+      assert.ok(actual instanceof DataArray, `${where}: expected DataArray, got ${actual?.constructor?.name}`);
+      assert.deepEqual(actual.dims, expected.dims, `${where}: dims differ`);
+      if (expected.name !== undefined) assert.equal(actual.name, expected.name, `${where}: name differs`);
+      expected.coords.forEach((c, d) => {
+        assert.deepEqual(actual.coords[actual.dims[d]].values.map(fmtLabel), c.values.map(fmtLabel), `${where}: coords of ${expected.dims[d]} differ`);
+      });
+      assert.equal(actual.values.length, expected.values.length, `${where}: size differs`);
+      expected.values.forEach((v, i) => {
+        const a = actual.values[i];
+        const b = decodeFixture(v);
+        if (typeof b === "number" || b === null || b === undefined) {
+          const an = a === null || a === undefined ? NaN : typeof a === "boolean" ? Number(a) : a;
+          if (!isClose(an, b ?? NaN, opts.rtol ?? 1e-9, opts.atol ?? 1e-9)) assert.fail(`${where}[${i}]: PSA.js=${a} PyPSA=${b}`);
+        } else assert.equal(a, b, `${where}[${i}]`);
+      });
+      break;
+    }
+    case "dataset":
+      assert.ok(actual instanceof Dataset, `${where}: expected Dataset, got ${actual?.constructor?.name}`);
+      assert.deepEqual([...actual.data_vars.keys()], Object.keys(expected.vars), `${where}: variables differ`);
+      for (const [k, v] of Object.entries(expected.vars)) assertRecordMatches(actual.data_vars.get(k), v, { ...opts, path: `${where}.${k}` });
+      break;
     case "lp":
       assertLpMatches(actual.$lp, expected.text, opts);
       break;
     case "linexpr":
+    case "quadexpr":
       assertLinexprMatches(actual, expected, { ...opts, path: where });
       break;
     case "dict":
@@ -362,6 +484,9 @@ export function assertRecordMatches(actual, expected, opts) {
  */
 export function assertLinexprMatches(actual, expected, { exprRtol = 1e-12, path: where = "linexpr" } = {}) {
   assert.ok(actual && actual.vars && actual.dims, `${where}: expected a LinearExpression, got ${actual?.constructor?.name}`);
+  // quadratic expressions hold a pair of variables per term
+  const factors = expected.$type === "quadexpr" ? 2 : 1;
+  assert.equal(actual instanceof QuadraticExpression, factors === 2, `${where}: expected a ${factors === 2 ? "Quadratic" : "Linear"}Expression, got ${actual.constructor.name}`);
   assert.deepEqual(actual.dims, expected.dims, `${where}: dims differ`);
   expected.coords.forEach((c, d) => {
     const idx = actual.coords[d];
@@ -372,9 +497,10 @@ export function assertLinexprMatches(actual, expected, { exprRtol = 1e-12, path:
   assert.equal(actual.nterm, expected.nterm, `${where}: nterm differs`);
   assert.deepEqual(Array.from(actual.vars), expected.vars, `${where}: term variables differ`);
   const close = (a, b) => a === b || (Number.isNaN(a) && Number.isNaN(b)) || Math.abs(a - b) <= exprRtol * Math.max(Math.abs(a), Math.abs(b));
-  expected.vars.forEach((v, i) => {
+  expected.coeffs.forEach((c, i) => {
+    const v = expected.vars[i * factors];
     if (v < 0) return;
-    const b = decodeFixture(expected.coeffs[i]);
+    const b = decodeFixture(c);
     if (!close(actual.coeffs[i], b)) assert.fail(`${where}: coeff[${i}] (var ${v}) PSA.js=${actual.coeffs[i]} PyPSA=${b}`);
   });
   assert.equal(actual.consts.length, expected.const.length, `${where}: const size differs`);

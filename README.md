@@ -11,7 +11,14 @@ PSA.js report `pypsa_version = 1.4.0`.
 
 ## Install and use
 
-Requires Node.js >= 22.3 (plain ES modules, no build step).
+Requires Node.js >= 22.3 (plain ES modules, no build step). PSA.js also runs
+in browsers through a bundler: HiGHS loads its WebAssembly next to the
+module (copy `highs.wasm` beside the bundle), CSV folders go through
+`MemoryFolder`, Excel workbooks and netCDF files through bytes
+(`export_to_excel(null)`, `Network.from_excel(bytes)`, `await
+export_to_netcdf(null)`, `Network.from_netcdf(bytes)`, likewise for HDF5). `npm run
+test:browser` bundles a smoke test with esbuild and runs it in headless
+Chromium (`test/browser/entry.js`).
 
 ```js
 import { Network, NetworkCollection, Index } from "psa.js";
@@ -21,6 +28,7 @@ await n.optimize();                       // HiGHS (WebAssembly)
 console.log(n.objective);
 console.log(n.statistics.capex().toString());
 
+n.export_to_excel("network.xlsx");        // and Network.from_excel(...)
 n.lpf();                                  // linear power flow
 n.pf();                                   // Newton-Raphson power flow
 
@@ -45,8 +53,25 @@ const nc = new NetworkCollection([n, m], { index: new Index(["a", "b"], "network
 console.log(nc.statistics.capex().toString());         // (component, network, carrier)
 ```
 
+Runnable examples (ported from PyPSA's documentation topics) are in
+[`examples/scripts`](examples/scripts): `quickstart`, `capacity_expansion`,
+`unit_commitment`, `custom_constraints` (linopy-style API incl. a quadratic
+objective), `stochastic`, `clustering`, `power_flow`, `io`, `mga`,
+`security_constrained`, `rolling_horizon`, `multi_investment` and
+`transmission_losses`, e.g.
+`node examples/scripts/quickstart.mjs`. The test suite runs all of them.
+
 API names follow PyPSA (snake_case). Python keyword arguments become a trailing
 options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
+Package options mirror `pypsa.options` (`options.params.statistics.round =
+3`, `get_option`, `set_option`, `reset_option`, `option_context(name, value,
+fn)`, `PYPSA_*` environment variables). The module helpers `costs`
+(`annuity`, `periodized_cost`), `geo` (`haversine`, `haversine_pts`,
+`compute_bbox`) and `examples` (`await examples.ac_dc_meshed()` and PyPSA's
+other published example networks, cached on disk) mirror `pypsa.costs`,
+`pypsa.geo` and `pypsa.examples`.
+The API reference is in [`docs/API.md`](docs/API.md) (generated from the
+sources with `npm run docs`).
 
 ### Dependencies (JS equivalents of PyPSA's Python stack)
 
@@ -58,23 +83,34 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
 | networkx              | bespoke graph / cycle basis (networkx ordering)                    |
 | pandas CSV            | `papaparse` + Python-compatible float formatting                   |
 | netCDF4 / xarray IO   | `h5wasm` (optional dependency)                                     |
+| pandas HDFStore (PyTables) | `h5wasm` + a small pickle reader/writer (`src/core/pickle.js`) |
 
 ## What is implemented (and parity tested)
 
 - **Data model**: all component types, defaults, standard line/transformer
   types, `add`/`remove`, snapshots, weightings, investment periods, `copy`,
-  `merge`, `slice`, multi-port links and processes.
+  `merge`, `slice`, multi-port links and processes; `c.da.<attr>` / `c.ds`
+  views as labelled arrays (`DataArray`, `Dataset`) with PyPSA's
+  dimensions, also for stochastic networks.
 - **IO**: CSV folders (import and byte-identical export), netCDF import/export
   in PyPSA's layout (files written by PSA.js re-import identically in PyPSA),
   including piecewise breakpoint data (`<list>-<attr>-pw.csv`,
-  `<list>_pw_<attr>`).
+  `<list>_pw_<attr>`), Excel workbooks (`import_from_excel`,
+  `export_to_excel`; PyPSA's sheet layout, no extra dependency), HDF5 stores
+  in pandas' `HDFStore` layout (`import_from_hdf5`, `export_to_hdf5`; files
+  written by PSA.js re-import identically in PyPSA), PYPOWER cases
+  (`import_from_pypower_ppc`) and pandapower networks
+  (`import_from_pandapower_net`, from the JSON `pandapower.to_json` writes).
+  netCDF and HDF5 files also load from http(s) URLs
+  (`options.general.allow_network_requests`, as in PyPSA).
 - **Topology and power flow**: sub-networks, cycle matrices (networkx-ordered
   `bfs-refined` default and `paton` cycle bases), PTDF/BODF, linear power flow,
   contingency analysis, Newton-Raphson AC power flow incl. distributed slack,
   seasonal line ratings.
 - **Optimisation**: the LP written by PSA.js is identical to linopy's LP file
   (same labels, row/term order and numbers), so HiGHS returns the same
-  solution. Covers operational/extendable/committable constraints, unit
+  solution; this holds up to PyPSA-Eur scale (the 310 MB LP of PyPSA's
+  `carbon_management` example network is byte-identical). Covers operational/extendable/committable constraints, unit
   commitment (MILP and linearised, status history, time-varying start-up and
   shut-down costs), ramp limits incl. big-M for committable+extendable,
   maintenance scheduling, modular capacities, storage units and stores,
@@ -87,7 +123,13 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
   tangent-line, incremental and SOS2 formulations, `piecewise_options`; SOS
   constraints are solved through linopy's binary reformulation with
   `reformulate_sos: true`, as HiGHS has no native SOS support), custom
-  constraints through a linopy-style expression API.
+  constraints through a linopy-style expression API (`sel`, `isel`, `sum`,
+  `shift`, `roll`, `diff`, `rolling().sum()`, `cumsum`, `where`, `fillna`,
+  `groupby().sum()`, with linopy's term layout) and quadratic expressions for
+  custom objectives (`x.mul(y)`, `pow(2)`, `m.add_objective(q, {overwrite})`).
+  Solvers: HiGHS (WebAssembly, everywhere) and, under Node.js, the CBC and
+  GLPK executables (`solver_name: "cbc"` / `"glpk"`, run on the LP file and
+  parsed like linopy, so results equal PyPSA's with the same solver).
 - **Statistics**: capex, opex, capacities, supply/withdrawal, energy balance,
   transmission, curtailment, capacity factor, revenue, market value, prices,
   with PyPSA's groupers and rounding/drop_zero semantics.
@@ -105,14 +147,18 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
   transmission, energy balance, supply, withdrawal, curtailment and
   operation as linopy expressions with the same layout as PyPSA's (dims,
   coordinates, term slots), including multi-investment periods, piecewise
-  costs/efficiencies and multi-port components; constraints built from them
-  write the same LP rows.
+  costs/efficiencies, multi-port components and stochastic networks (a
+  `scenario` dimension from scenario-dependent data and the operational
+  variables); constraints built from them write the same LP rows.
 - **NetworkCollection**: several networks indexed by custom levels, with
   combined component data and statistics.
 - **Consistency checks** (`consistency_check`, strict mode, scenario-invariant
   attributes), `sanitize`, carrier colours.
 - **Clustering**: spatial (`get_clustering_from_busmap` with all aggregation
-  strategies) and temporal (`resample`, `downsample`, `from_snapshot_map`).
+  strategies, greedy-modularity busmaps and HAC busmaps with Ward, complete,
+  average and single linkage, named, precomputed or callable metrics) and temporal
+  (`resample` with fixed and calendar offsets such as `3h`, `W`, `ME`, `QS`,
+  `YE`; `downsample`, `from_snapshot_map`, tsam-style `segment`).
 
 ## Parity testing
 
@@ -133,7 +179,7 @@ the reference PyPSA checkout installed (with its release tags, `git fetch
 scripts/parity/generate_all.sh          # definitions + every fixture
 cd scripts/parity
 python run_scenarios.py [scenario ...]   # optimisation/statistics/clustering scenarios
-python gen_io.py                         # IO fixtures (CSV + netCDF)
+python gen_io.py                         # IO fixtures (CSV, netCDF, Excel, HDF5)
 python gen_networks.py                   # network fixtures
 python diff_fixtures.py [--rtol 1e-9]    # what changed vs. the committed fixtures
 ```
@@ -141,8 +187,8 @@ python diff_fixtures.py [--rtol 1e-9]    # what changed vs. the committed fixtur
 Fixtures are deterministic (fixed hash seed, `mtime=0` gzip): with the pinned
 environment a full regeneration rewrites every JSON fixture byte-identically
 unless PyPSA's behaviour changed. Two exceptions show up in `git status`
-without being changes: the netCDF files (HDF5 metadata differs between runs;
-the IO tests check their content) and the SOS section of
+without being changes: the netCDF, HDF5 and Excel files (HDF5 metadata and
+workbook timestamps differ between runs; the IO tests check their content) and the SOS section of
 `scenario_opt_piecewise` (linopy writes it in non-deterministic order; the
 comparator treats it as a set). `diff_fixtures.py` compares fixture contents
 and reports the latter as the only difference.
@@ -156,10 +202,9 @@ from libm by one ulp on some CPUs).
 ## Not implemented / known differences
 
 See [`NEXT_STEPS.md`](NEXT_STEPS.md) for the remaining work list. In short:
-`n.optimize.expressions` on stochastic networks,
-Excel/HDF5 IO, pandapower/PYPOWER importers, plotting, `to_crs`, tsam segmentation,
-HAC/greedy-modularity busmaps (k-means is a seeded approximation, not
-scikit-learn's), weekly/monthly resampling, solvers other than HiGHS.
+plotting, segmentation of non-hourly snapshots, `to_crs` beyond a set of
+common EPSG codes (4326, 4258, 3857, 3035, 3034, 2154 and all UTM zones on WGS 84 and ETRS89), k-means busmaps (a seeded approximation,
+not scikit-learn's), solvers other than HiGHS, CBC and GLPK.
 
 PyPSA v1.4.0 behaviour that PSA.js mirrors on stochastic networks (likely
 upstream bugs): `n.buses_t.p` is all zero after optimisation, voltage angles
@@ -167,5 +212,6 @@ are not computed, global constraint duals (`mu`) are not assigned,
 `meshed_thresholds` count bus usage over the rows of all scenarios, and
 power flow, iterative transmission expansion and spatial clustering are not
 available. `n.optimize.expressions` fails for inactive assets in the energy
-balance, transmission and curtailment (mirrored). See NEXT_STEPS.md for the
+balance, transmission and curtailment, and for ungrouped operation without
+time aggregation (mirrored). See NEXT_STEPS.md for the
 full list.

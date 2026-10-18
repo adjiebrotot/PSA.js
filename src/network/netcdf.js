@@ -15,23 +15,62 @@
 import { DataFrame } from "../core/frame.js";
 import { Index } from "../core/index.js";
 import { Network } from "./network.js";
-import { collectExport, importFromImporter } from "./io.js";
+import { collectExport, importFromImporter, isUrl, pyJsonDumps, pyJsonLoads, retrieveFromUrl } from "./io.js";
+
+const IS_NODE = Boolean(globalThis.process?.versions?.node);
 
 let h5Promise = null;
-async function getH5() {
+/** h5wasm (its Node.js build on Node, the browser build with an in-memory FS elsewhere). */
+export async function getH5() {
   if (!h5Promise) {
-    h5Promise = import("h5wasm/node")
+    h5Promise = (IS_NODE ? import("h5wasm/node") : import("h5wasm"))
       .catch(() => {
         throw new Error("netCDF support requires the optional dependency 'h5wasm' (npm install h5wasm).");
       })
       .then(async (m) => {
         const h5 = m.default ?? m;
-        await h5.ready;
-        return h5;
+        const mod = await h5.ready;
+        return { h5, FS: mod.FS };
       });
   }
-  return h5Promise;
+  return (await h5Promise).h5;
 }
+
+let tmpCounter = 0;
+/**
+ * Run `fn(path)` on a scratch file: in a temporary directory on Node.js, in
+ * h5wasm's in-memory file system elsewhere. `bytes` are written to it first;
+ * with `readBack` the file's bytes are returned.
+ */
+export async function withScratchFile(bytes, fn, { readBack = false } = {}) {
+  await getH5();
+  const { FS } = await h5Promise;
+  const name = `psa_${Date.now()}_${tmpCounter++}.nc`;
+  if (IS_NODE) {
+    const fs = globalThis.process.getBuiltinModule("node:fs");
+    const os = globalThis.process.getBuiltinModule("node:os");
+    const path = globalThis.process.getBuiltinModule("node:path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "psa-nc-"));
+    const file = path.join(dir, name);
+    try {
+      if (bytes) fs.writeFileSync(file, bytes);
+      await fn(file);
+      return readBack ? new Uint8Array(fs.readFileSync(file)) : undefined;
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const file = `/${name}`;
+  try {
+    if (bytes) FS.writeFile(file, bytes);
+    await fn(file);
+    return readBack ? FS.readFile(file) : undefined;
+  } finally {
+    if (FS.analyzePath(file).exists) FS.unlink(file);
+  }
+}
+
+export const isBytes = (x) => x instanceof Uint8Array || x instanceof ArrayBuffer;
 
 // ----------------------------------------------------------------------
 // datetime (CF) helpers
@@ -130,11 +169,11 @@ class ImporterNetCDF {
   }
 
   getMeta() {
-    return JSON.parse(this.attrs.meta ?? "{}");
+    return pyJsonLoads(this.attrs.meta ?? "{}");
   }
 
   getCrs() {
-    return JSON.parse(this.attrs.crs ?? "{}");
+    return pyJsonLoads(this.attrs.crs ?? "{}");
   }
 
   getSnapshots() {
@@ -268,23 +307,26 @@ function isFloatCol(df, col) {
 }
 
 class NetCDFWriter {
-  constructor(h5, file, { compression = 4 } = {}) {
+  constructor(h5, file, { compression = 4, float32 = false } = {}) {
     this.h5 = h5;
     this.f = file;
     this.compression = compression;
+    this.float32 = float32;
     this.dims = new Map();
   }
 
-  _create(name, values, shape, floatHint = false) {
+  _create(name, values, shape, floatHint = false, isVariable = false) {
     const t = typedFor(values, floatHint);
-    const opts = { name, data: t.data, shape };
+    // `float32=True`: float64 data variables (not coordinates) become float32
+    const f32 = this.float32 && isVariable && t.kind === "float";
+    const opts = { name, data: f32 ? Float32Array.from(t.data) : t.data, shape, ...(f32 ? { dtype: "<f" } : {}) };
     if (this.compression && t.kind !== "str" && t.data.length > 0) {
       opts.compression = "gzip";
       opts.compression_opts = this.compression;
       opts.chunks = shape;
     }
     const ds = this.f.create_dataset(opts);
-    if (t.kind === "float") ds.create_attribute("_FillValue", Float64Array.of(NaN), [], "<d");
+    if (t.kind === "float") ds.create_attribute("_FillValue", f32 ? Float32Array.of(NaN) : Float64Array.of(NaN), [], f32 ? "<f" : "<d");
     if (t.kind === "bool") ds.create_attribute("dtype", "bool");
     if (t.kind === "time") {
       ds.create_attribute("units", t.units);
@@ -302,13 +344,16 @@ class NetCDFWriter {
 
   variable(name, dims, values, floatHint = false) {
     const shape = dims.map((d) => this.dims.get(d));
-    const ds = this._create(name, values, shape, floatHint);
+    const ds = this._create(name, values, shape, floatHint, true);
     dims.forEach((d, i) => ds.attach_scale(i, d));
   }
 }
 
 /** Write the network to a netCDF file at `path`. */
 async function exportToNetCDF(n, path, { export_standard_types = false, compression = 4, float32 = false } = {}) {
+  // PyPSA's form: null -> {zlib: true, complevel: 4}; {zlib: false} disables
+  if (compression === null || compression === undefined) compression = 4;
+  else if (typeof compression === "object") compression = compression.zlib === false ? 0 : (compression.complevel ?? 4);
   const h5 = await getH5();
   const ex = collectExport(n, { export_standard_types });
   const f = new h5.File(path, "w", { track_order: true });
@@ -320,9 +365,9 @@ async function exportToNetCDF(n, path, { export_standard_types = false, compress
       else if (typeof v === "number") f.create_attribute(`network_${k}`, Float64Array.of(v), [], "<d");
       else f.create_attribute(`network_${k}`, String(v));
     }
-    f.create_attribute("crs", JSON.stringify(ex.crs));
-    f.create_attribute("meta", JSON.stringify(ex.meta));
-    const w = new NetCDFWriter(h5, f, { compression });
+    f.create_attribute("crs", pyJsonDumps(ex.crs));
+    f.create_attribute("meta", pyJsonDumps(ex.meta));
+    const w = new NetCDFWriter(h5, f, { compression, float32 });
     const toFloat = (a) => (float32 ? Array.from(Float32Array.from(a)) : Array.from(a));
 
     w.dimension(
@@ -422,20 +467,33 @@ async function exportToNetCDF(n, path, { export_standard_types = false, compress
 }
 
 Object.assign(Network.prototype, {
-  /** Import from a netCDF file written by PyPSA or PSA.js (async). */
+  /**
+   * Import from a netCDF file written by PyPSA or PSA.js (async): a path, an
+   * http(s) URL, or the file's bytes (Uint8Array / ArrayBuffer, e.g. in
+   * browsers).
+   */
   async import_from_netcdf(path, { skip_time = false } = {}) {
     const h5 = await getH5();
-    const f = new h5.File(String(path), "r");
-    try {
-      importFromImporter(this, new ImporterNetCDF(f), skip_time);
-    } finally {
-      f.close();
-    }
+    const read = (file) => {
+      const f = new h5.File(String(file), "r");
+      try {
+        importFromImporter(this, new ImporterNetCDF(f), skip_time);
+      } finally {
+        f.close();
+      }
+    };
+    if (isUrl(path)) path = await retrieveFromUrl(path);
+    if (isBytes(path)) await withScratchFile(path instanceof ArrayBuffer ? new Uint8Array(path) : path, read);
+    else read(path);
     return this;
   },
 
-  /** Export to a netCDF file readable by PyPSA / xarray (async). */
-  async export_to_netcdf(path, opts = {}) {
+  /**
+   * Export to a netCDF file readable by PyPSA / xarray (async). With `path`
+   * null the file's bytes are returned.
+   */
+  async export_to_netcdf(path = null, opts = {}) {
+    if (path === null) return withScratchFile(null, (file) => exportToNetCDF(this, file, opts), { readBack: true });
     await exportToNetCDF(this, String(path), opts);
     return path;
   },
