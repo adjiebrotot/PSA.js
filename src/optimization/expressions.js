@@ -139,7 +139,16 @@ export class LinearExpression {
       }
       consts[k] = this.consts[sk];
     }
-    return new LinearExpression(this.model, dims, coords, this.nterm, vars, coeffs, consts);
+    return this._like(new LinearExpression(this.model, dims, coords, this.nterm, vars, coeffs, consts));
+  }
+
+  /**
+   * The result of an operation that linopy performs on a Variable (which then
+   * stays a Variable: absent slots have coefficient 1 and constant 0).
+   */
+  _like(e) {
+    if (this._variableLike) e._variableLike = true;
+    return e;
   }
 
   /** Select by position (`{dim: int | int[]}`); an integer drops the dimension. */
@@ -168,7 +177,7 @@ export class LinearExpression {
    * shifted-in cells are missing: no terms and a NaN constant.
    */
   shift(shifts) {
-    return this._shifted(shifts, false, { coeff: NaN, const: NaN });
+    return this._shifted(shifts, false, this._variableLike ? { coeff: 1, const: 0 } : { coeff: NaN, const: NaN });
   }
 
   /** Roll along dimensions (`{dim: n}`, circular shift). */
@@ -201,7 +210,7 @@ export class LinearExpression {
       }
       consts[k] = src < 0 ? fill.const : this.consts[src];
     }
-    return new LinearExpression(this.model, this.dims, this.coords, nt, vars, coeffs, consts);
+    return this._like(new LinearExpression(this.model, this.dims, this.coords, nt, vars, coeffs, consts));
   }
 
   /** n-th order difference along `dim` (`expr - expr.shift({dim: n})`). */
@@ -241,6 +250,10 @@ export class LinearExpression {
   where(cond, other = null) {
     if (other !== null && typeof other === "object" && !(other instanceof LinearExpression)) other = other.other ?? null;
     if (other !== null && typeof other !== "number") throw new TypeError("where: `other` must be a number");
+    if (this._variableLike) {
+      if (other !== null) throw new Error("NotImplementedError: Variable.where with `other`");
+      return this._masked(cond, { coeff: 1, const: 0 });
+    }
     return this._masked(cond, { coeff: NaN, const: other ?? NaN });
   }
 
@@ -259,7 +272,7 @@ export class LinearExpression {
       }
       consts[k] = fill.const;
     }
-    return new LinearExpression(this.model, this.dims, this.coords, nt, vars, coeffs, consts);
+    return this._like(new LinearExpression(this.model, this.dims, this.coords, nt, vars, coeffs, consts));
   }
 
   /** Cell predicate of a boolean condition over (a subset of) the dims. */
@@ -915,24 +928,23 @@ export class ConstraintSpec {
 
 /** Install expression helpers on the Variable and Model classes. */
 export function installExpressions(Variable, Model) {
-  for (const name of ["sel", "isel", "roll", "mul", "neg", "pow", "add", "sub", "sum", "diff", "rolling", "cumsum", "groupby", "le", "ge", "eq"]) {
+  for (const name of ["mul", "neg", "pow", "add", "sub", "sum", "diff", "rolling", "cumsum", "groupby", "le", "ge", "eq"]) {
     Variable.prototype[name] = function exprMethod(...args) {
       return LinearExpression.fromVariable(this)[name](...args);
     };
   }
   // linopy keeps these on the Variable: missing labels are -1 while the
   // expression of a variable has coefficient 1 and constant 0 everywhere
-  Variable.prototype.shift = function shift(shifts) {
-    const e = LinearExpression.fromVariable(this)._shifted(shifts, false, { coeff: 1, const: 0 });
+  const variableLike = (v) => {
+    const e = LinearExpression.fromVariable(v);
     e._variableLike = true;
     return e;
   };
-  Variable.prototype.where = function where(cond, other = null) {
-    if (other !== null && !(typeof other === "object" && (other.other ?? null) === null)) throw new Error("NotImplementedError: Variable.where with `other`");
-    const e = LinearExpression.fromVariable(this)._masked(cond, { coeff: 1, const: 0 });
-    e._variableLike = true;
-    return e;
-  };
+  for (const name of ["shift", "where", "roll", "sel", "isel"]) {
+    Variable.prototype[name] = function variableMethod(...args) {
+      return variableLike(this)[name](...args);
+    };
+  }
   /** A constant for the absent slots (labels -1); the result is an expression. */
   Variable.prototype.fillna = function fillna(value) {
     const e = LinearExpression.fromVariable(this);

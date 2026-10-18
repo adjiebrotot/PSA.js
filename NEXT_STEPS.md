@@ -196,11 +196,11 @@ browser smoke test are run separately.
       objectives via `set_objective` / `add_objective` (scenario
       `opt_quadexpr`), `groupby` with a DataFrame (multi-key) grouper and
       `Variable.fillna` (also after a Variable's `shift` / `where`), centred
-      rolling windows (`center`). Missing: quadratic constraints, `where` with a
-      condition over dimensions the expression lacks, and longer chains on
-      Variable-returning operations (JS `Variable.shift/where` return
-      expressions, so e.g. a second `shift` pads with NaN instead of a
-      coefficient of 1).
+      rolling windows (`center`), chains of the operations linopy keeps on a
+      Variable (`shift`, `where`, `roll`, `sel`, `isel`: absent slots keep
+      coefficient 1 and constant 0 until another operation makes an
+      expression). Missing: quadratic constraints (HiGHS cannot solve them)
+      and `where` with a condition over dimensions the expression lacks.
 - [ ] Statistics: callable groupers with multi-index results, pandas
       aggregations beyond sum/mean/min/max/median/first/last/std/var/prod/
       count/sem/nunique (e.g. `skew`). (Done: scenario `statistics_more` covers
