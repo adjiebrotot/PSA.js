@@ -346,3 +346,21 @@ test("netCDF and HDF5 from URLs (local HTTP server)", async () => {
     server.close();
   }
 });
+
+test("metadata JSON like Python's json module (NaN, Infinity, float repr)", async () => {
+  const { pyJsonLoads, pyJsonDumps } = await import("../src/core/pyjson.js");
+  // json.dumps({"a": float("nan"), "b": [float("inf"), -float("inf"), 0.0, 1, 1e-05, 1e16, 2.5], "c": "é\"Infinity"})
+  const text = '{"a": NaN, "b": [Infinity, -Infinity, 0.0, 1, 1e-05, 1e+16, 2.5], "c": "\\u00e9\\"Infinity"}';
+  const v = pyJsonLoads(text);
+  assert.ok(Number.isNaN(v.a));
+  assert.deepEqual(v.b, [Infinity, -Infinity, 0, 1, 1e-5, 1e16, 2.5]);
+  assert.equal(v.c, 'é"Infinity');
+  assert.equal(pyJsonDumps(v), text);
+  const n = new Network();
+  n.meta = v;
+  const folder = new MemoryFolder();
+  n.export_to_csv_folder(folder);
+  assert.equal(folder.read("meta.json"), text);
+  const m = Network.from_csv_folder(folder);
+  assert.equal(pyJsonDumps(m.copy().meta), text);
+});

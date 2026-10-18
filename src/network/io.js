@@ -6,6 +6,7 @@
 
 import { canonicalWkt } from "../core/wkt.js";
 import { readCSV, writeCSV, readCSVMulti, writeCSVMulti } from "../core/csv.js";
+import { pyJsonDumps, pyJsonLoads } from "../core/pyjson.js";
 import { importPiecewiseFromDf } from "../components/piecewise.js";
 import { DataFrame } from "../core/frame.js";
 import { Index } from "../core/index.js";
@@ -37,29 +38,10 @@ export async function retrieveFromUrl(url) {
   }
 }
 
-export { PYPSA_VERSION };
+export { PYPSA_VERSION, pyJsonDumps, pyJsonLoads };
 
 export const DEFAULT_CRS_WKT =
   'GEOGCRS["WGS 84",ENSEMBLE["World Geodetic System 1984 ensemble",MEMBER["World Geodetic System 1984 (Transit)"],MEMBER["World Geodetic System 1984 (G730)"],MEMBER["World Geodetic System 1984 (G873)"],MEMBER["World Geodetic System 1984 (G1150)"],MEMBER["World Geodetic System 1984 (G1674)"],MEMBER["World Geodetic System 1984 (G1762)"],MEMBER["World Geodetic System 1984 (G2139)"],MEMBER["World Geodetic System 1984 (G2296)"],ELLIPSOID["WGS 84",6378137,298.257223563,LENGTHUNIT["metre",1]],ENSEMBLEACCURACY[2.0]],PRIMEM["Greenwich",0,ANGLEUNIT["degree",0.0174532925199433]],CS[ellipsoidal,2],AXIS["geodetic latitude (Lat)",north,ORDER[1],ANGLEUNIT["degree",0.0174532925199433]],AXIS["geodetic longitude (Lon)",east,ORDER[2],ANGLEUNIT["degree",0.0174532925199433]],USAGE[SCOPE["Horizontal component of 3D system."],AREA["World."],BBOX[-90,-180,90,180]],ID["EPSG",4326]]';
-
-/**
- * JSON text like Python's `json.dumps` (", " / ": " separators, ASCII
- * escapes), so exported metadata files match PyPSA byte for byte.
- */
-export function pyJsonDumps(v) {
-  if (v === null || v === undefined) return "null";
-  if (typeof v === "boolean") return v ? "true" : "false";
-  if (typeof v === "number") {
-    if (Number.isNaN(v)) return "NaN";
-    if (!Number.isFinite(v)) return v > 0 ? "Infinity" : "-Infinity";
-    return String(v);
-  }
-  if (typeof v === "string") return JSON.stringify(v).replace(/[\u007f-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
-  if (Array.isArray(v)) return `[${v.map(pyJsonDumps).join(", ")}]`;
-  return `{${Object.entries(v)
-    .map(([k, x]) => `${pyJsonDumps(String(k))}: ${pyJsonDumps(x)}`)
-    .join(", ")}}`;
-}
 
 // ----------------------------------------------------------------------
 // Folder abstractions
@@ -181,11 +163,11 @@ class ImporterCSV {
   }
 
   getMeta() {
-    return this.folder.has("meta.json") ? JSON.parse(this.folder.read("meta.json")) : {};
+    return this.folder.has("meta.json") ? pyJsonLoads(this.folder.read("meta.json")) : {};
   }
 
   getCrs() {
-    return this.folder.has("crs.json") ? JSON.parse(this.folder.read("crs.json")) : {};
+    return this.folder.has("crs.json") ? pyJsonLoads(this.folder.read("crs.json")) : {};
   }
 
   getSnapshots() {

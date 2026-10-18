@@ -23,7 +23,7 @@
 import { DataFrame } from "../core/frame.js";
 import { Index } from "../core/index.js";
 import { Network } from "./network.js";
-import { collectExport, importFromImporter, pyJsonDumps, isUrl, retrieveFromUrl } from "./io.js";
+import { collectExport, importFromImporter, pyJsonDumps, pyJsonLoads, isUrl, retrieveFromUrl } from "./io.js";
 import { getH5, withScratchFile, isBytes } from "./netcdf.js";
 import { pickleLoads, pickleDumps, tuple, NdArray } from "../core/pickle.js";
 
@@ -218,11 +218,11 @@ class ImporterHDF5 {
   }
 
   getMeta() {
-    return this.keys.has("/meta") ? JSON.parse(readFixedFirst(this.f.get("/meta"))) : {};
+    return this.keys.has("/meta") ? pyJsonLoads(readFixedFirst(this.f.get("/meta"))) : {};
   }
 
   getCrs() {
-    return this.keys.has("/crs") ? JSON.parse(readFixedFirst(this.f.get("/crs"))) : {};
+    return this.keys.has("/crs") ? pyJsonLoads(readFixedFirst(this.f.get("/crs"))) : {};
   }
 
   getSnapshots() {

@@ -9,6 +9,7 @@ import { componentTypes, getComponentType, allStandardAttrs, typToDtype, PYPSA_V
 import { DataFrame, Series, isNumberArray, makeFilled } from "../core/frame.js";
 import { Index, asIndex, labelKey } from "../core/index.js";
 import { pyFloatRepr } from "../core/csv.js";
+import { pyJsonClone } from "../core/pyjson.js";
 import { epsgOf, wktOf, transformer } from "../core/crs.js";
 import { get_option } from "../options.js";
 import { ComponentsStore, installStoreAccessors } from "./store.js";
@@ -1087,7 +1088,7 @@ export class Network {
     }
     n.name = this.name;
     n._crs = { ...this._crs };
-    n._meta = structuredClone(this._meta);
+    n._meta = pyJsonClone(this._meta);
     n._linearized_uc = this._linearized_uc;
     n._multi_invest = this._multi_invest;
     n._committable_big_m = this._committable_big_m;
@@ -1352,7 +1353,7 @@ export class ConsistencyError extends Error {
 function deepCopyNetwork(src) {
   const n = new Network({ ignore_standard_types: true, name: src.name });
   n._pypsa_version = src._pypsa_version;
-  n._meta = structuredClone(src._meta);
+  n._meta = pyJsonClone(src._meta);
   n._crs = { ...src._crs };
   n._snapshots_data = copyFrame(src._snapshots_data);
   n._investment_periods_data = copyFrame(src._investment_periods_data);

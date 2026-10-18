@@ -15,7 +15,7 @@
 import { DataFrame } from "../core/frame.js";
 import { Index } from "../core/index.js";
 import { Network } from "./network.js";
-import { collectExport, importFromImporter, isUrl, retrieveFromUrl } from "./io.js";
+import { collectExport, importFromImporter, isUrl, pyJsonDumps, pyJsonLoads, retrieveFromUrl } from "./io.js";
 
 const IS_NODE = Boolean(globalThis.process?.versions?.node);
 
@@ -169,11 +169,11 @@ class ImporterNetCDF {
   }
 
   getMeta() {
-    return JSON.parse(this.attrs.meta ?? "{}");
+    return pyJsonLoads(this.attrs.meta ?? "{}");
   }
 
   getCrs() {
-    return JSON.parse(this.attrs.crs ?? "{}");
+    return pyJsonLoads(this.attrs.crs ?? "{}");
   }
 
   getSnapshots() {
@@ -365,8 +365,8 @@ async function exportToNetCDF(n, path, { export_standard_types = false, compress
       else if (typeof v === "number") f.create_attribute(`network_${k}`, Float64Array.of(v), [], "<d");
       else f.create_attribute(`network_${k}`, String(v));
     }
-    f.create_attribute("crs", JSON.stringify(ex.crs));
-    f.create_attribute("meta", JSON.stringify(ex.meta));
+    f.create_attribute("crs", pyJsonDumps(ex.crs));
+    f.create_attribute("meta", pyJsonDumps(ex.meta));
     const w = new NetCDFWriter(h5, f, { compression, float32 });
     const toFloat = (a) => (float32 ? Array.from(Float32Array.from(a)) : Array.from(a));
 

@@ -17,7 +17,7 @@ import { Index } from "../core/index.js";
 import { DataFrame } from "../core/frame.js";
 import { readCSV, pyFloatRepr } from "../core/csv.js";
 import { readZip, writeZip, zipText } from "../core/zip.js";
-import { collectExport, importFromImporter, pyJsonDumps, isUrl } from "./io.js";
+import { collectExport, importFromImporter, pyJsonDumps, pyJsonLoads, isUrl } from "./io.js";
 import { logger } from "../logger.js";
 
 const fs = globalThis.process?.getBuiltinModule?.("node:fs") ?? null;
@@ -302,7 +302,7 @@ class ImporterExcel {
       let value = r[1] ?? NaN;
       if (typeof value === "string") {
         try {
-          value = JSON.parse(value);
+          value = pyJsonLoads(value);
         } catch {
           // a plain string
         }
