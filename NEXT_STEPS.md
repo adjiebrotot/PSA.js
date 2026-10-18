@@ -136,7 +136,8 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       passes all arguments like PyPSA, the component sets iterate in CPython's
       set order, deprecated `comps` / `aggregate_groups` / `aggregate_time`
       are renamed.)
-- [ ] Consistency checks: `check_dtypes`.
+- [x] Consistency checks: `check_dtypes` (static dtypes judged by the
+      column values; scenario `consistency`).
 - [ ] SciGrid voltage angles after optimisation use an exact grounded solve while
       PyPSA uses `numpy.linalg.pinv` (differences ~1e-4 rad; documented
       tolerance in `test/scenarios/opt_scigrid_de.json`).
