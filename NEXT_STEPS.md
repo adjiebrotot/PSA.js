@@ -148,9 +148,10 @@ browser smoke test are run separately.
       Chromium, also a CI job): optimisation with HiGHS WASM, statistics,
       CSV via `MemoryFolder`, Excel via bytes (bundled inflate when no zlib),
       netCDF via bytes (h5wasm's browser build and in-memory file system).
-- [ ] netCDF extras: URL inputs, float32 variables stored as float32
-      (PSA.js rounds the values but writes float64). Done: `float32` and
-      PyPSA's `compression` dict (`io.test.js`, fixture `io_float32`).
+- [x] netCDF extras: http(s) URL inputs, `float32` (float64 data variables
+      stored as float32 like PyPSA's `typecast_float32`; PyPSA reads the file
+      identically to its own) and PyPSA's `compression` dict (`io.test.js`,
+      fixture `io_float32`).
 - [ ] `to_crs` (coordinate transformation; needs PROJ-accurate projections
       and pyproj's WKT per EPSG code; PyPSA's own `to_crs` swaps the axes, see
       section 3).
@@ -296,8 +297,6 @@ browser smoke test are run separately.
 
 ## 4. Documentation
 
-- [ ] API reference (JSDoc → generated docs). Examples: eight runnable
-      scripts in `examples/scripts` (run by `test/examples.test.js`); more of
-      PyPSA's notebooks could follow (MGA, security-constrained OPF, rolling
-      horizon, multi-period investment, transmission losses).
+- [ ] API reference (JSDoc → generated docs). Examples: thirteen runnable
+      scripts in `examples/scripts` (run by `test/examples.test.js`).
 - [ ] Publish to npm (package name, versioning tied to PyPSA version).

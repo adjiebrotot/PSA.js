@@ -307,23 +307,26 @@ function isFloatCol(df, col) {
 }
 
 class NetCDFWriter {
-  constructor(h5, file, { compression = 4 } = {}) {
+  constructor(h5, file, { compression = 4, float32 = false } = {}) {
     this.h5 = h5;
     this.f = file;
     this.compression = compression;
+    this.float32 = float32;
     this.dims = new Map();
   }
 
-  _create(name, values, shape, floatHint = false) {
+  _create(name, values, shape, floatHint = false, isVariable = false) {
     const t = typedFor(values, floatHint);
-    const opts = { name, data: t.data, shape };
+    // `float32=True`: float64 data variables (not coordinates) become float32
+    const f32 = this.float32 && isVariable && t.kind === "float";
+    const opts = { name, data: f32 ? Float32Array.from(t.data) : t.data, shape, ...(f32 ? { dtype: "<f" } : {}) };
     if (this.compression && t.kind !== "str" && t.data.length > 0) {
       opts.compression = "gzip";
       opts.compression_opts = this.compression;
       opts.chunks = shape;
     }
     const ds = this.f.create_dataset(opts);
-    if (t.kind === "float") ds.create_attribute("_FillValue", Float64Array.of(NaN), [], "<d");
+    if (t.kind === "float") ds.create_attribute("_FillValue", f32 ? Float32Array.of(NaN) : Float64Array.of(NaN), [], f32 ? "<f" : "<d");
     if (t.kind === "bool") ds.create_attribute("dtype", "bool");
     if (t.kind === "time") {
       ds.create_attribute("units", t.units);
@@ -341,7 +344,7 @@ class NetCDFWriter {
 
   variable(name, dims, values, floatHint = false) {
     const shape = dims.map((d) => this.dims.get(d));
-    const ds = this._create(name, values, shape, floatHint);
+    const ds = this._create(name, values, shape, floatHint, true);
     dims.forEach((d, i) => ds.attach_scale(i, d));
   }
 }
@@ -364,7 +367,7 @@ async function exportToNetCDF(n, path, { export_standard_types = false, compress
     }
     f.create_attribute("crs", JSON.stringify(ex.crs));
     f.create_attribute("meta", JSON.stringify(ex.meta));
-    const w = new NetCDFWriter(h5, f, { compression });
+    const w = new NetCDFWriter(h5, f, { compression, float32 });
     const toFloat = (a) => (float32 ? Array.from(Float32Array.from(a)) : Array.from(a));
 
     w.dimension(
