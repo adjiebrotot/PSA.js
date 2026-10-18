@@ -105,8 +105,9 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
   transmission, energy balance, supply, withdrawal, curtailment and
   operation as linopy expressions with the same layout as PyPSA's (dims,
   coordinates, term slots), including multi-investment periods, piecewise
-  costs/efficiencies and multi-port components; constraints built from them
-  write the same LP rows.
+  costs/efficiencies, multi-port components and stochastic networks (a
+  `scenario` dimension from scenario-dependent data and the operational
+  variables); constraints built from them write the same LP rows.
 - **NetworkCollection**: several networks indexed by custom levels, with
   combined component data and statistics.
 - **Consistency checks** (`consistency_check`, strict mode, scenario-invariant
@@ -156,7 +157,6 @@ from libm by one ulp on some CPUs).
 ## Not implemented / known differences
 
 See [`NEXT_STEPS.md`](NEXT_STEPS.md) for the remaining work list. In short:
-`n.optimize.expressions` on stochastic networks,
 Excel/HDF5 IO, pandapower/PYPOWER importers, plotting, `to_crs`, tsam segmentation,
 HAC/greedy-modularity busmaps (k-means is a seeded approximation, not
 scikit-learn's), weekly/monthly resampling, solvers other than HiGHS.
@@ -167,5 +167,6 @@ are not computed, global constraint duals (`mu`) are not assigned,
 `meshed_thresholds` count bus usage over the rows of all scenarios, and
 power flow, iterative transmission expansion and spatial clustering are not
 available. `n.optimize.expressions` fails for inactive assets in the energy
-balance, transmission and curtailment (mirrored). See NEXT_STEPS.md for the
+balance, transmission and curtailment, and for ungrouped operation without
+time aggregation (mirrored). See NEXT_STEPS.md for the
 full list.

@@ -1,7 +1,7 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 35 parity scenarios plus
-IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
+State at hand-off: all PSA.js tests pass (`npm test`: 59 tests, the parity
+scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
 
 ## 1. Housekeeping
 
@@ -30,10 +30,20 @@ IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       losses, SCLOPF, rolling horizon, statistics, netCDF IO (scenarios
       `network_stochastic`, `opt_stochastic`, `statistics_stochastic`,
       `io_stochastic`). Remaining:
-  - [ ] `n.optimize.expressions` on stochastic networks (PyPSA adds a
-        `scenario` dimension from scenario-dependent data and the lifted
-        variables; PSA.js raises NotImplementedError), assigning duals of
-        custom constraints (PyPSA raises too).
+  - [x] `n.optimize.expressions` on stochastic networks (scenario
+        `opt_expressions_stochastic`, 124 records incl. 5 LP files): constants
+        follow `c.da` (`(scenario, name)`; time series `(scenario, name,
+        snapshot)` or, when only some columns are time-varying,
+        `(snapshot, scenario, name)`, see `scenarioMajor`), groupers and
+        filters require scenario-invariant values, transmission branches use
+        PyPSA's multi-index path, grouped results put MultiIndex dimensions
+        first (multi-period snapshots) and a single regroup key before the
+        other dimensions.
+  - [ ] Assigning duals of custom constraints on stochastic networks (PyPSA
+        raises too).
+  - [ ] Statistic expressions of components added after `set_scenarios`
+        (their static levels may be unordered, which changes `c.da`'s layout
+        in PyPSA; untested).
   - [ ] Ungrouped statistics (`groupby=False`) of components added after
         `set_scenarios` follow PyPSA's row order only for scenario-major data.
   - [ ] Iterative transmission expansion, power flow and spatial clustering
@@ -139,6 +149,10 @@ IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       2. `groupby_method` other than "sum" is only rejected when ports are
          merged or time is aggregated (e.g. `capex(groupby_method="max")`
          silently sums).
+      3. `operation(groupby=False, groupby_time=False)` fails with
+         `KeyError: 'const'` for every component except loads and storage
+         units: the operation is a plain linopy `Variable`, which
+         `linopy.merge` cannot concatenate (even a single one).
 - [ ] PyPSA bugs/quirks observed (mirrored or worked around in fixtures):
       clustering crashes under pandas 3 copy-on-write (runner patches
       `determine_network_topology`), loss variable order depends on Python's

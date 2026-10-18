@@ -111,7 +111,12 @@ export function normalizeCarrierNiceNames(n, carrier) {
   const carriers = scalar ? [carrier] : carrier;
   const st = n.c.carriers.static;
   const nice = st.has("nice_name") ? st.col("nice_name") : [];
-  const entries = st.index.values.map((k, i) => [k, nice[i]]).filter(([, v]) => v !== "" && !isNa(v));
+  // scenario-indexed carriers: the first value per name (`groupby(level="name").first()`)
+  const seen = new Set();
+  const entries = st.index.values
+    .map((k, i) => [st.index.isMulti ? k[k.length - 1] : k, nice[i]])
+    .filter(([k]) => (seen.has(k) ? false : seen.add(k)))
+    .filter(([, v]) => v !== "" && !isNa(v));
   if (!entries.length) return carrier;
   const counts = new Map();
   for (const [, v] of entries) counts.set(v, (counts.get(v) ?? 0) + 1);
@@ -270,6 +275,7 @@ export function port_efficiency(n, cName, port = 0) {
 /** Branches connecting buses of the same carrier (component, name). */
 export function get_transmission_branches(n, bus_carrier = null) {
   const bc = n.c.buses.static;
+  if (bc.index.isMulti) return transmissionBranchesMulti(n, bus_carrier);
   const busCarrier = new Map(bc.index.values.map((b, i) => [b, bc.col("carrier")[i]]));
   let carriers = bus_carrier;
   if (typeof carriers === "string") carriers = [carriers];
@@ -291,6 +297,40 @@ export function get_transmission_branches(n, bus_carrier = null) {
     for (const nm of res) out.push([c, nm]);
   }
   return new Index(out, ["component", "name"]);
+}
+
+/**
+ * `get_transmission_branches` for scenario- or network-indexed buses (PyPSA's
+ * NetworkCollection path, also taken by stochastic networks): rows keep their
+ * leading levels, `(…levels, component, name)` per component and bus carrier
+ * in row order.
+ */
+function transmissionBranchesMulti(n, bus_carrier) {
+  const bc = n.c.buses.static;
+  const lead = bc.index.names.slice(0, -1);
+  // bus -> carrier by name, first row wins
+  const busCarrier = new Map();
+  bc.index.values.forEach((t, i) => {
+    const b = t[t.length - 1];
+    if (!busCarrier.has(b)) busCarrier.set(b, bc.col("carrier")[i]);
+  });
+  let carriers;
+  if (typeof bus_carrier === "string") carriers = [bus_carrier];
+  else if (bus_carrier === null || bus_carrier === undefined) carriers = [...new Set(busCarrier.values())];
+  else carriers = [...bus_carrier];
+  const out = [];
+  for (const c of n.branch_components) {
+    const st = n.c.get(c).static;
+    const busCols = st.columns.values.filter((col) => String(col).includes("bus"));
+    for (const carrier of carriers) {
+      st.index.values.forEach((t, i) => {
+        let cnt = 0;
+        for (const col of busCols) if (busCarrier.get(st.col(col)[i]) === carrier) cnt++;
+        if (cnt > 1) out.push(Array.isArray(t) ? [...t.slice(0, -1), c, t[t.length - 1]] : [t, c, t]);
+      });
+    }
+  }
+  return new Index(out, [...lead, "component", "name"]);
 }
 
 // ----------------------------------------------------------------------
