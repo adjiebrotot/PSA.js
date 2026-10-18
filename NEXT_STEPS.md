@@ -157,7 +157,8 @@ browser smoke test are run separately.
       section 3).
 - [x] **Clustering** done: calendar offsets in `resample` (`W`, `W-<day>`,
       `ME`, `MS`, `QE[-<month>]`, `QS[-<month>]`, `YE[-<month>]`,
-      `YS[-<month>]`; scenario `clustering_resample`);
+      `YS[-<month>]` and their multiples such as `2W` or `3ME`, with pandas'
+      bin edges; scenario `clustering_resample`);
       `busmap_by_greedy_modularity` / `cluster_by_greedy_modularity` (port of
       networkx's CNM algorithm incl. its heap tie-breaking; scenario
       `clustering_modularity`); `busmap_by_hac` / `cluster_by_hac` with Ward,
@@ -179,8 +180,7 @@ browser smoke test are run separately.
       PSA.js raises); `busmap_by_hac` with a callable or precomputed metric
       (PSA.js raises NotImplementedError); parity for
       `busmap_by_kmeans` (a seeded Lloyd/k-means++, not scikit-learn's, whose
-      threaded chunk reductions make exact parity unlikely); multiples of
-      calendar offsets in `resample` ("2W", "3ME"; PSA.js raises).
+      threaded chunk reductions make exact parity unlikely).
 - [ ] Plotting (`n.plot`, `n.explore`, statistics plots) — out of scope or a
       separate package.
 - [ ] Solvers other than HiGHS; solver option passthrough is only tested for

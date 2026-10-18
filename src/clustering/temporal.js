@@ -69,12 +69,13 @@ const monthEnd = (y, m) => Date.UTC(y, m + 1, 0);
 /**
  * pandas offsets: fixed frequencies ("3h", "30min", "D", "2D", "1s") and the
  * calendar anchors weekly ("W", "W-MON", ...), month ("ME", "MS"), quarter
- * ("QE", "QS", "QE-NOV", ...) and year ("YE", "YS", "YE-JUN", ...).
+ * ("QE", "QS", "QE-NOV", ...) and year ("YE", "YS", "YE-JUN", ...), each
+ * with an optional multiple ("2W", "3ME").
  *
- * A fixed frequency gives `{step}`. An anchor gives `{label(t), next(label)}`:
- * pandas closes (and labels) week, month, quarter and year *ends* on the
- * right, so a timestamp belongs to the first end on or after its day, and
- * *starts* on the left (the last start on or before its day).
+ * A fixed frequency gives `{step}`. An anchor gives the anchor days on or
+ * before / after a day, `add(anchor, k)` and whether it is an *end* (week,
+ * month, quarter and year ends close and label bins on the right) or a
+ * *start* (closed and labelled on the left).
  */
 function parseOffset(offset) {
   const str = String(offset).trim();
@@ -86,38 +87,49 @@ function parseOffset(offset) {
   }
   const m = /^(\d*)(W|ME|MS|QE|QS|YE|YS)(?:-([A-Z]{3}))?$/.exec(str);
   if (!m) throw new Error(`Unsupported resample offset '${offset}' (use multiples of s, min, h or D, or W, ME, MS, QE, QS, YE, YS)`);
-  if (m[1] && Number(m[1]) !== 1) throw new Error(`NotImplementedError: multiples of anchored offsets ('${offset}') are not supported`);
-  const [, , kind, anchor] = m;
+  const [, count, kind, anchor] = m;
+  const n = count ? Number(count) : 1;
+  if (!(n >= 1)) throw new Error(`Invalid offset '${offset}'`);
   if (kind === "W") {
     const wd = WEEKDAYS[anchor ?? "SUN"];
     if (wd === undefined) throw new Error(`Invalid weekly anchor '${anchor}'`);
-    return { label: (t) => dayOf(t) + (((wd - new Date(t).getUTCDay()) % 7) + 7) % 7 * DAY, next: (a) => a + 7 * DAY };
-  }
-  if (kind === "ME" || kind === "MS") {
-    if (anchor) throw new Error(`Invalid offset '${offset}'`);
-    if (kind === "ME") return { label: (t) => monthEnd(...ymd(t).slice(0, 2)), next: (a) => monthEnd(ymd(a)[0], ymd(a)[1] + 1) };
-    return { label: (t) => monthStart(...ymd(t).slice(0, 2)), next: (a) => monthStart(ymd(a)[0], ymd(a)[1] + 1) };
-  }
-  // quarters and years, anchored on a month (default DEC for ends, JAN for starts)
-  const end = kind.endsWith("E");
-  const am = MONTHS[anchor ?? (end ? "DEC" : "JAN")];
-  if (am === undefined) throw new Error(`Invalid anchor '${anchor}'`);
-  const months = kind[0] === "Q" ? 3 : 12;
-  const shift = (y, mo, k) => [y + Math.floor((mo + k) / 12), (((mo + k) % 12) + 12) % 12];
-  if (end) {
-    const label = (t) => {
-      const [y, mo] = ymd(t);
-      const k = (((am - mo) % months) + months) % months; // months to the next anchor month
-      return monthEnd(...shift(y, mo, k));
+    const dow = (d) => new Date(d).getUTCDay();
+    return {
+      n,
+      end: true,
+      atOrAfter: (d) => d + ((((wd - dow(d)) % 7) + 7) % 7) * DAY,
+      atOrBefore: (d) => d - ((((dow(d) - wd) % 7) + 7) % 7) * DAY,
+      add: (a, k) => a + 7 * k * DAY,
     };
-    return { label, next: (a) => monthEnd(...shift(ymd(a)[0], ymd(a)[1], months)) };
   }
-  const label = (t) => {
-    const [y, mo] = ymd(t);
-    const k = (((mo - am) % months) + months) % months; // months since the last anchor month
-    return monthStart(...shift(y, mo, -k));
+  if ((kind === "ME" || kind === "MS") && anchor) throw new Error(`Invalid offset '${offset}'`);
+  // months, quarters and years: anchor months am, am + months, ...
+  // (quarters and years default to DEC for ends, JAN for starts)
+  const end = kind.endsWith("E");
+  const months = kind[0] === "M" ? 1 : kind[0] === "Q" ? 3 : 12;
+  const am = kind[0] === "M" ? 0 : MONTHS[anchor ?? (end ? "DEC" : "JAN")];
+  if (am === undefined) throw new Error(`Invalid anchor '${anchor}'`);
+  const shift = (y, mo, k) => [y + Math.floor((mo + k) / 12), (((mo + k) % 12) + 12) % 12];
+  const at = end ? monthEnd : monthStart;
+  const since = (mo) => (((mo - am) % months) + months) % months; // months since the last anchor month
+  const isAnchor = (d) => {
+    const [y, mo] = ymd(d);
+    return since(mo) === 0 && d === at(y, mo);
   };
-  return { label, next: (a) => monthStart(...shift(ymd(a)[0], ymd(a)[1], months)) };
+  const atOrBefore = (d) => {
+    if (isAnchor(d)) return d;
+    const [y, mo] = ymd(d);
+    const k = since(mo);
+    // the current anchor month's start is before d; its end is after it
+    return at(...shift(y, mo, -(end && k === 0 ? months : k)));
+  };
+  const atOrAfter = (d) => {
+    if (isAnchor(d)) return d;
+    const [y, mo] = ymd(d);
+    const k = (months - since(mo)) % months;
+    return at(...shift(y, mo, !end && k === 0 ? months : k));
+  };
+  return { n, end, atOrBefore, atOrAfter, add: (a, k) => at(...shift(ymd(a)[0], ymd(a)[1], k * months)) };
 }
 
 /**
@@ -125,22 +137,52 @@ function parseOffset(offset) {
  * closed=left, origin start of the first day; calendar anchors as pandas);
  * returns the bin label (ms) per timestamp and all bins from the first to the
  * last one.
+ *
+ * Calendar anchors (`_get_timestamp_range_edges`, whole days): bins of `n`
+ * units start at the anchor on or before the first day (starts) or `n` units
+ * before the first day (ends: the first step back reaches the last anchor
+ * before it); ends label a timestamp by the first edge on or after its day,
+ * starts by the last edge on or before it.
  */
 function binTimestamps(times, offset) {
   const off = parseOffset(offset);
   const first = times[0];
+  const last = times[times.length - 1];
   if (off.step === undefined) {
-    const bins = [];
-    const last = off.label(times[times.length - 1]);
-    for (let b = off.label(first); b <= last; b = off.next(b)) bins.push(b);
-    return { binOf: off.label, bins };
+    const { n } = off;
+    const e0 = off.end ? off.add(off.atOrBefore(dayOf(first) - DAY), -(n - 1)) : off.atOrBefore(dayOf(first));
+    const edges = [e0];
+    const stop = off.end ? off.atOrAfter(dayOf(last)) : dayOf(last);
+    while (edges[edges.length - 1] < stop) edges.push(off.add(e0, edges.length * n));
+    const binOf = (t) => {
+      const d = dayOf(t);
+      // first edge on or after the day (ends) / last edge on or before it (starts)
+      let lo = 0;
+      let hi = edges.length - 1;
+      if (off.end) {
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (edges[mid] >= d) hi = mid;
+          else lo = mid + 1;
+        }
+      } else {
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >> 1;
+          if (edges[mid] <= d) lo = mid;
+          else hi = mid - 1;
+        }
+      }
+      return edges[lo];
+    };
+    const bins = edges.filter((e) => e >= binOf(first) && e <= binOf(last));
+    return { binOf, bins };
   }
   const { step } = off;
   const day = dayOf(first);
   const binOf = (t) => day + Math.floor((t - day) / step) * step;
   const bins = [];
-  const last = binOf(times[times.length - 1]);
-  for (let b = binOf(first); b <= last; b += step) bins.push(b);
+  const lastBin = binOf(last);
+  for (let b = binOf(first); b <= lastBin; b += step) bins.push(b);
   return { binOf, bins };
 }
 
