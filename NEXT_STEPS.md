@@ -84,8 +84,13 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       `cluster_spatially_by_*`), `n.statistics.n` / `.is_multi_indexed`,
       `Network.get_network` (raises outside collections). Remaining: `plot`,
       `explore`, `to_crs`, HDF5, pandapower.
+- [x] Shapes: WKT geometries kept in shapely's canonical form and written
+      rounded like `GeoSeries.to_wkt()` (GEOS number formatting, ties to
+      even; `src/core/wkt.js`), identical through CSV, netCDF and Excel
+      (`test/networks/shapes`, fixture `io_shapes`). Geometric operations
+      (areas, buffers, `to_crs`) are not available.
 - [ ] netCDF extras: URL inputs, browser support (h5wasm in-memory files),
-      shapes/geometry (WKT) round trip, float32 variables stored as float32
+      float32 variables stored as float32
       (PSA.js rounds the values but writes float64). Done: `float32` and
       PyPSA's `compression` dict (`io.test.js`, fixture `io_float32`).
 - [ ] `to_crs` (coordinate transformation; needs a proj4 equivalent).

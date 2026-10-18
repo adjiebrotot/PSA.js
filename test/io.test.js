@@ -243,3 +243,21 @@ test("float32 netCDF: PyPSA's file and a PSA.js export", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("shapes: WKT geometries through CSV, netCDF and Excel", async () => {
+  const fx = loadFixture("io_shapes");
+  const shapes = path.join(ROOT, "test", "networks", "shapes");
+  const n = Network.from_csv_folder(shapes);
+  assertNetworkMatches(n, fx.network, { rtol: 0, atol: 0 });
+  assertExportMatches(n, fx.export, "shapes");
+  const fromNc = await Network.from_netcdf(ncPath("shapes"));
+  assertNetworkMatches(fromNc, fx.network_nc, { rtol: 0, atol: 0 });
+  const dir = mkdtempSync(path.join(os.tmpdir(), "psa-shapes-"));
+  try {
+    await n.export_to_netcdf(path.join(dir, "shapes.nc"));
+    assertNetworkMatches(await Network.from_netcdf(path.join(dir, "shapes.nc")), fx.network_nc, { rtol: 0, atol: 0 });
+    assertNetworkMatches(Network.from_excel(n.export_to_excel(null)), fx.network_nc, { rtol: 0, atol: 0 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

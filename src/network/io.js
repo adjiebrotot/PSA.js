@@ -4,6 +4,7 @@
  * (mirrors `pypsa.network.io` CSV importer/exporter).
  */
 
+import { canonicalWkt } from "../core/wkt.js";
 import { readCSV, writeCSV, readCSVMulti, writeCSVMulti } from "../core/csv.js";
 import { importPiecewiseFromDf } from "../components/piecewise.js";
 import { DataFrame } from "../core/frame.js";
@@ -424,6 +425,8 @@ export function collectExport(n, { export_standard_types = false } = {}) {
     }
     const out = st.loc(null, colExport);
     if (colExport.includes("obj") && component === "SubNetwork") out.set("obj", new Float64Array(out.index.length).fill(NaN));
+    // `GeoSeries.to_wkt()`: geometries rounded to 6 decimals
+    if (component === "Shape" && colExport.includes("geometry")) out.set("geometry", Array.from(out.col("geometry"), (g) => canonicalWkt(g, 6)));
     out.index = new Index(out.index.values, out.index.isMulti ? ["scenario", "name"] : "name");
     statics.push({ component, listName, df: out });
 

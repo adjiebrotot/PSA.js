@@ -3,6 +3,7 @@
  * Network container (mirrors `pypsa.Network`).
  */
 
+import { canonicalWkt } from "../core/wkt.js";
 import { Components, RE_PORTS_GE_2 } from "../components/components.js";
 import { componentTypes, getComponentType, allStandardAttrs, typToDtype, PYPSA_VERSION } from "../components/types.js";
 import { DataFrame, Series, isNumberArray, makeFilled } from "../core/frame.js";
@@ -734,6 +735,9 @@ export class Network {
           arr = arr.map((v) =>
             typeof v === "number" ? (Number.isNaN(v) ? "" : allInt ? String(v) : pyFloatRepr(v)) : castValue(v, "str"),
           );
+        } else if (def.type === "geometry") {
+          // WKT in shapely's canonical form (lossless)
+          arr = arr.map((v) => (typeof v === "string" ? canonicalWkt(v) : v === null || v === undefined || (typeof v === "number" && Number.isNaN(v)) ? "" : v));
         } else arr = arr.map((v) => castValue(v, typ));
         dtypes[col] = typToDtype(typ);
         cols.set(col, dtypes[col] === "float" || dtypes[col] === "int" ? Float64Array.from(arr) : arr);

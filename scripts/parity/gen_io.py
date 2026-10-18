@@ -76,6 +76,12 @@ n.optimize(include_objective_constant=False)
 n.model.solver_model = None
 n.export_to_netcdf(NETCDF / "stochastic.nc")
 write_fixture("io_stochastic", {"network": dump_network(n), "network_nc": dump_network(pypsa.Network(NETCDF / "stochastic.nc"))})
+# shapes: WKT geometries in shapely's canonical form, exported rounded
+n = pypsa.Network(ROOT / "test" / "networks" / "shapes")
+n.export_to_netcdf(NETCDF / "shapes.nc")
+write_fixture("io_shapes", {"network": dump_network(n), "export": export_csv(n),
+                            "network_nc": dump_network(pypsa.Network(NETCDF / "shapes.nc"))})
+
 # float32 netCDF export (values rounded to single precision)
 n = pypsa.Network(NETCDF / "ac-dc-meshed-solved.nc")
 n.export_to_netcdf(NETCDF / "ac-dc-meshed-f32.nc", float32=True)
