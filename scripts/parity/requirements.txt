@@ -25,3 +25,5 @@ openpyxl==3.1.5
 python-calamine==0.9.0
 # PYPOWER cases for the io_pypower scenario (data only)
 PYPOWER==5.1.21
+# temporal segmentation (clustering_segment)
+tsam==4.1.1

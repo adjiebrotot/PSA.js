@@ -2,12 +2,13 @@
 /**
  * Temporal clustering (mirrors `pypsa.clustering.temporal`): resampling to a
  * coarser fixed frequency, downsampling by stride and aggregation along a
- * user-given snapshot map. Segmentation (tsam) is not available.
+ * user-given snapshot map, and segmentation (tsam's, for one period).
  */
 
 import { Index, compareLabels, labelKey } from "../core/index.js";
 import { DataFrame, Series } from "../core/frame.js";
 import { logger } from "../logger.js";
+import { wardClustering } from "./hac.js";
 
 export const TEMPORAL_AGGREGATION_DEFAULTS = { default: "mean", e_max_pu: "min", e_min_pu: "max" };
 
@@ -351,6 +352,113 @@ export function from_snapshot_map(n, snapshot_map, { aggregation_rules = null } 
   return new TemporalClustering(m, map);
 }
 
+/**
+ * Segmentation into `num_segments` periods of adjacent snapshots with similar
+ * time series (mirrors PyPSA's `segment`, which runs tsam with one typical
+ * period): the time series, scaled by their maxima, are min-max normalised
+ * and clustered by Ward linkage restricted to neighbouring snapshots; each
+ * segment takes the mean of its snapshots and is weighted by its length.
+ *
+ * Like PyPSA (tsam's `period_duration` is in hours) only hourly or
+ * non-datetime snapshots form a single period; other resolutions raise.
+ */
+export function segment(n, num_segments, { exclude_attrs = null, aggregation_rules = null } = {}) {
+  void aggregation_rules;
+  warnIfSolved(n);
+  if (n.has_scenarios) throw new Error("NotImplementedError: Temporal clustering is not yet supported for stochastic networks.");
+  if (!(num_segments >= 1)) throw new Error(`ValueError: num_segments must be >= 1, got ${num_segments}`);
+  const sns = n.snapshots;
+  if (num_segments > sns.length) throw new Error(`ValueError: num_segments (${num_segments}) cannot exceed number of snapshots (${sns.length})`);
+  if (n.has_periods) throw new Error("NotImplementedError: segment() does not yet support networks with investment periods");
+  const datetimes = sns.values.every((s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}/.test(s));
+  if (datetimes && sns.length > 1 && parseTs(sns.at(1)) - parseTs(sns.at(0)) !== 36e5) {
+    throw new Error("NotImplementedError: segment() needs hourly (or non-datetime) snapshots: PyPSA passes the snapshot count to tsam as hours, so other resolutions segment only part of the series.");
+  }
+  exclude_attrs = exclude_attrs ?? ["e_min_pu"];
+
+  // time series columns (component, attribute, name)
+  const cols = [];
+  for (const c of n.components.values()) {
+    if (c.static.empty || c.static.index.length === 0) continue;
+    for (const [attr, df] of Object.entries(c.dynamic)) {
+      if (df.columns.length === 0 || df.index.length === 0 || exclude_attrs.includes(attr)) continue;
+      for (const col of df.columns) cols.push({ c, attr, col, values: Array.from(df.col(col)) });
+    }
+  }
+  if (!cols.length) throw new Error("ValueError: No time-varying data found for segmentation");
+  const T = sns.length;
+  const K = cols.length;
+  // scaled by the column maxima (0 -> 1), NaN -> 0
+  const factor = cols.map(({ values }) => {
+    const v = values.filter((x) => !Number.isNaN(x));
+    const mx = v.length ? Math.max(...v) : NaN;
+    return mx === 0 ? 1 : mx;
+  });
+  const scaled = Array.from({ length: T }, (_, t) =>
+    cols.map(({ values }, k) => {
+      const x = values[t] / factor[k];
+      return Number.isNaN(x) ? 0 : x;
+    }),
+  );
+  // tsam: sklearn MinMaxScaler to [0, 1]
+  const EPS10 = 10 * Number.EPSILON;
+  const lo = cols.map((_, k) => Math.min(...scaled.map((r) => r[k])));
+  const scale = cols.map((_, k) => {
+    const range = Math.max(...scaled.map((r) => r[k])) - lo[k];
+    return 1 / (range < EPS10 ? 1 : range);
+  });
+  const shift = lo.map((m, k) => 0 - m * scale[k]);
+  const X = scaled.map((r) => r.map((x, k) => x * scale[k] + shift[k]));
+
+  // Ward clustering of neighbouring snapshots, segments relabelled in time order
+  let labels;
+  if (num_segments === 1) labels = new Array(T).fill(0);
+  else {
+    const raw = wardClustering(
+      X,
+      Array.from({ length: T - 1 }, (_, t) => [t, t + 1]),
+      num_segments,
+    );
+    const order = new Map();
+    for (const l of raw) if (!order.has(l)) order.set(l, order.size);
+    labels = Array.from(raw, (l) => order.get(l));
+  }
+  const durations = new Array(num_segments).fill(0);
+  for (const l of labels) durations[l]++;
+  const offsets = durations.map((_, i) => durations.slice(0, i).reduce((a, b) => a + b, 0));
+  // segment means, back to the original units
+  const values = durations.map((d, sIdx) => {
+    const sum = new Float64Array(K);
+    for (let t = offsets[sIdx]; t < offsets[sIdx] + d; t++) for (let k = 0; k < K; k++) sum[k] += X[t][k];
+    return Array.from(sum, (x, k) => ((x / d - shift[k]) / scale[k]) * factor[k]);
+  });
+
+  const index = new Index(
+    offsets.map((o) => sns.at(o)),
+    sns.name ?? "snapshot",
+  );
+  const m = n.copy();
+  m.set_snapshots(index);
+  const w = new DataFrame({ index });
+  for (const col of n.snapshot_weightings.columns) w.set(col, Float64Array.from(durations));
+  m.snapshot_weightings = w;
+  cols.forEach(({ c, attr, col }, k) => {
+    const dst = m.c.get(c.name);
+    const df = dst.dynamic[attr];
+    const series = Float64Array.from(values, (v) => v[k]);
+    if (df && df.columns.length && df.index.length) df.set(col, series);
+    else {
+      const frame = new DataFrame({ index, columns: [col], data: new Map([[col, series]]) });
+      m._import_series_from_df(frame, c.name, attr, true);
+    }
+  });
+  const map = new Series(
+    labels.map((l) => index.at(l)),
+    sns,
+  );
+  return new TemporalClustering(m, map);
+}
+
 /** Temporal clustering accessor (`n.cluster.temporal`). */
 export class TemporalClusteringAccessor {
   constructor(n) {
@@ -381,7 +489,11 @@ export class TemporalClusteringAccessor {
     return from_snapshot_map(this._n, snapshot_map, opts);
   }
 
-  segment() {
-    throw new Error("segment() relies on tsam and is not available in PSA.js; use from_snapshot_map with your own segmentation.");
+  segment(num_segments, opts = {}) {
+    return segment(this._n, num_segments, opts).n;
+  }
+
+  get_segment_result(num_segments, opts = {}) {
+    return segment(this._n, num_segments, opts);
   }
 }

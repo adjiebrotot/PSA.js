@@ -94,7 +94,10 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       (PSA.js rounds the values but writes float64). Done: `float32` and
       PyPSA's `compression` dict (`io.test.js`, fixture `io_float32`).
 - [ ] `to_crs` (coordinate transformation; needs a proj4 equivalent).
-- [ ] **Clustering**: `segment` (tsam), `busmap_by_hac` with linkages other
+- [ ] **Clustering**: `segment` for snapshots that are not hourly (PyPSA passes
+      the snapshot count to tsam as hours, so tsam forms several periods and
+      only part of the series is segmented, an upstream bug; PSA.js raises),
+      `busmap_by_hac` with linkages other
       than "ward" (sklearn's `linkage_tree`: single, complete, average, other
       metrics; PSA.js raises NotImplementedError), parity for `busmap_by_kmeans` (current implementation is a seeded
       Lloyd/k-means++, not scikit-learn), multiples of calendar offsets in
@@ -106,7 +109,10 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       `clustering_modularity`); `busmap_by_hac` / `cluster_by_hac` with Ward
       linkage (port of scikit-learn's connectivity-constrained `ward_tree`,
       component completion, `_hc_cut` / `hc_get_heads`; scenario
-      `clustering_hac`). The completion compares squared distances computed
+      `clustering_hac`); `segment` / `get_segment_result` for hourly or
+      non-datetime snapshots (tsam's pipeline with one typical period:
+      min-max scaling, Ward clustering of neighbouring snapshots, segment
+      means; scenario `clustering_segment`). The completion compares squared distances computed
       like numpy's BLAS `dot` with FMA; on CPUs without FMA the fixture could
       differ for coincident buses.
 - [ ] Plotting (`n.plot`, `n.explore`, statistics plots) — out of scope or a
@@ -205,6 +211,17 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
          `KeyError: 'const'` for every component except loads and storage
          units: the operation is a plain linopy `Variable`, which
          `linopy.merge` cannot concatenate (even a single one).
+- [ ] PyPSA v1.4.0 bugs found this session (not mirrored; consider reporting):
+      1. `to_crs` builds `Transformer.from_crs(current, new)` without
+         `always_xy=True` and passes (x, y), so for EPSG:4326 (lat/lon axis
+         order) longitudes are taken as latitudes: London (-0.13, 51.5) ends
+         up at (-1.19e6, 9.26e6) in EPSG:3035, x/y are swapped for EPSG:3857.
+      2. `segment` passes `period_duration=len(snapshots)` to tsam, which
+         reads it in hours: with 3-hourly snapshots tsam forms three periods
+         and the result covers only the first third of the series.
+      3. `segment` sets the snapshot weightings to the segment lengths in
+         snapshots, dropping the original weightings (3-hourly data loses
+         its factor 3).
 - [ ] PyPSA bugs/quirks observed (mirrored or worked around in fixtures):
       clustering crashes under pandas 3 copy-on-write (runner patches
       `determine_network_topology`), loss variable order depends on Python's
