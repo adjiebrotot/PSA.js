@@ -4,21 +4,56 @@
  */
 
 import { Components, RE_PORTS_GE_2 } from "../components/components.js";
-import { componentTypes, getComponentType, allStandardAttrs, typToDtype } from "../components/types.js";
+import { componentTypes, getComponentType, allStandardAttrs, typToDtype, PYPSA_VERSION } from "../components/types.js";
 import { DataFrame, Series, isNumberArray, makeFilled } from "../core/frame.js";
 import { Index, asIndex, labelKey } from "../core/index.js";
 import { pyFloatRepr } from "../core/csv.js";
 import { ComponentsStore, installStoreAccessors } from "./store.js";
+import { NOMINAL_ATTRS } from "../components/components.js";
+import { importPiecewiseFromDf, piecewiseFromAddValue } from "../components/piecewise.js";
+import { broadcastStatic, broadcastDynamic } from "./scenario_frames.js";
+import { PySet } from "../core/pyset.js";
 import { logger } from "../logger.js";
 
 export const DEFAULT_TIMESTAMP = "now";
 export const HOURS_PER_YEAR = 8760.0;
 export const DEFAULT_EPSG = 4326;
 
-const PASSIVE_BRANCH = ["Line", "Transformer"];
+// Set literals as written in `pypsa.network.components`; PyPSA iterates them
+// (and their unions) in CPython's hash table order, which `pySetOrder`
+// reproduces for the fixtures' PYTHONHASHSEED=0.
+const PASSIVE_BRANCH = ["Transformer", "Line"];
 const CONTROLLABLE_BRANCH = ["Link", "Process"];
 const PASSIVE_ONE_PORT = ["ShuntImpedance"];
-const CONTROLLABLE_ONE_PORT = ["Generator", "Load", "StorageUnit", "Store"];
+const CONTROLLABLE_ONE_PORT = ["StorageUnit", "Store", "Generator", "Load"];
+
+/**
+ * A set literal as CPython builds it: literals of three or more constants are
+ * compiled to a frozenset constant, which marshal stores sorted by the
+ * serialized elements (short ASCII strings: by length, then content) and the
+ * set copies (`SET_UPDATE`); shorter literals insert in source order.
+ */
+function pySetLiteral(items) {
+  if (items.length < 3) return new PySet(items);
+  const stored = [...items].sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0));
+  return new PySet(new PySet(stored));
+}
+
+/** Iteration order of `literal_0 | literal_1 | ...` in CPython. */
+function pySetOrder(...literals) {
+  const out = pySetLiteral(literals[0]);
+  // `set_merge`: resizes for the other set's size before inserting its entries
+  for (const lit of literals.slice(1)) out._merge(pySetLiteral(lit));
+  return [...out];
+}
+const ORDER = {
+  passive_branch: pySetOrder(PASSIVE_BRANCH),
+  controllable_branch: pySetOrder(CONTROLLABLE_BRANCH),
+  passive_one_port: pySetOrder(PASSIVE_ONE_PORT),
+  controllable_one_port: pySetOrder(CONTROLLABLE_ONE_PORT),
+  one_port: pySetOrder(PASSIVE_ONE_PORT, CONTROLLABLE_ONE_PORT),
+  branch: pySetOrder(PASSIVE_BRANCH, CONTROLLABLE_BRANCH),
+};
 const STANDARD_TYPES = ["LineType", "TransformerType"];
 const ALL_COMPONENTS = [
   "Carrier",
@@ -116,6 +151,10 @@ function inferDtype(arr) {
   return "object";
 }
 
+function isPlainObject(v) {
+  return v !== null && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype;
+}
+
 /** Generic deep copy of a DataFrame. */
 function copyFrame(df) {
   return df.copy();
@@ -131,7 +170,7 @@ export class Network {
   constructor(opts = {}) {
     if (typeof opts === "string") opts = { import_name: opts };
     const { name = "Unnamed Network", ignore_standard_types = false, import_name = null, ...rest } = opts;
-    this._pypsa_version = getComponentType("Bus") ? "1.x (PSA.js)" : "";
+    this._pypsa_version = PYPSA_VERSION;
     this._name = name;
     this._meta = {};
     this._crs = { _crs: null, epsg: DEFAULT_EPSG };
@@ -192,19 +231,19 @@ export class Network {
   }
 
   get passive_branch_components() {
-    return new Set(PASSIVE_BRANCH);
+    return new Set(ORDER.passive_branch);
   }
 
   get controllable_branch_components() {
-    return new Set(CONTROLLABLE_BRANCH);
+    return new Set(ORDER.controllable_branch);
   }
 
   get passive_one_port_components() {
-    return new Set(PASSIVE_ONE_PORT);
+    return new Set(ORDER.passive_one_port);
   }
 
   get controllable_one_port_components() {
-    return new Set(CONTROLLABLE_ONE_PORT);
+    return new Set(ORDER.controllable_one_port);
   }
 
   get standard_type_components() {
@@ -212,11 +251,11 @@ export class Network {
   }
 
   get one_port_components() {
-    return new Set([...PASSIVE_ONE_PORT, ...CONTROLLABLE_ONE_PORT]);
+    return new Set(ORDER.one_port);
   }
 
   get branch_components() {
-    return new Set([...PASSIVE_BRANCH, ...CONTROLLABLE_BRANCH]);
+    return new Set(ORDER.branch);
   }
 
   get all_components() {
@@ -274,14 +313,6 @@ export class Network {
 
   get is_solved() {
     return this._objective !== null;
-  }
-
-  get has_scenarios() {
-    return false;
-  }
-
-  get scenarios() {
-    return new Index([], "scenario");
   }
 
   get is_collection() {
@@ -536,7 +567,23 @@ export class Network {
 
     const series = {};
     const staticVals = {};
+    const piecewise = {};
+    const addSuffix = (s) => {
+      s = pyStr(s);
+      return typeof suffix === "string" && s.endsWith(suffix) ? s : s + suffix;
+    };
     for (let [k, v] of Object.entries(kwargs)) {
+      // Intercept piecewise breakpoint data: a dict {x: y} or a DataFrame whose
+      // columns are the curve attributes (or (name, attribute) tuples)
+      const pwSchema = c._piecewise_schema(k);
+      if (pwSchema) {
+        if (isPlainObject(v)) v = new Map(Object.entries(v).map(([x, y]) => [Number(x), y]));
+        const pw = piecewiseFromAddValue(v, k, pwSchema.x, names, addSuffix);
+        if (pw) {
+          piecewise[k] = pw;
+          continue;
+        }
+      }
       if (v instanceof Series && single) {
         if (!v.index.equals(this.snapshots)) throw new Error(`Series ${k} has an index which does not align with the passed network snapshots.`);
       } else if (v instanceof Series) {
@@ -597,9 +644,27 @@ export class Network {
       if (Array.isArray(v) || isNumberArray(v)) data.set(k, Array.from(v));
       else data.set(k, new Array(names.length).fill(v === undefined || v === null ? NaN : v));
     }
-    const staticDf = new DataFrame({ index: names, columns: [...data.keys()], data });
+    let staticDf = new DataFrame({ index: names, columns: [...data.keys()], data });
 
-    this._import_components_from_df(staticDf, c.name, overwrite);
+    // Broadcast to scenarios on stochastic networks (sub-networks are
+    // handled by the topology determination)
+    let staticIn = staticDf;
+    if (this.has_scenarios && c.name !== "SubNetwork") {
+      if (Object.keys(piecewise).length) {
+        throw new Error("NotImplementedError: Piecewise attribute data is not yet supported for stochastic networks (scenarios).");
+      }
+      staticIn = broadcastStatic(staticDf, this.scenarios);
+      for (const k of Object.keys(series)) series[k] = broadcastDynamic(series[k], this.scenarios);
+    }
+
+    this._import_components_from_df(staticIn, c.name, overwrite);
+
+    // Load piecewise breakpoint data (after the static import, so that
+    // overwriting an existing component does not drop the new breakpoints)
+    const extCol = `${NOMINAL_ATTRS[c.name] ?? "None"}_extendable`;
+    const isExtendable = staticDf.has(extCol) ? new Map(names.values.map((nm, i) => [nm, Boolean(staticDf.col(extCol)[i])])) : null;
+    for (const [k, v] of Object.entries(piecewise)) importPiecewiseFromDf(this, v, c.name, k, { isExtendable, overwrite });
+
     for (const [k, v] of Object.entries(series)) this._import_series_from_df(v, c.name, k, overwrite);
 
     return return_names ? names : null;
@@ -610,11 +675,19 @@ export class Network {
     const { suffix = "" } = opts;
     const c = this.c.get(class_name);
     const names = buildSuffixedNames(name, suffix);
-    c.static = c.static.dropRows(names);
+    // stochastic networks: remove the components from all scenarios
+    const labels = c.static.index.isMulti ? Index.fromProduct([this.scenarios.values, names.values], ["scenario", "name"]) : names;
+    c.static = c.static.dropRows(labels);
     for (const k of Object.keys(c.dynamic)) {
       const df = c.dynamic[k];
-      const drop = df.columns.intersection(names);
+      const drop = df.columns.intersection(labels);
       if (drop.length) c.dynamic[k] = df.dropCols(drop);
+    }
+    // Drop piecewise breakpoint data
+    const nameKeys = new Set(names.values.map(labelKey));
+    for (const [k, df] of Object.entries(c.piecewise)) {
+      const stale = df.columns.values.filter((t) => nameKeys.has(labelKey(t[0])));
+      if (stale.length) c.piecewise[k] = df.loc(null, df.columns.filter((t) => !nameKeys.has(labelKey(t[0]))));
     }
   }
 
@@ -623,8 +696,9 @@ export class Network {
     if (cls_name === "Link" || cls_name === "Process") updatePortsComponentAttrs(this, df.columns.values, cls_name);
     const attrs = c.defaults;
 
-    // index as str
-    const names = new Index(df.index.values.map(pyStr), "name");
+    // index as str (each level of a (scenario, name) index)
+    const multi = df.index.isMulti;
+    const names = multi ? new Index(df.index.values.map((t) => t.map(pyStr)), ["scenario", "name"]) : new Index(df.index.values.map(pyStr), "name");
 
     // build typed columns
     const cols = new Map();
@@ -680,7 +754,7 @@ export class Network {
         );
         newStatic = newStatic.dropRows(duplicated);
       } else {
-        this.remove(cls_name, duplicated.values);
+        this.remove(cls_name, multi ? duplicated.uniqueLevel("name").values : duplicated.values);
       }
     }
 
@@ -688,7 +762,7 @@ export class Network {
     let combined = c.static.index.length > 0 ? concatStatic(c.static, newStatic) : newStatic;
     const ordered = sortAttrs(combined.columns, [...attrs.keys()]);
     combined = combined.loc(null, ordered);
-    combined.index = new Index(combined.index.values, "name");
+    combined.index = new Index(combined.index.values, combined.index.isMulti ? ["scenario", "name"] : "name");
     c.static = combined;
 
     // series-only attributes given as static values
@@ -714,10 +788,12 @@ export class Network {
       const drop = df.columns.intersection(c.dynamic[attr].columns);
       if (drop.length) df = df.dropCols(drop);
     }
+    // column labels as str (each level of (scenario, name) columns)
+    const labels = df.columns.values.map((col) => (Array.isArray(col) ? col.map(String) : String(col)));
     df = new DataFrame({
       index: df.index,
-      columns: df.columns.values.map(String),
-      data: new Map(df.columns.values.map((col) => [String(col), Float64Array.from(df.col(col), toNumber)])),
+      columns: new Index(labels, df.columns.isMulti ? ["scenario", "name"] : "name"),
+      data: new Map(df.columns.values.map((col, i) => [labels[i], Float64Array.from(df.col(col), toNumber)])),
     });
     const diff = df.columns.difference(staticIdx);
     if (diff.length > 0) {
@@ -762,10 +838,12 @@ export class Network {
 
   *get_switchable_as_iter(component, attr, snapshots, inds = null) {
     const df = this.get_switchable_as_dense(component, attr, snapshots, inds);
+    // the series follow the order of `inds` (unique, known names only)
+    const cols = inds === null ? df.columns : new Index(asIndex(inds).unique().values, "name").intersection(df.columns);
     for (let i = 0; i < df.index.length; i++) {
       yield new Series(
-        Float64Array.from(df.columns.values, (c) => df.col(c)[i]),
-        df.columns,
+        Float64Array.from(cols.values, (c) => df.col(c)[i]),
+        cols,
         df.index.at(i),
       );
     }
@@ -858,8 +936,16 @@ export class Network {
     if (snapshots === null && investment_periods === null && !ignore_standard_types) {
       return deepCopyNetwork(this);
     }
-    const sns = snapshots === null ? this.snapshots : asIndex(snapshots, "snapshot");
-    const periods = investment_periods === null ? this.investment_periods : asIndex(investment_periods, "period");
+    let sns = snapshots === null ? this.snapshots : asIndex(snapshots, "snapshot");
+    let periods = investment_periods === null ? this.investment_periods : asIndex(investment_periods, "period");
+    if (sns.isMulti && periods.length > 0) {
+      // keep snapshots and investment periods consistent with each other
+      if (snapshots === null) sns = sns.filter(sns.values.map((t) => periods.has(t[0])));
+      else if (investment_periods === null) {
+        const used = new Set(sns.values.map((t) => labelKey(t[0])));
+        periods = periods.filter(periods.values.map((p) => used.has(labelKey(p))));
+      }
+    }
     const n = new Network({ ignore_standard_types });
     const others = [...this.all_components].filter((c) => c !== "Bus" && c !== "Carrier").sort();
     for (const cname of ["Bus", "Carrier", ...others]) {
@@ -1161,12 +1247,16 @@ function deepCopyNetwork(src) {
   n._committable_big_m = src._committable_big_m;
   if (src.now !== undefined) n.now = src.now;
   n.iteration = src.iteration;
+  if (src.__scenarios_data) n._scenarios_data = copyFrame(src.__scenarios_data);
+  if (src._risk_preference) n._risk_preference = { ...src._risk_preference };
   for (const [ln, comp] of src.components) {
     const dst = n.c.get(ln);
     dst.ctype = comp.ctype === dst.ctype ? comp.ctype : comp.ctype.clone();
     dst.static = copyFrame(comp.static);
     dst.dynamic = {};
     for (const [k, v] of Object.entries(comp.dynamic)) dst.dynamic[k] = copyFrame(v);
+    dst.piecewise = {};
+    for (const [k, v] of Object.entries(comp.piecewise)) dst.piecewise[k] = copyFrame(v);
   }
   if (src.c.sub_networks.static.has("obj")) {
     // rebuild SubNetwork objects bound to the new network

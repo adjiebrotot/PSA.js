@@ -4,13 +4,15 @@
  * (mirrors `pypsa.network.io` CSV importer/exporter).
  */
 
-import { readCSV, writeCSV } from "../core/csv.js";
+import { readCSV, writeCSV, readCSVMulti, writeCSVMulti } from "../core/csv.js";
+import { importPiecewiseFromDf } from "../components/piecewise.js";
 import { DataFrame } from "../core/frame.js";
 import { Index } from "../core/index.js";
 import { Network, updatePortsComponentAttrs } from "./network.js";
 import { logger } from "../logger.js";
+import { PYPSA_VERSION } from "../components/types.js";
 
-export const PYPSA_VERSION = "1.2.4";
+export { PYPSA_VERSION };
 
 export const DEFAULT_CRS_WKT =
   'GEOGCRS["WGS 84",ENSEMBLE["World Geodetic System 1984 ensemble",MEMBER["World Geodetic System 1984 (Transit)"],MEMBER["World Geodetic System 1984 (G730)"],MEMBER["World Geodetic System 1984 (G873)"],MEMBER["World Geodetic System 1984 (G1150)"],MEMBER["World Geodetic System 1984 (G1674)"],MEMBER["World Geodetic System 1984 (G1762)"],MEMBER["World Geodetic System 1984 (G2139)"],MEMBER["World Geodetic System 1984 (G2296)"],ELLIPSOID["WGS 84",6378137,298.257223563,LENGTHUNIT["metre",1]],ENSEMBLEACCURACY[2.0]],PRIMEM["Greenwich",0,ANGLEUNIT["degree",0.0174532925199433]],CS[ellipsoidal,2],AXIS["geodetic latitude (Lat)",north,ORDER[1],ANGLEUNIT["degree",0.0174532925199433]],AXIS["geodetic longitude (Lon)",east,ORDER[2],ANGLEUNIT["degree",0.0174532925199433]],USAGE[SCOPE["Horizontal component of 3D system."],AREA["World."],BBOX[-90,-180,90,180]],ID["EPSG",4326]]';
@@ -188,9 +190,18 @@ class ImporterCSV {
 
   *getSeries(listName) {
     for (const fn of this.folder.list()) {
-      if (fn.startsWith(`${listName}-`) && fn.endsWith(".csv")) {
+      if (fn.startsWith(`${listName}-`) && fn.endsWith(".csv") && !fn.endsWith("-pw.csv")) {
         const attr = fn.slice(listName.length + 1, -4);
         yield [attr, readCSV(this.folder.read(fn), { indexCol: 0 })];
+      }
+    }
+  }
+
+  *getPiecewise(listName) {
+    for (const fn of this.folder.list()) {
+      if (fn.startsWith(`${listName}-`) && fn.endsWith("-pw.csv") && fn.length > listName.length + 8) {
+        const attr = fn.slice(listName.length + 1, -7);
+        yield [attr, readCSVMulti(this.folder.read(fn))];
       }
     }
   }
@@ -268,6 +279,9 @@ function importFromImporter(n, importer, skipTime = false) {
     n._investment_periods_data = periods.reindex({ index: n.investment_periods });
   }
 
+  const scenarios = typeof importer.getScenarios === "function" ? importer.getScenarios() : null;
+  if (scenarios !== null) n.set_scenarios(scenarios);
+
   const imported = [];
   const others = [...n.all_components].filter((c) => c !== "Bus" && c !== "Carrier").sort();
   for (const component of ["Bus", "Carrier", ...others]) {
@@ -290,6 +304,9 @@ function importFromImporter(n, importer, skipTime = false) {
         sdf2.index = n.snapshots;
         n._import_series_from_df(sdf2, component, attr);
       }
+    }
+    if (typeof importer.getPiecewise === "function") {
+      for (const [attr, pdf] of importer.getPiecewise(listName)) importPiecewiseFromDf(n, pdf, component, attr);
     }
     imported.push(listName);
   }
@@ -374,6 +391,7 @@ export function collectExport(n, { export_standard_types = false } = {}) {
 
   const statics = [];
   const series = [];
+  const piecewise = [];
   const removed = [];
   for (const component of [...n.all_components].sort()) {
     const c = n.c.get(component);
@@ -381,7 +399,11 @@ export function collectExport(n, { export_standard_types = false } = {}) {
     const defaults = c.defaults;
     let st = c.static;
     if (!export_standard_types && n.standard_type_components.has(component)) {
-      st = st.dropRows(c.standard_types.index);
+      if (st.index.isMulti) {
+        // `static.drop(standard_types.index, level="name")`
+        const std = c.standard_types.index;
+        st = st.takeRows(st.index.values.map((t, i) => [t[1], i]).filter(([nm]) => !std.has(nm)).map(([, i]) => i));
+      } else st = st.dropRows(c.standard_types.index);
     }
     const colExport = [];
     for (const col of st.columns) {
@@ -402,7 +424,7 @@ export function collectExport(n, { export_standard_types = false } = {}) {
     }
     const out = st.loc(null, colExport);
     if (colExport.includes("obj") && component === "SubNetwork") out.set("obj", new Float64Array(out.index.length).fill(NaN));
-    out.index = new Index(out.index.values, "name");
+    out.index = new Index(out.index.values, out.index.isMulti ? ["scenario", "name"] : "name");
     statics.push({ component, listName, df: out });
 
     for (const [attr, df] of Object.entries(c.dynamic)) {
@@ -413,6 +435,7 @@ export function collectExport(n, { export_standard_types = false } = {}) {
       else cols = df.columns.values.filter((cc) => Array.from(df.col(cc)).some((v) => v !== def.default));
       if (cols.length > 0 && df.index.length > 0) {
         const sdf = df.loc(null, cols);
+        if (df.columns.isMulti) sdf.columns = new Index(sdf.columns.values, df.columns.names);
         sdf.index = new Index(Array.from({ length: df.index.length }, (_, i) => i));
         for (const cc of cols) sdf.dtypes[cc] = "float";
         series.push({ listName, attr, df: sdf });
@@ -420,11 +443,17 @@ export function collectExport(n, { export_standard_types = false } = {}) {
         removed.push({ listName, attr });
       }
     }
+
+    for (const [attr, df] of Object.entries(c.piecewise)) {
+      if (!df.empty) piecewise.push({ listName, attr, df });
+      else removed.push({ listName, attr, piecewise: true });
+    }
   }
-  return { name: n.name, attrs, crs, meta: n.meta, snapshots, periods, statics, series, removed };
+  return { name: n.name, attrs, crs, meta: n.meta, snapshots, periods, statics, series, piecewise, removed };
 }
 
 function exportToFolder(n, folder, { export_standard_types = false } = {}) {
+  if (n.has_scenarios) throw new Error("NotImplementedError: Stochastic networks are not supported in the CSV exporter. Use netcdf instead.");
   if (!folder.exists()) {
     logger.warning(`Directory ${folder.dir ?? ""} does not exist, creating it`);
     folder.mkdir();
@@ -452,7 +481,10 @@ function exportToFolder(n, folder, { export_standard_types = false } = {}) {
     folder.write(`${listName}.csv`, writeCSV(df));
     for (const { attr, df: sdf } of seriesBy.get(listName) ?? []) folder.write(`${listName}-${attr}.csv`, writeCSV(sdf));
   }
-  for (const { listName, attr } of ex.removed) if (attr !== null) folder.remove(`${listName}-${attr}.csv`);
+  for (const { listName, attr, df } of ex.piecewise) folder.write(`${listName}-${attr}-pw.csv`, writeCSVMulti(df));
+  for (const { listName, attr, piecewise } of ex.removed) {
+    if (attr !== null) folder.remove(piecewise ? `${listName}-${attr}-pw.csv` : `${listName}-${attr}.csv`);
+  }
   logger.info(`Exported network '${n.name}' contains: ${ex.statics.map((s) => s.listName).join(", ")}`);
 }
 

@@ -1,31 +1,57 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 26 parity scenarios plus
-IO tests). Reference PyPSA commit: `1eb9db0` (post v1.2.4).
+State at hand-off: all PSA.js tests pass (`npm test`: 35 parity scenarios plus
+IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
 
-## 1. Housekeeping (do first)
+## 1. Housekeeping
 
-- [ ] **Regenerate every fixture in one go** with the final runners
-      (`run_scenarios.py` with no arguments, `gen_networks.py`, `gen_io.py`) and
-      confirm `npm test` still passes. Some fixtures predate later runner fixes
-      (pinned `PYTHONHASHSEED=0`, datetime/tuple value serialisation, the
-      pandas copy-on-write workaround).
-- [ ] Add `scripts/parity/generate_all.sh` (the test error message refers to it).
-- [ ] Decide whether to track PyPSA v1.4.0: the fork's `master` moved to v1.4.0
-      (352 files changed). Diff `1eb9db0..master`, update
-      `src/data/definitions.js` via `scripts/generate_definitions.py`, bump
-      `PYPSA_VERSION`, regenerate fixtures and fix what changes.
-- [ ] The reference checkout reports `pypsa.__version__ == "0.0"` (no git tags);
-      `git fetch --tags` in the PyPSA checkout would make exported
-      `pypsa_version` meaningful (the IO test currently masks it).
-- [ ] Add a CI workflow (GitHub Actions) running `npm test` on Node 22.
+- [x] Regenerate every fixture in one go (`scripts/parity/generate_all.sh`);
+      regeneration is deterministic and leaves the tree clean.
+- [x] Add `scripts/parity/generate_all.sh`.
+- [x] Track PyPSA v1.4.0: definitions regenerated, `PYPSA_VERSION` 1.4.0, all
+      fixtures regenerated, behaviour changes ported (bfs-refined cycle basis,
+      UC status history, maintenance, phase shifters, voltage angle limits,
+      time-varying start-up/shut-down costs, seasonal ratings, SCLOPF per
+      period, piecewise linear costs/efficiencies).
+- [x] PyPSA release tags: `pypsa.__version__` resolves to 1.4.0 (the IO test no
+      longer masks the exported version).
+- [x] CI workflow (`.github/workflows/test.yml`, Node 22 and 24).
+- [x] Pinned the Python packages that reproduce the fixtures
+      (`scripts/parity/requirements.txt`, verified by a full regeneration) and
+      added `scripts/parity/diff_fixtures.py`.
+- [x] Fixtures no longer depend on the CPU: the generators disable numpy's
+      AVX-512 (SVML) loops, whose `pow`/`exp`/`log` differ from libm by one ulp
+      and moved HiGHS to other optimal dual vertices on degenerate LPs.
 
 ## 2. Features not yet ported
 
-- [ ] **Stochastic optimisation**: `set_scenarios`, scenario dimension on
-      components, scenario-weighted objective, CVaR / `set_risk_preference`,
-      stochastic statistics. Currently `set_scenarios` throws.
-- [ ] **NetworkCollection** (multi-network statistics).
+- [x] **Stochastic optimisation**: `set_scenarios`, scenario-indexed data,
+      `get_scenario`, scenario-weighted objective, CVaR, QP, UC, multi-period,
+      losses, SCLOPF, rolling horizon, statistics, netCDF IO (scenarios
+      `network_stochastic`, `opt_stochastic`, `statistics_stochastic`,
+      `io_stochastic`). Remaining:
+  - [ ] `n.optimize.expressions` on stochastic networks (PyPSA adds a
+        `scenario` dimension from scenario-dependent data and the lifted
+        variables; PSA.js raises NotImplementedError), assigning duals of
+        custom constraints (PyPSA raises too).
+  - [ ] Ungrouped statistics (`groupby=False`) of components added after
+        `set_scenarios` follow PyPSA's row order only for scenario-major data.
+  - [ ] Iterative transmission expansion, power flow and spatial clustering
+        raise (they fail or are unsupported in PyPSA v1.4.0 too).
+- [x] **NetworkCollection** (scenario `collection`): construction from lists,
+      mappings or Series (custom index levels), combined component data and
+      statistics with the network levels, PyPSA's price quirks.
+- [x] **`n.optimize.expressions`** (scenarios `opt_expressions`,
+      `opt_expressions_more`): capex, capacity, opex, transmission, energy
+      balance, supply, withdrawal, curtailment and operation as linopy
+      expressions with identical layout (dims, coordinates, `_term` slots incl.
+      padding), groupers and filters, multi-investment periods, piecewise
+      costs and efficiencies (`_split_piecewise` / `_direct_piecewise`),
+      multi-port links and processes; constraints built from them give
+      byte-identical LP files. The linopy operations (legacy semantics: NaN
+      fills, outer joins, `groupby().sum()`, `@`, `merge`) live in
+      `src/optimization/statistic_expressions.js`.
+- [ ] Piecewise data on stochastic networks (PyPSA raises too).
 - [ ] **IO formats**: Excel (`import_from_excel`/`export_to_excel`, e.g. via
       SheetJS), HDF5 (pandas HDFStore layout), `import_from_pypower_ppc`,
       `import_from_pandapower_net` (likely out of scope without Python).
@@ -47,13 +73,16 @@ IO tests). Reference PyPSA commit: `1eb9db0` (post v1.2.4).
 ## 3. Parity gaps to close
 
 - [ ] `linopy` expression API: only the subset needed by PyPSA workflows
-      (`sel`, `mul`, `add`, `sub`, `sum`, `le/ge/eq`, `set_objective`). Missing:
-      `shift`, `groupby`, `rolling`, `where`, quadratic expressions, `diff`.
-- [ ] Statistics: `n.statistics(...)` overview table, `aggregate_across_components`,
-      `groupby_method` other than sum/mean/min/max, callable groupers with
-      multi-index results, the `transmission` default component order follows
-      Python set order in PyPSA (PSA.js sorts).
-- [ ] Consistency checks: `check_dtypes`, scenario checks (no scenarios yet).
+      (`sel`, `mul`, `add`, `sub`, `sum`, `le/ge/eq`, `set_objective`, plus the
+      internal helpers of the statistic expressions: outer merges,
+      `groupby().sum()`, `where`, `@`). Missing as public API: `shift`,
+      `rolling`, quadratic expressions, `diff`; `groupby`/`where` as methods.
+- [ ] Statistics: `aggregate_across_components`, `groupby_method` other than
+      sum/mean/min/max, callable groupers with multi-index results. (Done: the
+      overview table `n.statistics()` passes all arguments like PyPSA, the
+      component sets iterate in CPython's set order, deprecated `comps` /
+      `aggregate_groups` / `aggregate_time` are renamed.)
+- [ ] Consistency checks: `check_dtypes`.
 - [ ] SciGrid voltage angles after optimisation use an exact grounded solve while
       PyPSA uses `numpy.linalg.pinv` (differences ~1e-4 rad; documented
       tolerance in `test/scenarios/opt_scigrid_de.json`).
@@ -61,6 +90,55 @@ IO tests). Reference PyPSA commit: `1eb9db0` (post v1.2.4).
       previous run; on a fresh network (s_nom_opt = 0) this yields x = 0 and
       fails in PyPSA too. The scenario seeds `s_nom_opt`; consider reporting
       upstream.
+- [ ] PyPSA v1.4.0 piecewise bugs found while porting (PSA.js mirrors 1, 3
+      and 4; consider reporting upstream):
+      1. `_normalize_breakpoints` concatenates the per-name `groupby().apply()`
+         results with a label-based column union, so breakpoint rows are
+         aligned across components: sorting one curve re-orders the rows of
+         every other curve (they can end up unsorted or rejected as not
+         starting at x=0, e.g. shuffled MultiIndex input).
+      2. netCDF export of piecewise data with different breakpoint counts
+         truncates the longer curves (all `<list>_pw_<attr>` variables share
+         one `breakpoint` dimension aligned to the first one written), so the
+         file fails to re-import. PSA.js pads with NaN rows instead; PyPSA
+         reads those files correctly.
+      3. `_get_breakpoints` raises "Breakpoints must have same size" when the
+         piecewise frame has more rows than every selected curve (e.g. a
+         longer capital cost curve on a non-extendable component).
+      4. `meshed_thresholds` that put the output buses of piecewise links in
+         different bus groups define `Link-p1_piecewise` twice ("already
+         assigned to model").
+- [ ] PyPSA v1.4.0 stochastic-network bugs found while porting (consider
+      reporting upstream; PSA.js mirrors 1-4):
+      1. `post_processing` groups the bus injections by the first column level,
+         which is the scenario, so `n.buses_t.p` is all zero; voltage angles
+         are not computed.
+      2. Global constraint duals are never assigned (`suffix in
+         c.static.index` only checks the scenario level), `mu` stays 0.
+      3. `get_bus_counts` counts the rows of all scenarios, so
+         `meshed_thresholds` are effectively divided by the number of
+         scenarios (SciGrid gets an extra `Bus-meshed-30-nodal_balance`).
+      4. In the stochastic model the zero-coefficient maintenance terms of
+         `{c}-fix-*` rows reference another scenario's variable (harmless,
+         linopy drops zero coefficients).
+      5. A scenario named like a component (e.g. scenario and generator
+         "peak") crashes `post_processing` (`rename` with a MultiIndex mapper).
+      6. The secant-loss error for infinite `s_nom_max` crashes with an
+         IndexError while formatting the message.
+      7. `lpf`, `pf`, `optimize_and_run_non_linear_powerflow` and
+         `optimize_transmission_expansion_iteratively` fail.
+      8. netCDF export can reorder scenarios and components (xarray aligns the
+         coordinates to sorted MultiIndex levels; see `io_stochastic`).
+- [ ] PyPSA v1.4.0 `n.optimize.expressions` bugs found while porting (PSA.js
+      mirrors them; consider reporting upstream):
+      1. Inactive assets (`active=False`) have no dispatch variables, but
+         `energy_balance`/`supply`/`withdrawal` align the port coefficients of
+         all assets with `join="exact"` (AlignmentError), `transmission`
+         selects inactive branches and `curtailment` inactive fixed assets
+         (KeyError).
+      2. `groupby_method` other than "sum" is only rejected when ports are
+         merged or time is aggregated (e.g. `capex(groupby_method="max")`
+         silently sums).
 - [ ] PyPSA bugs/quirks observed (mirrored or worked around in fixtures):
       clustering crashes under pandas 3 copy-on-write (runner patches
       `determine_network_topology`), loss variable order depends on Python's

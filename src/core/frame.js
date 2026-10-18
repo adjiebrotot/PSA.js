@@ -137,6 +137,12 @@ export class Series {
     return Array.from(this.values);
   }
 
+  toString() {
+    const rows = this.index.values.slice(0, 20).map((r, i) => [Array.isArray(r) ? r.join("|") : String(r), String(this.values[i])]);
+    if (this.index.length > 20) rows.push(["...", ""]);
+    return rows.map((r) => r.join("\t")).join("\n");
+  }
+
   copy() {
     return new Series(cloneArray(this.values), this.index, this.name);
   }

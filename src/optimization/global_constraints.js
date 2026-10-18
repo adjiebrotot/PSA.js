@@ -5,6 +5,7 @@ import { Index } from "../core/index.js";
 import { NOMINAL_ATTRS, denseValues, staticValues, weightings } from "./common.js";
 import { labeler1, labeler2 } from "./variables.js";
 import { logger } from "../logger.js";
+import { define_piecewise, optionsFor } from "./piecewise.js";
 
 const r = (lc, rc) => -(lc - rc);
 
@@ -325,14 +326,34 @@ function storageTerms(n, sns, snsSel, comp, varName, initAttr, cyclicAttr, perPe
   }
 }
 
-export function define_primary_energy_limit(n, sns) {
+export function define_primary_energy_limit(n, sns, piecewiseOptions = []) {
   const m = n.model;
   const glcs = glcsOfType(n, "primary_energy");
+  const gcAll = n.c.generators;
+  const pwSchemaEff = gcAll._piecewise_schema("efficiency");
+  let pePw = null;
+  if (glcs.length && pwSchemaEff && m.variables.has("Generator-p")) {
+    const status = gcAll.committables.intersection(gcAll.active_assets).empty ? null : m.variables.get("Generator-status");
+    pePw = define_piecewise(n, gcAll, {
+      xVar: m.variables.get("Generator-p"),
+      sns,
+      pwAttr: "efficiency",
+      auxVarName: `Generator-${pwSchemaEff.aux_variable}`,
+      activeNames: gcAll.active_assets,
+      sign: "=",
+      cumulativeAttr: false,
+      extraOptions: optionsFor(piecewiseOptions, "Generator", "efficiency"),
+      invertAttr: true,
+      status,
+    });
+  }
   for (const [name, i] of glcs) {
     const glc = glcRow(n, i);
     let snsSel;
     if (Number.isNaN(glc.investment_period)) snsSel = sns;
-    else if (sns.isMulti && sns.uniqueLevel(0).has(glc.investment_period)) snsSel = snsForPeriod(sns, glc.investment_period);
+    else if (!n._multi_invest) {
+      throw new Error(`GlobalConstraint '${name}' sets \`investment_period\`, but the network has no investment periods.`);
+    } else if (sns.isMulti && sns.uniqueLevel(0).has(glc.investment_period)) snsSel = snsForPeriod(sns, glc.investment_period);
     else continue;
     const cst = n.c.carriers.static;
     const emCol = cst.col(glc.carrier_attribute);
@@ -350,15 +371,42 @@ export function define_primary_energy_limit(n, sns) {
     let gens = gc.static.index.filter(gc.static.col("carrier").map((x) => em.has(x)));
     gens = gc.filter_by_active_assets(gens, Number.isNaN(period) ? null : period);
     if (!gens.empty) {
-      const eff = denseValues(gc, "efficiency", snsSel, gens);
       const w = weightingsFor(n, sns, snsSel, "generators");
-      const v = labeler2(m.variables.get("Generator-p"), snsSel, gens);
-      const nN = gens.length;
-      const carriers = staticValues(gc, "carrier", gens);
-      for (let s = 0; s < snsSel.length; s++) {
-        for (let j = 0; j < nN; j++) {
-          vars.push(v(s, j));
-          coeffs.push((em.get(carriers[j]) / eff[s * nN + j]) * w[s]);
+      const pwNames = pePw ? gens.intersection(pePw.names) : new Index([], "name");
+      if (pwNames.empty) {
+        const eff = denseValues(gc, "efficiency", snsSel, gens);
+        const v = labeler2(m.variables.get("Generator-p"), snsSel, gens);
+        const nN = gens.length;
+        const carriers = staticValues(gc, "carrier", gens);
+        for (let s = 0; s < snsSel.length; s++) {
+          for (let j = 0; j < nN; j++) {
+            vars.push(v(s, j));
+            // `(p / efficiency) * weight * emission_rate` in linopy's operation order
+            coeffs.push((1 / eff[s * nN + j]) * w[s] * em.get(carriers[j]));
+          }
+        }
+      } else {
+        // piecewise primary energy for `pw_names`, `p / efficiency` for the rest;
+        // the outer join of both expressions sorts the names
+        const linear = gens.difference(pwNames);
+        const order = linear.empty ? pwNames : pwNames.union(linear);
+        const isPw = order.values.map((nm) => pwNames.has(nm));
+        const vPw = labeler2(pePw.variable, snsSel, order);
+        const vLin = labeler2(m.variables.get("Generator-p"), snsSel, order);
+        const eff = denseValues(gc, "efficiency", snsSel, order);
+        const carriers = staticValues(gc, "carrier", order);
+        const nN = order.length;
+        for (let s = 0; s < snsSel.length; s++) {
+          for (let j = 0; j < nN; j++) {
+            const e = em.get(carriers[j]);
+            if (isPw[j]) {
+              vars.push(vPw(s, j));
+              coeffs.push(w[s] * e);
+            } else {
+              vars.push(vLin(s, j));
+              coeffs.push((1 / eff[s * nN + j]) * w[s] * e);
+            }
+          }
         }
       }
     }
@@ -387,7 +435,9 @@ export function define_operational_limit(n, sns) {
     const glc = glcRow(n, i);
     let snsSel;
     if (Number.isNaN(glc.investment_period)) snsSel = sns;
-    else if (sns.isMulti && sns.uniqueLevel(0).has(glc.investment_period)) snsSel = snsForPeriod(sns, glc.investment_period);
+    else if (!n._multi_invest) {
+      throw new Error(`GlobalConstraint '${name}' sets \`investment_period\`, but the network has no investment periods.`);
+    } else if (sns.isMulti && sns.uniqueLevel(0).has(glc.investment_period)) snsSel = snsForPeriod(sns, glc.investment_period);
     else continue;
     const vars = [];
     const coeffs = [];
@@ -548,7 +598,9 @@ export function define_transmission_expansion_cost_limit(n, sns) {
           return w;
         });
       } else compWeights = extI.values.map(() => weights);
-      const cc = staticValues(c, "capital_cost", extI);
+      // annuitised investment cost (`c.capital_cost`, without fixed O&M)
+      const ccAll = c.capital_cost;
+      const cc = extI.values.map((nm) => ccAll[c.static.index.getLoc(nm)]);
       const v = labeler1(m.variables.get(`${cName}-${attr}`), extI);
       extI.values.forEach((_, j) => {
         vars.push(v(j));

@@ -104,3 +104,6 @@ export function getComponentType(name) {
 }
 
 export const PYPSA_REFERENCE_VERSION = definitions.pypsa_version;
+
+/** Release version of the mirrored PyPSA (like `pypsa.__version_base__`). */
+export const PYPSA_VERSION = /^\d+\.\d+(?:\.\d+)?(?:[a-z]+\d*)?/.exec(PYPSA_REFERENCE_VERSION)[0];

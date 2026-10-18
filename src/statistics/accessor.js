@@ -16,6 +16,8 @@ import { NOMINAL_ATTRS } from "../components/components.js";
 import { LOOKUP } from "../optimization/common.js";
 import { logger } from "../logger.js";
 import { Tab, KeyError, isKeyError, groupRows, groupByLevels, concatRows, roundTo } from "./table.js";
+import { scenarioView } from "../network/scenarios.js";
+import { PySet } from "../core/pyset.js";
 
 export const statisticsOptions = { nice_names: true, drop_zero: true, round: 5 };
 
@@ -98,11 +100,11 @@ function mapValues(values, keys, mapped) {
   });
 }
 
-function isNa(v) {
+export function isNa(v) {
   return v === null || v === undefined || (typeof v === "number" && Number.isNaN(v));
 }
 
-function normalizeCarrierNiceNames(n, carrier) {
+export function normalizeCarrierNiceNames(n, carrier) {
   if (carrier === null || carrier === undefined) return carrier;
   const scalar = typeof carrier === "string";
   if (!scalar && !Array.isArray(carrier)) return carrier;
@@ -119,7 +121,7 @@ function normalizeCarrierNiceNames(n, carrier) {
 }
 
 /** Python `re.search` semantics for `str.contains`. */
-function contains(s, pattern) {
+export function contains(s, pattern) {
   if (typeof s !== "string") return false;
   try {
     return new RegExp(pattern).test(s);
@@ -273,18 +275,20 @@ export function get_transmission_branches(n, bus_carrier = null) {
   if (typeof carriers === "string") carriers = [carriers];
   else if (carriers === null || carriers === undefined) carriers = [...new Set(bc.col("carrier"))];
   const out = [];
-  for (const c of [...n.branch_components].sort()) {
+  for (const c of n.branch_components) {
     const st = n.c.get(c).static;
     const busCols = st.columns.values.filter((col) => String(col).includes("bus"));
-    const res = new Set();
-    st.index.values.forEach((nm, i) => {
-      for (const carrier of carriers) {
+    // `res |= set(matching_idx)` per carrier: names in CPython set order
+    const res = new PySet();
+    for (const carrier of carriers) {
+      const matching = st.index.values.filter((nm, i) => {
         let cnt = 0;
         for (const col of busCols) if (busCarrier.get(st.col(col)[i]) === carrier) cnt++;
-        if (cnt > 1) res.add(nm);
-      }
-    });
-    for (const nm of st.index.values) if (res.has(nm)) out.push([c, nm]);
+        return cnt > 1;
+      });
+      res._merge(new PySet(matching));
+    }
+    for (const nm of res) out.push([c, nm]);
   }
   return new Index(out, ["component", "name"]);
 }
@@ -317,8 +321,9 @@ export class StatisticsAccessor {
   }
 
   // -------------------------------------------------------------- time
-  _weights(column) {
-    const w = this._n.snapshot_weightings;
+  /** Snapshot weightings column of `n` (the member network evaluated by a statistic). */
+  _weights(column, n = this._n) {
+    const w = n.snapshot_weightings;
     return Float64Array.from(w.col(column));
   }
 
@@ -487,41 +492,29 @@ export class StatisticsAccessor {
    */
   _aggregate_components(func, opts = {}) {
     const n = this._n;
-    let { components = null, agg = "sum", groupby = "carrier", aggregate_across_components = false, at_port = null, bus_carrier = null, carrier = null, nice_names = null, drop_zero = null, round = null } = opts;
-    const d = [];
+    let { components = null, agg = "sum", groupby = "carrier", aggregate_across_components = false, drop_zero = null, round = null } = opts;
     const isOne = typeof components === "string";
-    if (isOne) components = [components];
-    if (components === null || components === undefined) components = [...new Set([...n.branch_components, ...n.one_port_components])].sort();
-    if (nice_names === null || nice_names === undefined) nice_names = statisticsOptions.nice_names;
-    if (nice_names) {
-      bus_carrier = normalizeCarrierNiceNames(n, bus_carrier);
-      carrier = normalizeCarrierNiceNames(n, carrier);
-    }
-    at_port = resolve_at_port(at_port, bus_carrier);
-    for (const cn of components) {
-      const c = n.c.get(cn);
-      if (c.static.empty || c.static.index.length === 0) continue;
-      const values = [];
-      for (const port of c._as_ports(at_port)) {
-        const portSuffix = c.ports[port];
-        if (portSuffix === undefined) continue;
-        let vals = wrapKeyError(() => func(n, cn, portSuffix));
-        if (vals.empty) continue;
-        vals = this._filter_active_assets(cn, vals);
-        vals = this._filter_bus_carrier(cn, portSuffix, bus_carrier, vals);
-        vals = this._filter_carrier(cn, carrier, vals);
-        if (vals.empty) continue;
-        if (groupby !== false) {
-          const grouping = this._get_grouping(cn, groupby, portSuffix, nice_names);
-          vals = this._aggregate_components_groupby(vals, grouping, agg, cn);
-        } else vals = vals.renameIndex("name");
-        values.push(vals);
-      }
-      if (!values.length) continue;
-      let df = values.length > 1 ? concatRows(values) : values[0];
-      if (!df.index.isUnique) df = groupByLevels(df, agg);
-      d.push([cn, df]);
-    }
+    let d;
+    const members = this._members();
+    if (members) {
+      // stochastic networks and network collections: evaluate each member and
+      // add its key levels after `component`; the values of each port cover
+      // all members, grouped values are sorted by the member keys
+      const perMember = members.items.map(([, m]) => new Map(m.statistics._accessor._component_port_tabs(func, opts)));
+      let order = members.items.map(([key], s) => [key, s]);
+      if (groupby !== false) order = order.sort((a, b) => compareLabels(a[0], b[0]));
+      const comps = [];
+      for (const m of perMember) for (const cn of m.keys()) if (!comps.includes(cn)) comps.push(cn);
+      d = comps.map((cn) => {
+        const ports = [];
+        for (const m of perMember) for (const [port] of m.get(cn) ?? []) if (!ports.includes(port)) ports.push(port);
+        const values = ports.map((port) => {
+          const parts = order.map(([key, s]) => [key, perMember[s].get(cn)?.find(([q]) => q === port)?.[1]]).filter(([, t]) => t !== undefined);
+          return prefixRows(parts, members.names);
+        });
+        return [cn, this._combine_ports(values, opts.agg ?? "sum")];
+      });
+    } else d = this._component_tabs(func, opts);
     let df;
     if (!d.length) df = new Tab(new Index([], ["component", "name"]), null, []);
     else if (isOne) df = d[0][1];
@@ -550,6 +543,73 @@ export class StatisticsAccessor {
       );
     }
     return df;
+  }
+
+  /**
+   * Members evaluated separately: the scenarios of a stochastic network (as
+   * views) or the networks of a collection, with their key level names.
+   */
+  _members() {
+    const n = this._n;
+    if (n.is_collection) return { items: n._members(), names: n._index_names };
+    if (n.has_scenarios) return { items: n.scenarios.values.map((sc) => [sc, scenarioView(n, sc)]), names: ["scenario"] };
+    return null;
+  }
+
+  /** Per-component results `[[component, Tab]]` (filtered and grouped). */
+  _component_tabs(func, opts = {}) {
+    return this._component_port_tabs(func, opts).map(([cn, ports]) => [
+      cn,
+      this._combine_ports(
+        ports.map(([, t]) => t),
+        opts.agg ?? "sum",
+      ),
+    ]);
+  }
+
+  /** Concatenate the values of the ports of a component (grouped if not unique). */
+  _combine_ports(values, agg) {
+    let df = values.length > 1 ? concatRows(values) : values[0];
+    if (!df.index.isUnique) df = groupByLevels(df, agg);
+    return df;
+  }
+
+  /** Per-component, per-port results `[[component, [[port, Tab], ...]]]`. */
+  _component_port_tabs(func, opts = {}) {
+    const n = this._n;
+    let { components = null, agg = "sum", groupby = "carrier", at_port = null, bus_carrier = null, carrier = null, nice_names = null } = opts;
+    const d = [];
+    if (typeof components === "string") components = [components];
+    if (components === null || components === undefined) components = [...new Set([...n.branch_components, ...n.one_port_components])].sort();
+    if (nice_names === null || nice_names === undefined) nice_names = statisticsOptions.nice_names;
+    if (nice_names) {
+      bus_carrier = normalizeCarrierNiceNames(n, bus_carrier);
+      carrier = normalizeCarrierNiceNames(n, carrier);
+    }
+    at_port = resolve_at_port(at_port, bus_carrier);
+    for (const cn of components) {
+      const c = n.c.get(cn);
+      if (c.static.empty || c.static.index.length === 0) continue;
+      const values = [];
+      for (const port of c._as_ports(at_port)) {
+        const portSuffix = c.ports[port];
+        if (portSuffix === undefined) continue;
+        let vals = wrapKeyError(() => func(n, cn, portSuffix));
+        if (vals.empty) continue;
+        vals = this._filter_active_assets(cn, vals);
+        vals = this._filter_bus_carrier(cn, portSuffix, bus_carrier, vals);
+        vals = this._filter_carrier(cn, carrier, vals);
+        if (vals.empty) continue;
+        if (groupby !== false) {
+          const grouping = this._get_grouping(cn, groupby, portSuffix, nice_names);
+          vals = this._aggregate_components_groupby(vals, grouping, agg, cn);
+        } else vals = vals.renameIndex("name");
+        values.push([portSuffix, vals]);
+      }
+      if (!values.length) continue;
+      d.push([cn, values]);
+    }
+    return d;
   }
 
   _finalize(tab, name, unit) {
@@ -585,9 +645,11 @@ export class StatisticsAccessor {
       if (!attr) throw new KeyError(c);
       const cap = staticCol(comp, `${attr}_opt`);
       const cost = cost_attribute === "capital_cost" ? comp.capital_cost : staticCol(comp, cost_attribute);
+      // optimised piecewise capital costs (`<cost_attribute>_piecewise_opt`)
+      const pw = comp.static.has(`${cost_attribute}_piecewise_opt`) ? staticCol(comp, `${cost_attribute}_piecewise_opt`) : null;
       return Tab.series(
         comp.static.index,
-        Float64Array.from(cap, (x, i) => x * cost[i]),
+        Float64Array.from(cap, (x, i) => x * (pw ? cost[i] + pw[i] : cost[i] + 0)),
       );
     };
     let tab = this._aggregate_components(func, { ...o, agg: o.groupby_method });
@@ -598,12 +660,13 @@ export class StatisticsAccessor {
   /** Capital expenditure of the installed (pre-optimisation) capacity. */
   installed_capex(opts = {}) {
     const o = { ...DEFAULTS, ...opts };
+    const cost_attribute = opts.cost_attribute ?? "capital_cost";
     const func = (n, c) => {
       const comp = n.c.get(c);
       const attr = NOMINAL_ATTRS[c];
       if (!attr) throw new KeyError(c);
       const cap = staticCol(comp, attr);
-      const cost = comp.capital_cost;
+      const cost = cost_attribute === "capital_cost" ? comp.capital_cost : staticCol(comp, cost_attribute);
       return Tab.series(
         comp.static.index,
         Float64Array.from(cap, (x, i) => x * cost[i]),
@@ -711,7 +774,7 @@ export class StatisticsAccessor {
     else if (typeof costTypes === "string") costTypes = [costTypes];
     const func = (n, c, port) => {
       const comp = n.c.get(c);
-      const weights = this._weights("objective");
+      const weights = this._weights("objective", n);
       const ones = new Float64Array(weights.length).fill(1);
       const comI = comp.committables;
       const result = [];
@@ -721,7 +784,9 @@ export class StatisticsAccessor {
         if (!rows.length) throw new KeyError(c);
         if (rows.length !== 1) throw new Error("can only convert an array of size 1 to a Python scalar");
         const attr = rows[0].variable + port;
-        const cost = n.get_switchable_as_dense(c, costType);
+        let cost = n.get_switchable_as_dense(c, costType);
+        const pw = comp.dynamic[`${costType}_piecewise_opt`];
+        if (pw && !pw.empty) cost = frameOp(cost, pw, (a, b) => a + b);
         const p = dynamic(comp, attr);
         const v = costType === "marginal_cost_quadratic" ? frameMap(p, (x) => x * x) : p;
         const opex = frameOp(v, cost, (a, b) => a * b);
@@ -744,16 +809,15 @@ export class StatisticsAccessor {
     return this._finalize(tab, "Operational Expenditure", "currency");
   }
 
-  /** Total system cost (capex + opex). */
+  /** Total system cost (capex + fixed O&M + opex). */
   system_cost(opts = {}) {
     const groupby_time = opts.groupby_time === false ? "sum" : opts.groupby_time ?? "sum";
     if (opts.groupby_time === false) logger.warning("Passing `groupby_time=False` to `system_cost` is deprecated.");
     const capex = this.capex(stripKeys(opts, ["groupby_time"]));
+    const fom = this.fom(stripKeys(opts, ["groupby_time"]));
     const opex = this.opex({ ...opts, groupby_time });
-    let df;
-    if (!isEmpty(capex) && !isEmpty(opex)) df = addFill(capex, opex);
-    else if (!isEmpty(capex)) df = capex;
-    else df = opex;
+    const parts = [capex, fom, opex].filter((part) => !isEmpty(part));
+    const df = parts.length ? parts.slice(1).reduce((a, b) => addFill(a, b), parts[0]) : capex;
     df.attrs = { name: "System Cost", unit: "currency" };
     return df;
   }
@@ -764,7 +828,7 @@ export class StatisticsAccessor {
     const n = this._n;
     const func = (nn, c, port) => {
       const comp = nn.c.get(c);
-      const weights = this._weights("generators");
+      const weights = this._weights("generators", nn);
       const p0 = dynamic(comp, `p${port}`);
       let p;
       if (nn.branch_components.has(c)) p = frameMap(p0, (x) => -1.0 * x);
@@ -804,13 +868,17 @@ export class StatisticsAccessor {
   transmission(opts = {}) {
     const o = { ...DEFAULTS, groupby_time: "sum", at_port: "bus0", ...opts };
     const n = this._n;
-    if (o.components === null) o.components = [...n.branch_components].sort();
-    const branches = get_transmission_branches(n, o.bus_carrier);
+    // PyPSA passes `n.branch_components` (Python set iteration order)
+    if (o.components === null) o.components = [...n.branch_components];
+    // per network evaluated (the scenario views of stochastic networks)
+    const branchesOf = new Map();
     const func = (nn, c, port) => {
+      if (!branchesOf.has(nn)) branchesOf.set(nn, get_transmission_branches(nn, o.bus_carrier));
+      const branches = branchesOf.get(nn);
       const names = branches.values.filter((b) => b[0] === c).map((b) => b[1]);
       if (!names.length && !branches.values.some((b) => b[0] === c)) throw new KeyError(c);
       const p = selectColumns(dynamic(nn.c.get(c), `p${port}`), names);
-      return this._aggregate_timeseries(p, this._weights("generators"), o.groupby_time);
+      return this._aggregate_timeseries(p, this._weights("generators", nn), o.groupby_time);
     };
     const tab = this._aggregate_components(func, { ...o, agg: o.groupby_method });
     return this._finalize(tab, "Transmission", "carrier dependent");
@@ -824,7 +892,7 @@ export class StatisticsAccessor {
       if (!comp.static.has("p_max_pu")) throw new KeyError("p_max_pu");
       const avail = frameSeriesOp(n.get_switchable_as_dense(c, "p_max_pu"), comp.static.index, staticCol(comp, "p_nom_opt"), (x, v) => x * v);
       const p = frameMap(frameOp(avail, dynamic(comp, "p"), (a, b) => a - b), (x) => (x < 0 ? 0 : x));
-      return this._aggregate_timeseries(p, this._weights("generators"), o.groupby_time);
+      return this._aggregate_timeseries(p, this._weights("generators", n), o.groupby_time);
     };
     const tab = this._aggregate_components(func, { ...o, agg: o.groupby_method });
     return this._finalize(tab, "Curtailment", "MWh");
@@ -833,7 +901,7 @@ export class StatisticsAccessor {
   _operationTab(o) {
     const func = (n, c) => {
       const p = frameMap(get_operation(n, c), Math.abs);
-      return this._aggregate_timeseries(p, this._weights("generators"), o.groupby_time);
+      return this._aggregate_timeseries(p, this._weights("generators", n), o.groupby_time);
     };
     return this._aggregate_components(func, { ...o, agg: o.groupby_method });
   }
@@ -874,7 +942,7 @@ export class StatisticsAccessor {
           Float64Array.from(df.col(nm), (x, t) => x * (price ? price[t] : 0)),
         );
       }
-      return this._aggregate_timeseries(rev, this._weights("objective"), o.groupby_time);
+      return this._aggregate_timeseries(rev, this._weights("objective", n), o.groupby_time);
     };
     return this._aggregate_components(func, { ...o, agg: o.groupby_method });
   }
@@ -899,6 +967,7 @@ export class StatisticsAccessor {
 
   /** Average marginal prices per bus (load or time weighted). */
   prices(opts = {}) {
+    if (this._n.is_collection) return this._collection_prices(opts);
     const { groupby = false, weighting = "load", groupby_time = true, bus_carrier = null, drop_zero = null, round = null } = opts;
     const n = this._n;
     const sw = this._weights("objective");
@@ -999,6 +1068,87 @@ export class StatisticsAccessor {
     return this._finalize(tab, "Prices", "currency / MWh");
   }
 
+  /**
+   * Prices of a network collection. As in PyPSA v1.4.0 the load weights are
+   * grouped by bus name across the networks and do not align with the
+   * `(network, name)` price columns, so every bus is weighted by the
+   * snapshot weightings only; grouped prices pool the networks.
+   */
+  _collection_prices(opts = {}) {
+    const { groupby = false, weighting = "load", groupby_time = true, bus_carrier = null, drop_zero = null, round = null } = opts;
+    const nc = this._n;
+    if (weighting !== "load" && weighting !== "time") throw new Error(`Weighting '${weighting}' is not supported. Use 'load' or 'time'.`);
+    let keys;
+    if (groupby === false) keys = [];
+    else if (typeof groupby === "string") keys = [groupby];
+    else if (Array.isArray(groupby)) keys = groupby;
+    else throw new Error(`Grouping prices by ${groupby} is not supported.`);
+    const tuple = (k) => (Array.isArray(k) ? k : [k]);
+    const rows = [];
+    for (const [key, n] of nc._members()) {
+      const buses = n.c.buses.static;
+      const prices = n.c.buses.dynamic.marginal_price;
+      const carriers = buses.has("carrier") ? buses.col("carrier") : null;
+      const sw = this._weights("objective", n);
+      for (const b of prices.columns.values) {
+        const i = buses.index.getLoc(b);
+        if (bus_carrier !== null) {
+          const bcs = typeof bus_carrier === "string" ? [bus_carrier] : bus_carrier;
+          if (!(i >= 0 && bcs.includes(carriers[i]))) continue;
+        }
+        const groupKeys = keys.map((k) => {
+          const col = k === "bus_carrier" ? "carrier" : k;
+          if (col === "name") return b;
+          if (!buses.has(col)) throw new Error(`Grouping prices by '${k}' is not supported. Use 'name', 'bus_carrier' or a static bus attribute.`);
+          return i < 0 ? NaN : buses.col(col)[i];
+        });
+        rows.push({ key: tuple(key), bus: b, groupKeys, series: Float64Array.from(prices.col(b)), sw });
+      }
+    }
+    const names = nc._index_names;
+    if (!groupby_time) {
+      const index = keys.length
+        ? new Index(rows.map((r) => [...r.key, ...r.groupKeys]), [...names, ...keys])
+        : new Index(rows.map((r) => [...r.key, r.bus]), [...names, "name"]);
+      return new Tab(index, nc.snapshots, rows.map((r) => r.series)).toPandas();
+    }
+    for (const r of rows) {
+      let a = 0;
+      let b = 0;
+      r.series.forEach((x, t) => {
+        a += r.sw[t] * x;
+        b += r.sw[t];
+      });
+      r.value = a / b;
+      r.weight = b;
+    }
+    let tab;
+    if (!keys.length) {
+      tab = Tab.series(new Index(rows.map((r) => [...r.key, r.bus]), [...names, "name"]), Float64Array.from(rows, (r) => r.value));
+    } else {
+      // `df.groupby(groupers).apply(weighted mean)` over all networks
+      const groups = new Map();
+      for (const r of rows) {
+        const label = keys.length > 1 ? r.groupKeys : r.groupKeys[0];
+        const k = labelKey(label);
+        if (!groups.has(k)) groups.set(k, { label, a: 0, b: 0 });
+        const g = groups.get(k);
+        g.a += r.value * r.weight;
+        g.b += r.weight;
+      }
+      const sorted = [...groups.values()].sort((x, y) => compareLabels(x.label, y.label));
+      tab = Tab.series(
+        new Index(
+          sorted.map((g) => g.label),
+          keys.length > 1 ? keys : keys[0],
+        ),
+        Float64Array.from(sorted, (g) => g.a / g.b),
+      );
+    }
+    tab = this._apply_option_kwargs(tab, { drop_zero, round });
+    return this._finalize(tab, "Prices", "currency / MWh");
+  }
+
   /** Overview table of the main statistics (deprecated in PyPSA but kept). */
   call(opts = {}) {
     const funcs = [
@@ -1015,7 +1165,22 @@ export class StatisticsAccessor {
       ["revenue", "Revenue"],
       ["market_value", "Market Value"],
     ];
-    const res = funcs.map(([f, name]) => [name, this[f]({ groupby: "carrier", ...opts })]);
+    // PyPSA passes every argument explicitly, so e.g. `at_port=None` replaces
+    // the defaults of the individual statistics
+    const args = {
+      components: null,
+      groupby_method: "sum",
+      aggregate_across_components: false,
+      groupby: "carrier",
+      at_port: null,
+      carrier: null,
+      bus_carrier: null,
+      nice_names: null,
+      drop_zero: null,
+      round: null,
+      ...opts,
+    };
+    const res = funcs.map(([f, name]) => [name, this[f](args)]);
     const keys = new Map();
     for (const [, s] of res) for (const l of s.index.values) keys.set(labelKey(l), l);
     const labels = [...keys.values()].sort(compareLabels);
@@ -1032,6 +1197,19 @@ export class StatisticsAccessor {
     }
     return df;
   }
+}
+
+/** Concatenate `[[key, Tab]]` with the (scalar or tuple) keys as leading levels. */
+function prefixRows(parts, names) {
+  const tuple = (k) => (Array.isArray(k) ? k : [k]);
+  const tabs = parts.map(([, t]) => t);
+  const merged = concatRows(tabs);
+  const labels = [];
+  parts.forEach(([key, t]) => {
+    for (const l of t.index.values) labels.push([...tuple(key), ...(t.index.isMulti ? l : [l])]);
+  });
+  const inner = tabs[0].index.isMulti ? tabs[0].index.names : [tabs[0].index.name];
+  return new Tab(new Index(labels, [...names, ...inner]), merged.cols, merged.rows);
 }
 
 function aggregateArr(a, agg) {
@@ -1084,14 +1262,37 @@ function addFill(a, b) {
 }
 
 /** Install `n.statistics` (callable, with statistic methods). */
-Network._accessorInitialisers.push((n) => {
+// keyword arguments deprecated in PyPSA 1.0 (`deprecated_kwargs`)
+const DEPRECATED_KWARGS = { comps: "components", aggregate_groups: "groupby_method", aggregate_time: "groupby_time" };
+
+function renameDeprecatedKwargs(name, opts) {
+  if (!opts || typeof opts !== "object") return opts;
+  let out = opts;
+  for (const [old, neu] of Object.entries(DEPRECATED_KWARGS)) {
+    if (!(old in opts)) continue;
+    if (neu in opts) throw new Error(`TypeError: ${name} received both ${old} and ${neu}`);
+    logger.warning(`\`${old}\` is deprecated as an argument to \`${name}\`; use \`${neu}\` instead. Deprecated in version 1.0 and will be removed in version 2.0.`);
+    out = out === opts ? { ...opts } : out;
+    out[neu] = out[old];
+    delete out[old];
+  }
+  return out;
+}
+
+/** The callable `statistics` accessor of a network or collection. */
+export function makeStatisticsAccessor(n) {
   const acc = new StatisticsAccessor(n);
-  const fn = (opts = {}) => acc.call(opts);
+  const fn = (opts = {}) => acc.call(renameDeprecatedKwargs("__call__", opts));
   for (const name of Object.getOwnPropertyNames(StatisticsAccessor.prototype)) {
     if (name === "constructor" || name.startsWith("_") || name === "is_multi_indexed") continue;
-    fn[name] = acc[name].bind(acc);
+    fn[name] = (opts, ...rest) => acc[name](renameDeprecatedKwargs(name, opts), ...rest);
   }
   fn.groupers = groupers;
   fn._accessor = acc;
+  return fn;
+}
+
+Network._accessorInitialisers.push((n) => {
+  const fn = makeStatisticsAccessor(n);
   Object.defineProperty(n, "statistics", { value: fn, writable: true, configurable: true, enumerable: false });
 });
