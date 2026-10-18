@@ -50,6 +50,14 @@ export function decodeValue(v, n) {
       const columns = spec.column_names ? new Index(spec.columns, spec.column_names) : spec.columns;
       return new DataFrame({ index: new Index(spec.index, spec.index_name ?? null), columns, data });
     }
+    if ("$metric" in v) {
+      // a callable distance of two feature rows, defined alike in run_scenarios.py
+      const metrics = {
+        chebyshev: (u, w) => Math.max(...u.map((x, i) => Math.abs(x - w[i]))),
+        weighted_l1: (u, w) => u.reduce((s, x, i) => s + Math.abs(x - w[i]) * (i + 1), 0),
+      };
+      return metrics[v.$metric];
+    }
     if ("$grouper" in v) {
       // a callable grouper over static columns ("{port}" is replaced by the port)
       const spec = v.$grouper;

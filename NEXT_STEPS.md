@@ -38,9 +38,9 @@ Candidates for the next session, roughly by value:
    and all UTM zones. Other projections on these datums need their PROJ
    code ported (the helpers `tsfn`, `phi2`, `qsfn` exist); datum shifts
    (27700, 31467: Helmert transformations, grids) are harder.
-4. **Clustering leftovers**: `busmap_by_hac` with a callable or
-   precomputed metric; `busmap_by_kmeans` parity is unlikely (threaded
-   scikit-learn reductions).
+4. **Clustering leftovers**: ~~`busmap_by_hac` with a callable or
+   precomputed metric~~ done (scenario `clustering_hac`); `busmap_by_kmeans`
+   parity is unlikely (threaded scikit-learn reductions).
 5. ~~xarray views `c.da` / `c.ds`~~ done (`DataArray` / `Dataset`,
    scenario `components_da`); arithmetic between DataArrays (broadcasting
    by dims) is not implemented.
@@ -264,7 +264,9 @@ Candidates for the next session, roughly by value:
       (port of scikit-learn's connectivity-constrained `ward_tree` and
       `linkage_tree` with its weight-only edge heap and ordered
       `max_merge` / `average_merge`, single linkage via scipy's minimum
-      spanning tree and `_single_linkage_label`, component completion,
+      spanning tree and `_single_linkage_label`, a precomputed distance
+      matrix or a callable metric (a JS function of two feature rows),
+      component completion,
       `_hc_cut` / `hc_get_heads`; scenario
       `clustering_hac`; the completion compares squared distances computed
       like numpy's BLAS `dot` with FMA, so on CPUs without FMA the fixture
@@ -275,8 +277,7 @@ Candidates for the next session, roughly by value:
 - [ ] **Clustering** open: `segment` for snapshots that are not hourly (PyPSA
       passes the snapshot count to tsam as hours, so tsam forms several
       periods and only part of the series is segmented, an upstream bug;
-      PSA.js raises); `busmap_by_hac` with a callable or precomputed metric
-      (PSA.js raises NotImplementedError); parity for
+      PSA.js raises); parity for
       `busmap_by_kmeans` (a seeded Lloyd/k-means++, not scikit-learn's, whose
       threaded chunk reductions make exact parity unlikely).
 - [ ] Plotting (`n.plot`, `n.explore`, statistics plots) — out of scope or a

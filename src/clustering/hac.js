@@ -118,6 +118,8 @@ const unit = (x) => {
  * cosine: `1 - normalize(X).normalize(Y)^T`, clipped to [0, 2].
  */
 function pairwiseDistances(Xi, Xj, metric = "euclidean") {
+  // a callable metric is evaluated for every pair (sklearn's `_pairwise_callable`)
+  if (typeof metric === "function") return Xi.map((x) => Xj.map((y) => metric(x, y)));
   if (metric === "manhattan" || metric === "l1") {
     return Xi.map((x) => Xj.map((y) => x.reduce((s, v, k) => s + Math.abs(v - y[k]), 0)));
   }
@@ -136,6 +138,7 @@ function pairwiseDistances(Xi, Xj, metric = "euclidean") {
 
 /** sklearn `paired_distances(x, y, metric)` of two rows. */
 function pairedDistance(x, y, metric = "euclidean") {
+  if (typeof metric === "function") return metric(x, y);
   if (metric === "manhattan" || metric === "l1") return x.reduce((s, v, k) => s + Math.abs(v - y[k]), 0);
   if (metric === "cosine") {
     const xn = unit(x);
@@ -144,6 +147,9 @@ function pairedDistance(x, y, metric = "euclidean") {
   }
   return Math.sqrt(sqNorm(x.map((v, k) => v - y[k])));
 }
+
+/** Distance of the connectivity edge (i, j): `X[i][j]` for a precomputed matrix. */
+const edgeDistance = (X, i, j, metric) => (metric === "precomputed" ? Number(X[i][j]) : pairedDistance(X[i], X[j], metric));
 
 /**
  * `_fix_connectivity`: symmetric row lists (sorted, LIL), and when the graph
@@ -163,11 +169,14 @@ function fixConnectivity(X, adjacency, metric = "euclidean") {
       const idxI = [...labels.keys()].filter((p) => labels[p] === i);
       for (let j = 0; j < i; j++) {
         const idxJ = [...labels.keys()].filter((p) => labels[p] === j);
-        const D = pairwiseDistances(
-          idxI.map((p) => X[p]),
-          idxJ.map((p) => X[p]),
-          metric,
-        );
+        const D =
+          metric === "precomputed"
+            ? idxI.map((p) => idxJ.map((q) => X[p][q]))
+            : pairwiseDistances(
+                idxI.map((p) => X[p]),
+                idxJ.map((p) => X[p]),
+                metric,
+              );
         let best = [0, 0];
         D.forEach((r, a) => r.forEach((d, b) => d < D[best[0]][best[1]] && (best = [a, b])));
         const [p, q] = [idxI[best[0]], idxJ[best[1]]];
@@ -324,7 +333,7 @@ function linkageTree(X, rows, nClusters, linkage, metric) {
   const inertia = [];
   rows.forEach((r, ind) => {
     const nbrs = r.filter((c) => c !== ind);
-    A[ind] = new Map(nbrs.map((c) => [c, pairedDistance(X[ind], X[c], metric)]));
+    A[ind] = new Map(nbrs.map((c) => [c, edgeDistance(X, ind, c, metric)]));
     for (const c of nbrs) if (c < ind) inertia.push([A[ind].get(c), ind, c]);
   });
   heapify(inertia, lt);
@@ -381,7 +390,7 @@ function singleLinkageTree(X, rows, nClusters, metric) {
   rows.forEach((r, i) => {
     for (const j of r) {
       if (j === i) continue;
-      const d = pairedDistance(X[i], X[j], metric);
+      const d = edgeDistance(X, i, j, metric);
       edges.push([i, j, d === 0 ? eps : d]);
     }
   });
@@ -443,7 +452,8 @@ function singleLinkageTree(X, rows, nClusters, metric) {
  * Labels of `AgglomerativeClustering(n_clusters, connectivity, linkage,
  * metric).fit_predict(X)`: `X` rows are samples, `adjacency` a list of
  * `[i, j]` connected sample pairs. Linkages "ward", "complete", "average"
- * and "single"; metrics "euclidean"/"l2", "manhattan"/"l1" and "cosine".
+ * and "single"; metrics "euclidean"/"l2", "manhattan"/"l1", "cosine",
+ * "precomputed" (`X` is the distance matrix) or a function of two rows.
  */
 export function agglomerativeClustering(X, adjacency, nClusters, { linkage = "ward", metric = "euclidean" } = {}) {
   const nSamples = X.length;

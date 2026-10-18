@@ -657,12 +657,15 @@ export function busmap_by_greedy_modularity(n, n_clusters, buses_i = null) {
 /**
  * Busmap by hierarchical agglomerative clustering (scikit-learn's Ward,
  * complete, average or single linkage) of `feature` rows, constrained to
- * buses connected by branches.
- * Without a feature all buses are equally similar.
+ * buses connected by branches. `affinity` is a metric name, "precomputed"
+ * (`feature` is the distance matrix between the buses) or a function of two
+ * feature rows. Without a feature all buses are equally similar.
  */
 export function busmap_by_hac(n, n_clusters, { buses_i = null, branch_components = null, feature = null, affinity = "euclidean", linkage = "ward" } = {}) {
   if (!["ward", "complete", "average", "single"].includes(linkage)) throw new Error(`ValueError: Unknown linkage type ${linkage}.`);
-  if (!["euclidean", "l2", "manhattan", "l1", "cosine"].includes(affinity)) throw new Error(`NotImplementedError: metric '${affinity}' is not available in PSA.js`);
+  if (typeof affinity !== "function" && !["euclidean", "l2", "manhattan", "l1", "cosine", "precomputed"].includes(affinity)) {
+    throw new Error(`NotImplementedError: metric '${affinity}' is not available in PSA.js`);
+  }
   if (linkage === "ward" && affinity !== "euclidean" && affinity !== "l2") {
     throw new Error(`ValueError: ${affinity} was provided as metric. Ward can only work with euclidean distances (i.e. 'euclidean' and 'l2').`);
   }

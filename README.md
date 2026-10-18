@@ -156,7 +156,7 @@ sources with `npm run docs`).
   attributes), `sanitize`, carrier colours.
 - **Clustering**: spatial (`get_clustering_from_busmap` with all aggregation
   strategies, greedy-modularity busmaps and HAC busmaps with Ward, complete,
-  average and single linkage) and temporal
+  average and single linkage, named, precomputed or callable metrics) and temporal
   (`resample` with fixed and calendar offsets such as `3h`, `W`, `ME`, `QS`,
   `YE`; `downsample`, `from_snapshot_map`, tsam-style `segment`).
 

@@ -80,6 +80,9 @@ def decode(v, n):
                 columns = pd.MultiIndex.from_tuples([tuple(c) for c in columns], names=spec["column_names"])
             index = pd.Index(spec["index"], name=spec.get("index_name"))
             return pd.DataFrame([[decode(x, n) for x in row] for row in spec["data"]], index=index, columns=columns)
+        if "$metric" in v:
+            # a callable distance of two feature rows, defined alike in test/scenario_runner.js
+            return {"chebyshev": lambda u, w: float(np.max(np.abs(u - w))), "weighted_l1": lambda u, w: float(np.sum(np.abs(u - w) * np.arange(1, len(u) + 1)))}[v["$metric"]]
         if "$grouper" in v:
             # a callable grouper over static columns ("{port}" is replaced by the port)
             spec = v["$grouper"]
