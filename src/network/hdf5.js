@@ -23,7 +23,7 @@
 import { DataFrame } from "../core/frame.js";
 import { Index } from "../core/index.js";
 import { Network } from "./network.js";
-import { collectExport, importFromImporter, pyJsonDumps } from "./io.js";
+import { collectExport, importFromImporter, pyJsonDumps, isUrl, retrieveFromUrl } from "./io.js";
 import { getH5, withScratchFile, isBytes } from "./netcdf.js";
 import { pickleLoads, pickleDumps, tuple, NdArray } from "../core/pickle.js";
 
@@ -545,7 +545,7 @@ async function exportToHDF5(n, path, { export_standard_types = false, complevel 
 Object.assign(Network.prototype, {
   /**
    * Import from an HDF5 store written by PyPSA (pandas/PyTables) or PSA.js
-   * (async): a path, or the file's bytes.
+   * (async): a path, an http(s) URL, or the file's bytes.
    */
   async import_from_hdf5(path, { skip_time = false } = {}) {
     const h5 = await getH5();
@@ -557,6 +557,7 @@ Object.assign(Network.prototype, {
         f.close();
       }
     };
+    if (isUrl(path)) path = await retrieveFromUrl(path);
     if (isBytes(path)) await withScratchFile(path instanceof ArrayBuffer ? new Uint8Array(path) : path, read);
     else read(path);
     return this;

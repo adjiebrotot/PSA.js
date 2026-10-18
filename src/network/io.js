@@ -13,6 +13,28 @@ import { Network, updatePortsComponentAttrs } from "./network.js";
 import { logger } from "../logger.js";
 import { PYPSA_VERSION } from "../components/types.js";
 
+/** IO options (PyPSA: `pypsa.options.general.allow_network_requests`). */
+export const ioOptions = { allow_network_requests: true };
+
+/** `validators.url`: a scheme and a host. */
+export const isUrl = (p) => typeof p === "string" && /^[a-z][a-z0-9+.-]*:\/\/[^\s/?#]+/i.test(p);
+
+/** `_retrieve_from_url`: the bytes behind `url` (http and https only). */
+export async function retrieveFromUrl(url) {
+  if (!ioOptions.allow_network_requests) {
+    throw new Error("ValueError: Network requests are disabled. Set `ioOptions.allow_network_requests = true` to enable URL loading.");
+  }
+  logger.info(`Retrieving network data from ${url}.`);
+  if (!url.startsWith("http")) throw new Error(`ValueError: Invalid URL: ${url}`);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP Error ${res.status}: ${res.statusText}`);
+    return new Uint8Array(await res.arrayBuffer());
+  } catch (e) {
+    throw new Error(`ValueError: Failed to retrieve network data from ${url}: ${e.message}`);
+  }
+}
+
 export { PYPSA_VERSION };
 
 export const DEFAULT_CRS_WKT =
@@ -500,6 +522,7 @@ Object.assign(Network.prototype, {
    * Import from a CSV folder (path on disk or in-memory {filename: text} map).
    */
   import_from_csv_folder(path, { skip_time = false } = {}) {
+    if (isUrl(path)) throw new Error("ValueError: CSV folders cannot be read from URLs; download them, or pass the files as a MemoryFolder");
     const folder = asFolder(path);
     importFromImporter(this, new ImporterCSV(folder), skip_time);
     return this;

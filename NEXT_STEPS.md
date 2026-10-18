@@ -1,6 +1,6 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 113 tests: the parity
+State at hand-off: all PSA.js tests pass (`npm test`: 114 tests: the parity
 scenarios, IO tests and the example scripts; `npm run test:browser` passes in
 headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
 of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
@@ -22,7 +22,10 @@ browser smoke test are run separately.
    `clustering_hac`); single linkage stays open (scipy's MST with numpy's
    unstable argsort for ties).
 2. ~~HDF5 IO~~ done (see section 2, IO formats).
-3. netCDF URL inputs (`fetch` then `from_netcdf(bytes)`), CSV/Excel URLs.
+3. ~~URL inputs~~ done: `from_netcdf` / `from_hdf5` (and the `import_from_*`
+   methods) accept http(s) URLs (`fetch`, PyPSA's `_retrieve_from_url`
+   errors, `ioOptions.allow_network_requests`); the synchronous Excel and
+   CSV loaders raise with instructions (fetch the bytes first).
 4. More examples from PyPSA's notebooks (MGA, SCLOPF, rolling horizon,
    multi-period investment, losses) and an API reference.
 5. Report the upstream bugs listed in section 3 (PyPSA issues).

@@ -15,7 +15,7 @@
 import { DataFrame } from "../core/frame.js";
 import { Index } from "../core/index.js";
 import { Network } from "./network.js";
-import { collectExport, importFromImporter } from "./io.js";
+import { collectExport, importFromImporter, isUrl, retrieveFromUrl } from "./io.js";
 
 const IS_NODE = Boolean(globalThis.process?.versions?.node);
 
@@ -465,8 +465,9 @@ async function exportToNetCDF(n, path, { export_standard_types = false, compress
 
 Object.assign(Network.prototype, {
   /**
-   * Import from a netCDF file written by PyPSA or PSA.js (async): a path, or
-   * the file's bytes (Uint8Array / ArrayBuffer, e.g. in browsers).
+   * Import from a netCDF file written by PyPSA or PSA.js (async): a path, an
+   * http(s) URL, or the file's bytes (Uint8Array / ArrayBuffer, e.g. in
+   * browsers).
    */
   async import_from_netcdf(path, { skip_time = false } = {}) {
     const h5 = await getH5();
@@ -478,6 +479,7 @@ Object.assign(Network.prototype, {
         f.close();
       }
     };
+    if (isUrl(path)) path = await retrieveFromUrl(path);
     if (isBytes(path)) await withScratchFile(path instanceof ArrayBuffer ? new Uint8Array(path) : path, read);
     else read(path);
     return this;

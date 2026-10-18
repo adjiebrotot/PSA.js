@@ -315,3 +315,34 @@ test("HDF5 export of a stochastic network raises", async () => {
   const n = await Network.from_netcdf(ncPath("stochastic"));
   await assert.rejects(() => n.export_to_hdf5(null), /NotImplementedError: Stochastic networks are not supported in the HDF5 exporter/);
 });
+
+test("netCDF and HDF5 from URLs (local HTTP server)", async () => {
+  const http = await import("node:http");
+  const { readFileSync } = await import("node:fs");
+  const { ioOptions } = await import("../src/index.js");
+  const server = http.createServer((req, res) => {
+    const file = req.url === "/solved.nc" ? ncPath("ac-dc-meshed-solved") : req.url === "/meta.h5" ? h5Path("ac-dc-meshed-meta") : null;
+    if (!file) {
+      res.writeHead(404, "Not Found").end();
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "application/octet-stream" }).end(readFileSync(file));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    assertNetworkMatches(await Network.from_netcdf(`${base}/solved.nc`), loadFixture("io_solved").network_nc, { rtol: 0, atol: 0 });
+    const m = await Network.from_hdf5(`${base}/meta.h5`);
+    assertNetworkMatches(m, hdf5Fx["ac-dc-meshed-meta"].network, { rtol: 0, atol: 0 });
+    assert.deepEqual(m.meta, hdf5Fx["ac-dc-meshed-meta"].meta);
+    await assert.rejects(() => Network.from_hdf5(`${base}/missing.h5`), /ValueError: Failed to retrieve network data from .*missing\.h5: HTTP Error 404/);
+    await assert.rejects(() => Network.from_netcdf("ftp://example.com/x.nc"), /ValueError: Invalid URL/);
+    assert.throws(() => Network.from_excel(`${base}/x.xlsx`), /ValueError: Excel workbooks at URLs/);
+    assert.throws(() => Network.from_csv_folder(`${base}/folder`), /ValueError: CSV folders cannot be read from URLs/);
+    ioOptions.allow_network_requests = false;
+    await assert.rejects(() => Network.from_netcdf(`${base}/solved.nc`), /ValueError: Network requests are disabled/);
+  } finally {
+    ioOptions.allow_network_requests = true;
+    server.close();
+  }
+});

@@ -86,7 +86,9 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
   `export_to_excel`; PyPSA's sheet layout, no extra dependency), HDF5 stores
   in pandas' `HDFStore` layout (`import_from_hdf5`, `export_to_hdf5`; files
   written by PSA.js re-import identically in PyPSA) and PYPOWER cases
-  (`import_from_pypower_ppc`).
+  (`import_from_pypower_ppc`). netCDF and HDF5 files also load from http(s)
+  URLs (`ioOptions.allow_network_requests`, PyPSA's
+  `options.general.allow_network_requests`).
 - **Topology and power flow**: sub-networks, cycle matrices (networkx-ordered
   `bfs-refined` default and `paton` cycle bases), PTDF/BODF, linear power flow,
   contingency analysis, Newton-Raphson AC power flow incl. distributed slack,

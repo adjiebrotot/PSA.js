@@ -17,7 +17,7 @@ import { Index } from "../core/index.js";
 import { DataFrame } from "../core/frame.js";
 import { readCSV, pyFloatRepr } from "../core/csv.js";
 import { readZip, writeZip, zipText } from "../core/zip.js";
-import { collectExport, importFromImporter, pyJsonDumps } from "./io.js";
+import { collectExport, importFromImporter, pyJsonDumps, isUrl } from "./io.js";
 import { logger } from "../logger.js";
 
 const fs = globalThis.process?.getBuiltinModule?.("node:fs") ?? null;
@@ -461,6 +461,9 @@ function exportSheets(n, { export_standard_types = false } = {}) {
 }
 
 function readBytes(path) {
+  if (isUrl(path)) {
+    throw new Error("ValueError: Excel workbooks at URLs: fetch the bytes first, e.g. `Network.from_excel(new Uint8Array(await (await fetch(url)).arrayBuffer()))`");
+  }
   if (path instanceof Uint8Array) return path;
   if (path instanceof ArrayBuffer) return new Uint8Array(path);
   if (!fs) throw new Error("Reading files needs Node.js; pass the workbook bytes instead");
