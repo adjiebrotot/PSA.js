@@ -195,15 +195,15 @@ browser smoke test are run separately.
       `expr * var`, `pow(2)`, sums, mixing with linear terms) and quadratic
       objectives via `set_objective` / `add_objective` (scenario
       `opt_quadexpr`), `groupby` with a DataFrame (multi-key) grouper and
-      `Variable.fillna` (also after a Variable's `shift` / `where`). Missing:
-      quadratic constraints, centred rolling windows, `where` with a
+      `Variable.fillna` (also after a Variable's `shift` / `where`), centred
+      rolling windows (`center`). Missing: quadratic constraints, `where` with a
       condition over dimensions the expression lacks, and longer chains on
       Variable-returning operations (JS `Variable.shift/where` return
       expressions, so e.g. a second `shift` pads with NaN instead of a
       coefficient of 1).
 - [ ] Statistics: callable groupers with multi-index results, pandas
       aggregations beyond sum/mean/min/max/median/first/last/std/var/prod/
-      count (e.g. `sem`, `nunique`). (Done: scenario `statistics_more` covers
+      count/sem/nunique (e.g. `skew`). (Done: scenario `statistics_more` covers
       `groupby_method` and `groupby_time` aggregations, aggregation across
       components, ports, carrier/bus-carrier filters, nice names, storage
       capacities and price weightings; the overview table `n.statistics()`

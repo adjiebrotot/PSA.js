@@ -1,5 +1,5 @@
 {
-  "description": "More statistics options on solved networks: groupby_method aggregations (mean, max, min, median, first, last, std, var, prod, count), time aggregations other than sum, aggregation across components, ports, carrier and bus carrier filters (strings, patterns, lists), nice names, storage capacities, price weightings and the overview table with options.",
+  "description": "More statistics options on solved networks: groupby_method aggregations (mean, max, min, median, first, last, std, var, prod, count, sem, nunique), time aggregations other than sum (incl. sem, nunique), aggregation across components, ports, carrier and bus carrier filters (strings, patterns, lists), nice names, storage capacities, price weightings and the overview table with options.",
   "tolerance": {"rtol": 1e-06, "atol": 1e-06},
   "ops": [
     ["load_example", "ac-dc-meshed"],
@@ -48,6 +48,10 @@
     ["record", "acdc_39_capex", "path", ["statistics", ["capex", [], {"carrier": "wind|gas"}]]],
     ["record", "acdc_40_supply", "path", ["statistics", ["supply", [], {"carrier": ["wind", "gas"], "groupby": "bus"}]]],
     ["record", "acdc_41_supply", "path", ["statistics", ["supply", [], {"bus_carrier": ["AC", "DC"]}]]],
+    ["record", "acdc_42_optimal_capacity", "path", ["statistics", ["optimal_capacity", [], {"groupby_method": "sem"}]]],
+    ["record", "acdc_43_supply", "path", ["statistics", ["supply", [], {"groupby_time": "sem"}]]],
+    ["record", "acdc_44_optimal_capacity", "path", ["statistics", ["optimal_capacity", [], {"groupby_method": "nunique"}]]],
+    ["record", "acdc_45_supply", "path", ["statistics", ["supply", [], {"groupby_time": "nunique"}]]],
     ["record", "acdc_overview", "path", ["statistics", ["__call__", [], {}]]],
     ["record", "acdc_overview_period", "path", ["statistics", ["__call__", [], {"groupby": "bus_carrier", "aggregate_across_components": true}]]],
     ["load_example", "model-energy"],
@@ -96,6 +100,10 @@
     ["record", "me_39_withdrawal", "path", ["statistics", ["withdrawal", [], {"bus_carrier": "hydrogen"}]]],
     ["record", "me_40_energy_balance", "path", ["statistics", ["energy_balance", [], {"bus_carrier": ["electricity", "hydrogen"], "groupby": "bus_carrier"}]]],
     ["record", "me_41_capex", "path", ["statistics", ["capex", [], {"components": ["Store", "Link"]}]]],
+    ["record", "me_42_optimal_capacity", "path", ["statistics", ["optimal_capacity", [], {"groupby_method": "sem"}]]],
+    ["record", "me_43_supply", "path", ["statistics", ["supply", [], {"groupby_time": "sem"}]]],
+    ["record", "me_44_optimal_capacity", "path", ["statistics", ["optimal_capacity", [], {"groupby_method": "nunique"}]]],
+    ["record", "me_45_supply", "path", ["statistics", ["supply", [], {"groupby_time": "nunique"}]]],
     ["record", "me_overview", "path", ["statistics", ["__call__", [], {}]]],
     ["record", "me_overview_period", "path", ["statistics", ["__call__", [], {"groupby": "bus_carrier", "aggregate_across_components": true}]]]
   ]

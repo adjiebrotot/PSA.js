@@ -1,5 +1,5 @@
 {
-  "description": "linopy expression methods for custom constraints: shift, roll, diff, rolling sums, cumsum, where, groupby, isel and fillna on variables and expressions (term layout incl. -1/NaN padding) and the LP rows of constraints built from them.",
+  "description": "linopy expression methods for custom constraints: shift, roll, diff, rolling sums (incl. centred windows), cumsum, where, groupby, isel and fillna on variables and expressions (term layout incl. -1/NaN padding) and the LP rows of constraints built from them.",
   "tolerance": {"rtol": 1e-09, "atol": 1e-09},
   "ops": [
     ["load_example", "ac-dc-meshed"],
@@ -74,6 +74,12 @@
     ["record", "diff_sum", "result", "diff_sum"],
     ["linexpr", "rolling_sum", {"var": "Generator-p"}, [["rolling", [], {"snapshot": 2}], ["sum"], ["sum", ["snapshot"]]]],
     ["record", "rolling_sum", "result", "rolling_sum"],
+    ["linexpr", "rolling_center3", {"var": "Generator-p"}, [["rolling", [], {"snapshot": 3, "center": true}], ["sum"]]],
+    ["record", "rolling_center3", "result", "rolling_center3"],
+    ["linexpr", "rolling_center4", {"var": "Generator-p"}, [["mul", [2]], ["add", [1]], ["rolling", [{"snapshot": 4}], {"center": true}], ["sum"]]],
+    ["record", "rolling_center4", "result", "rolling_center4"],
+    ["linexpr", "rolling_center_map", {"var": "Generator-p"}, [["rolling", [], {"snapshot": 2, "center": {"snapshot": true}}], ["sum"]]],
+    ["record", "rolling_center_map", "result", "rolling_center_map"],
     ["linexpr", "c_ramp", {"var": "Generator-p"}, [["diff", ["snapshot"]]]],
     ["expr_constraint", "c_ramp", "<=", 100, "c_ramp"],
     ["linexpr", "c_roll", {"var": "Generator-p"}, [["rolling", [], {"snapshot": 2}], ["sum"]]],

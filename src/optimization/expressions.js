@@ -212,17 +212,19 @@ export class LinearExpression {
 
   /**
    * Rolling window along one dimension (`{dim: window}`); `.sum()` stacks the
-   * window (oldest first) into the terms, padding the first cells.
+   * window (oldest first) into the terms, padding the first cells (with
+   * `center`, a bool or `{dim: bool}`, xarray's centred windows).
    */
   rolling(dims, opts = {}) {
     const spec = { ...dims };
     for (const k of ["min_periods", "center"]) delete spec[k];
-    if (dims.center || opts.center) throw new Error("NotImplementedError: centred rolling windows are not supported");
     const entries = Object.entries(spec);
     if (entries.length !== 1) throw new Error("ValueError: Mapping argument is necessary for 2d-rolling.");
     const [dim, window] = entries[0];
     if (!this.dims.includes(dim)) throw new Error(`Dimension ${dim} not in expression`);
-    return new LinearExpressionRolling(this, dim, window);
+    const centerSpec = dims.center ?? opts.center ?? false;
+    const center = centerSpec !== null && typeof centerSpec === "object" ? Boolean(centerSpec[dim]) : Boolean(centerSpec);
+    return new LinearExpressionRolling(this, dim, window, center);
   }
 
   /** Cumulative sum along `dim` (a rolling window over the whole dimension). */
@@ -737,10 +739,11 @@ function broadcastTo(e, target) {
 
 /** `expr.rolling({dim: window})`: windows along one dimension. */
 export class LinearExpressionRolling {
-  constructor(expr, dim, window) {
+  constructor(expr, dim, window, center = false) {
     this.expr = expr;
     this.dim = dim;
     this.window = window;
+    this.center = center;
   }
 
   /** Window terms stacked into each cell (old term outermost), constants summed skipping NaN. */
@@ -753,11 +756,13 @@ export class LinearExpressionRolling {
     const vars = new Int32Array(e.size * nterm).fill(-1);
     const coeffs = new Float64Array(e.size * nterm).fill(NaN);
     const consts = new Float64Array(e.size);
+    // centred windows reach (w - 1) // 2 cells ahead
+    const ahead = this.center ? Math.floor((w - 1) / 2) : 0;
     for (let k = 0; k < e.size; k++) {
       const p = Math.floor(k / e.strides[d]) % e.shape[d];
       for (let r = 0; r < w; r++) {
-        const q = p - (w - 1) + r;
-        if (q < 0) continue;
+        const q = p - (w - 1) + r + ahead;
+        if (q < 0 || q >= e.shape[d]) continue;
         const src = k + (q - p) * e.strides[d];
         for (let t = 0; t < nt; t++) {
           vars[k * nterm + t * w + r] = e.vars[src * nt + t];

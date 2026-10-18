@@ -168,6 +168,11 @@ export function aggregate(values, agg) {
       for (const x of v) p *= x;
       return p;
     }
+    case "sem":
+      // std (ddof=1) over the square root of the count
+      return v.length > 1 ? Math.sqrt(aggregate(v, "var")) / Math.sqrt(v.length) : NaN;
+    case "nunique":
+      return new Set(v.map((x) => (Object.is(x, -0) ? 0 : x))).size;
     default:
       throw new Error(`Unsupported aggregation '${agg}'`);
   }
