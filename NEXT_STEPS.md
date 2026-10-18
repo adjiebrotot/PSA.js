@@ -1,7 +1,29 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 59 tests, the parity
-scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
+State at hand-off: all PSA.js tests pass (`npm test`: 94 tests: the parity
+scenarios, IO tests and the example scripts; `npm run test:browser` passes in
+headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
+of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
+
+Fixture environment: `scripts/parity/requirements.txt` now also pins
+scikit-learn (HAC), openpyxl and python-calamine (Excel), PYPOWER and tsam.
+`generate_all.sh` regenerates every fixture; `check_js_excel.py` (PyPSA reads
+PSA.js workbooks) and the browser smoke test are run separately.
+
+## 0. Suggested next steps
+
+1. `busmap_by_hac` with complete/average linkage: sklearn's `linkage_tree`
+   with connectivity (a weight-only `WeightedEdge` heap and ordered
+   `IntFloatDict` merges, `max_merge` / `average_merge`) is exactly portable
+   on top of `src/clustering/hac.js`; single linkage needs scipy's MST with
+   numpy's unstable argsort for ties and is not.
+2. HDF5 IO (`import_from_hdf5` / `export_to_hdf5`): PyTables table layout plus
+   a minimal pickle reader/writer for the `meta` / `crs` object arrays.
+3. netCDF URL inputs (`fetch` then `from_netcdf(bytes)`), CSV/Excel URLs.
+4. More examples from PyPSA's notebooks (MGA, SCLOPF, rolling horizon,
+   multi-period investment, losses) and an API reference.
+5. Report the upstream bugs listed in section 3 (PyPSA issues).
+6. Stochastic leftovers (components added after `set_scenarios`).
 
 ## 1. Housekeeping
 
@@ -71,7 +93,6 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       `test/fixtures/excel`); `scripts/parity/check_js_excel.py` confirms that
       PyPSA imports PSA.js workbooks identically (run manually; all 7 pass).
       Like the netCDF files, regenerated workbooks differ in metadata bytes.
-      Browser use needs the workbook bytes and, for deflated workbooks, a zlib.
 - [x] `import_from_pypower_ppc` (scenario `io_pypower`: pypower's case9,
       case14, case30 and case39 imported and solved by AC power flow).
 - [ ] **IO formats**: HDF5 (pandas HDFStore: PyTables "table" groups with
@@ -96,28 +117,31 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
 - [ ] netCDF extras: URL inputs, float32 variables stored as float32
       (PSA.js rounds the values but writes float64). Done: `float32` and
       PyPSA's `compression` dict (`io.test.js`, fixture `io_float32`).
-- [ ] `to_crs` (coordinate transformation; needs a proj4 equivalent).
-- [ ] **Clustering**: `segment` for snapshots that are not hourly (PyPSA passes
-      the snapshot count to tsam as hours, so tsam forms several periods and
-      only part of the series is segmented, an upstream bug; PSA.js raises),
-      `busmap_by_hac` with linkages other
-      than "ward" (sklearn's `linkage_tree`: single, complete, average, other
-      metrics; PSA.js raises NotImplementedError), parity for `busmap_by_kmeans` (current implementation is a seeded
-      Lloyd/k-means++, not scikit-learn), multiples of calendar offsets in
-      `resample` ("2W", "3ME"; PSA.js raises). Done: calendar offsets `W`,
-      `W-<day>`, `ME`, `MS`, `QE[-<month>]`, `QS[-<month>]`, `YE[-<month>]`,
-      `YS[-<month>]` (scenario `clustering_resample`);
+- [ ] `to_crs` (coordinate transformation; needs PROJ-accurate projections
+      and pyproj's WKT per EPSG code; PyPSA's own `to_crs` swaps the axes, see
+      section 3).
+- [x] **Clustering** done: calendar offsets in `resample` (`W`, `W-<day>`,
+      `ME`, `MS`, `QE[-<month>]`, `QS[-<month>]`, `YE[-<month>]`,
+      `YS[-<month>]`; scenario `clustering_resample`);
       `busmap_by_greedy_modularity` / `cluster_by_greedy_modularity` (port of
-      networkx's CNM algorithm incl. its heap tie-breaking, scenario
+      networkx's CNM algorithm incl. its heap tie-breaking; scenario
       `clustering_modularity`); `busmap_by_hac` / `cluster_by_hac` with Ward
       linkage (port of scikit-learn's connectivity-constrained `ward_tree`,
       component completion, `_hc_cut` / `hc_get_heads`; scenario
-      `clustering_hac`); `segment` / `get_segment_result` for hourly or
-      non-datetime snapshots (tsam's pipeline with one typical period:
-      min-max scaling, Ward clustering of neighbouring snapshots, segment
-      means; scenario `clustering_segment`). The completion compares squared distances computed
-      like numpy's BLAS `dot` with FMA; on CPUs without FMA the fixture could
-      differ for coincident buses.
+      `clustering_hac`; the completion compares squared distances computed
+      like numpy's BLAS `dot` with FMA, so on CPUs without FMA the fixture
+      could differ for coincident buses); `segment` / `get_segment_result`
+      for hourly or non-datetime snapshots (tsam's pipeline with one typical
+      period: min-max scaling, Ward clustering of neighbouring snapshots,
+      segment means; scenario `clustering_segment`).
+- [ ] **Clustering** open: `segment` for snapshots that are not hourly (PyPSA
+      passes the snapshot count to tsam as hours, so tsam forms several
+      periods and only part of the series is segmented, an upstream bug;
+      PSA.js raises); `busmap_by_hac` with linkages other than "ward" (see
+      section 0; PSA.js raises NotImplementedError); parity for
+      `busmap_by_kmeans` (a seeded Lloyd/k-means++, not scikit-learn's, whose
+      threaded chunk reductions make exact parity unlikely); multiples of
+      calendar offsets in `resample` ("2W", "3ME"; PSA.js raises).
 - [ ] Plotting (`n.plot`, `n.explore`, statistics plots) — out of scope or a
       separate package.
 - [ ] Solvers other than HiGHS; solver option passthrough is only tested for
