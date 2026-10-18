@@ -48,6 +48,7 @@ export function decodeValue(v, n) {
       const columns = spec.column_names ? new Index(spec.columns, spec.column_names) : spec.columns;
       return new DataFrame({ index: new Index(spec.index), columns, data });
     }
+    if ("$ppc" in v) return v.$ppc;
     if ("$columns" in v) {
       // a column subset of a frame reached by path
       const df = getPathSync(n, v.$columns.path);

@@ -1329,6 +1329,14 @@ export function makeStatisticsAccessor(n) {
   }
   fn.groupers = groupers;
   fn._accessor = acc;
+  Object.defineProperty(fn, "is_multi_indexed", { get: () => acc.is_multi_indexed, enumerable: true });
+  Object.defineProperty(fn, "n", {
+    get: () => {
+      logger.warning("Accessing the network instance via `n` is deprecated. Use the network instance directly.");
+      return n;
+    },
+    enumerable: true,
+  });
   return fn;
 }
 

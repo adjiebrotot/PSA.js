@@ -72,8 +72,18 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       PyPSA imports PSA.js workbooks identically (run manually; all 7 pass).
       Like the netCDF files, regenerated workbooks differ in metadata bytes.
       Browser use needs the workbook bytes and, for deflated workbooks, a zlib.
-- [ ] **IO formats**: HDF5 (pandas HDFStore layout), `import_from_pypower_ppc`,
-      `import_from_pandapower_net` (likely out of scope without Python).
+- [x] `import_from_pypower_ppc` (scenario `io_pypower`: pypower's case9,
+      case14, case30 and case39 imported and solved by AC power flow).
+- [ ] **IO formats**: HDF5 (pandas HDFStore: PyTables "table" groups with
+      compound datasets and pandas/PyTables attributes, and `meta`/`crs`
+      stored as pickled object arrays, so reading or writing them needs a
+      minimal pickle implementation on top of h5wasm),
+      `import_from_pandapower_net` (needs a pandapower net, i.e. Python).
+- [x] Small API gaps found by diffing `dir(pypsa.Network())`: deprecated
+      `n.cluster` aliases (`busmap_by_hac`, `busmap_by_greedy_modularity`,
+      `cluster_spatially_by_*`), `n.statistics.n` / `.is_multi_indexed`,
+      `Network.get_network` (raises outside collections). Remaining: `plot`,
+      `explore`, `to_crs`, HDF5, pandapower.
 - [ ] netCDF extras: `float32`, `compression=None`, URL inputs, browser support
       (h5wasm in-memory files), shapes/geometry (WKT) round trip.
 - [ ] `to_crs` (coordinate transformation; needs a proj4 equivalent).
@@ -98,8 +108,9 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       basic options. HiGHS' QP solver is slow on larger quadratic problems
       (also true in PyPSA).
 - [ ] Deprecated APIs not mirrored (e.g. `n.lopf`, old `n.generators_t`
-      style accessors beyond what exists) — check `scripts/parity` API diff:
-      run `/tmp`-style comparison of `dir(pypsa.Network())` vs PSA.js.
+      style accessors beyond what exists). `dir(pypsa.Network())` and the
+      `optimize`, `statistics`, `cluster` and `c` accessors were diffed
+      against PSA.js in this session (see the API gaps item above).
 
 ## 3. Parity gaps to close
 

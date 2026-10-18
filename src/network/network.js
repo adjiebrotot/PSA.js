@@ -322,6 +322,11 @@ export class Network {
     return false;
   }
 
+  /** A single network of a NetworkCollection (only collections have members). */
+  get_network() {
+    throw new Error("ValueError: This method can only be used on a NetworkCollection.");
+  }
+
   toString() {
     return `PyPSA Network '${this.name}'`;
   }

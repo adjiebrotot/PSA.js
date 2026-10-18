@@ -68,8 +68,9 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
 - **IO**: CSV folders (import and byte-identical export), netCDF import/export
   in PyPSA's layout (files written by PSA.js re-import identically in PyPSA),
   including piecewise breakpoint data (`<list>-<attr>-pw.csv`,
-  `<list>_pw_<attr>`), and Excel workbooks (`import_from_excel`,
-  `export_to_excel`; PyPSA's sheet layout, no extra dependency).
+  `<list>_pw_<attr>`), Excel workbooks (`import_from_excel`,
+  `export_to_excel`; PyPSA's sheet layout, no extra dependency) and PYPOWER
+  cases (`import_from_pypower_ppc`).
 - **Topology and power flow**: sub-networks, cycle matrices (networkx-ordered
   `bfs-refined` default and `paton` cycle bases), PTDF/BODF, linear power flow,
   contingency analysis, Newton-Raphson AC power flow incl. distributed slack,
@@ -164,7 +165,7 @@ from libm by one ulp on some CPUs).
 ## Not implemented / known differences
 
 See [`NEXT_STEPS.md`](NEXT_STEPS.md) for the remaining work list. In short:
-HDF5 IO, pandapower/PYPOWER importers, plotting, `to_crs`, tsam
+HDF5 IO, the pandapower importer, plotting, `to_crs`, tsam
 segmentation, non-Ward HAC linkages, k-means busmaps (a seeded approximation,
 not scikit-learn's), solvers other than HiGHS.
 

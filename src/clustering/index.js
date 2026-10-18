@@ -28,6 +28,22 @@ export class ClusteringAccessor {
   cluster_spatially_by_kmeans(bus_weightings, n_clusters, opts = {}) {
     return this.spatial.cluster_by_kmeans(bus_weightings, n_clusters, opts);
   }
+
+  busmap_by_hac(n_clusters, opts = {}) {
+    return this.spatial.busmap_by_hac(n_clusters, opts);
+  }
+
+  cluster_spatially_by_hac(n_clusters, opts = {}) {
+    return this.spatial.cluster_by_hac(n_clusters, opts);
+  }
+
+  busmap_by_greedy_modularity(n_clusters, buses_i = null) {
+    return this.spatial.busmap_by_greedy_modularity(n_clusters, buses_i);
+  }
+
+  cluster_spatially_by_greedy_modularity(n_clusters, buses_i = null, opts = {}) {
+    return this.spatial.cluster_by_greedy_modularity(n_clusters, buses_i, opts);
+  }
 }
 
 Network._accessorInitialisers.push((n) => {
