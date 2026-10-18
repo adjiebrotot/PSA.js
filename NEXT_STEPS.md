@@ -1,6 +1,6 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 135 tests: the parity
+State at hand-off: all PSA.js tests pass (`npm test`: 136 tests: the parity
 scenarios, IO tests and the example scripts; `npm run test:browser` passes in
 headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
 of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
@@ -34,11 +34,9 @@ Candidates for the next session, roughly by value:
    ...`) would be the fastest option for PyPSA-Eur-sized models, but
    linopy has no command-line HiGHS path to mirror, so its results would
    only be checkable against highspy's.
-3. **More CRS**: `to_crs` supports EPSG 4326, 4258, 3857, 3035 and UTM
-   32/33 (WGS 84 / ETRS89). All UTM zones (326xx/327xx, 258xx) only need
-   the WKT pattern generalised (`src/core/crs.js`, compare with pyproj's
-   `CRS.to_wkt()`); Lambert-93 (2154, LCC) needs a new projection; datum
-   shifts (27700, 31467) are harder.
+3. **More CRS**: `to_crs` supports EPSG 4326, 4258, 3857, 3035 and all UTM
+   zones. Lambert-93 (2154, LCC) needs a new projection (port PROJ's
+   `lcc`); datum shifts (27700, 31467: Helmert transformations) are harder.
 4. **Clustering leftovers**: `busmap_by_hac` with a callable or
    precomputed metric; `busmap_by_kmeans` parity is unlikely (threaded
    scikit-learn reductions).
@@ -233,8 +231,11 @@ Candidates for the next session, roughly by value:
       stored as float32 like PyPSA's `typecast_float32`; PyPSA reads the file
       identically to its own) and PyPSA's `compression` dict (`io.test.js`,
       fixture `io_float32`).
-- [x] `to_crs`, `n.crs` / `n.srid` (scenario `crs`, 11 records): EPSG 4326,
-      4258, 3857, 3035, 32632, 32633, 25832 and 25833 with pyproj's WKT
+- [x] `to_crs`, `n.crs` / `n.srid` (scenario `crs`, 21 records): EPSG 4326,
+      4258, 3857, 3035 and every UTM zone (WGS 84 32601-32660 / 32701-32760,
+      ETRS89 25828-25838; the zone WKTs come from one template plus the
+      zones' USAGE blocks generated from pyproj, `scripts/generate_crs_data.py`,
+      all 131 identical to pyproj's, `crs_utm_wkt.json.gz`) with pyproj's WKT
       (`src/core/crs.js`: PROJ's webmerc, ellipsoidal oblique LAEA with an
       exact authalic-latitude inverse, Poder/Engsager transverse Mercator,
       `adjlon` and PROJ's range checks giving `Infinity`). Shapes are

@@ -414,3 +414,12 @@ test("examples: download, cache, 404 fallback and disabled network requests", { 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("UTM zone WKTs equal pyproj's for all WGS 84 and ETRS89 zones", async () => {
+  const { gunzipSync } = await import("node:zlib");
+  const { readFileSync } = await import("node:fs");
+  const { wktOf } = await import("../src/core/crs.js");
+  const fx = JSON.parse(gunzipSync(readFileSync(path.join(ROOT, "test", "fixtures", "crs_utm_wkt.json.gz"))).toString());
+  assert.equal(Object.keys(fx.wkt).length, 131);
+  for (const [code, wkt] of Object.entries(fx.wkt)) assert.equal(wktOf(Number(code)), wkt, `EPSG:${code}`);
+});

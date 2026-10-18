@@ -201,7 +201,7 @@ from libm by one ulp on some CPUs).
 
 See [`NEXT_STEPS.md`](NEXT_STEPS.md) for the remaining work list. In short:
 plotting, segmentation of non-hourly snapshots, `to_crs` beyond a set of
-common EPSG codes (4326, 4258, 3857, 3035, UTM 32/33 on WGS 84 and ETRS89), k-means busmaps (a seeded approximation,
+common EPSG codes (4326, 4258, 3857, 3035 and all UTM zones on WGS 84 and ETRS89), k-means busmaps (a seeded approximation,
 not scikit-learn's), solvers other than HiGHS, CBC and GLPK.
 
 PyPSA v1.4.0 behaviour that PSA.js mirrors on stochastic networks (likely

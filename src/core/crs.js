@@ -5,10 +5,14 @@
  * from PROJ (geographic WGS 84 / ETRS89, Popular Visualisation
  * Pseudo-Mercator, Lambert azimuthal equal-area and the Poder/Engsager
  * transverse Mercator of UTM). WGS 84 and ETRS89 are related by PROJ's null
- * transformation ("ETRS89 to WGS 84 (1)").
+ * transformation ("ETRS89 to WGS 84 (1)"). UTM zones: all of WGS 84 (EPSG
+ * 32601-32660 north, 32701-32760 south) and ETRS89 (25828-25838), their WKT
+ * built from one template and the zones' USAGE blocks (`src/data/utm_usage.js`).
  */
 
-/** WKT of the supported EPSG codes (pyproj's `CRS.from_epsg(code).to_wkt()`, PROJ 9.8). */
+import { UTM_USAGE } from "../data/utm_usage.js";
+
+/** WKT of the supported non-UTM EPSG codes (pyproj's `CRS.from_epsg(code).to_wkt()`, PROJ 9.8). */
 export const CRS_WKT = {
   4326:
     "GEOGCRS[\"WGS 84\",ENSEMBLE[\"World Geodetic System 1984 ensemble\",MEMBER[\"World Geodetic System 1984 (Transit)\"],MEMBER[\"World Geodetic System 1984 (G730)\"],MEMBER[\"World Geodetic System 1984 (G873)\"],MEMBER[\"World Geodetic System 1984 (G1150)\"],MEMBER[\"World Geodetic System 1984 (G1674)\"],MEMBER[\"World Geodetic System 1984 (G1762)\"],MEMBER[\"World Geodetic System 1984 (G2139)\"],MEMBER[\"World Geodetic System 1984 (G2296)\"],ELLIPSOID[\"WGS 84\",6378137,298.257223563,LENGTHUNIT[\"metre\",1]],ENSEMBLEACCURACY[2.0]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],CS[ellipsoidal,2],AXIS[\"geodetic latitude (Lat)\",north,ORDER[1],ANGLEUNIT[\"degree\",0.0174532925199433]],AXIS[\"geodetic longitude (Lon)\",east,ORDER[2],ANGLEUNIT[\"degree\",0.0174532925199433]],USAGE[SCOPE[\"Horizontal component of 3D system.\"],AREA[\"World.\"],BBOX[-90,-180,90,180]],ID[\"EPSG\",4326]]",
@@ -18,14 +22,6 @@ export const CRS_WKT = {
     "PROJCRS[\"WGS 84 / Pseudo-Mercator\",BASEGEOGCRS[\"WGS 84\",ENSEMBLE[\"World Geodetic System 1984 ensemble\",MEMBER[\"World Geodetic System 1984 (Transit)\"],MEMBER[\"World Geodetic System 1984 (G730)\"],MEMBER[\"World Geodetic System 1984 (G873)\"],MEMBER[\"World Geodetic System 1984 (G1150)\"],MEMBER[\"World Geodetic System 1984 (G1674)\"],MEMBER[\"World Geodetic System 1984 (G1762)\"],MEMBER[\"World Geodetic System 1984 (G2139)\"],MEMBER[\"World Geodetic System 1984 (G2296)\"],ELLIPSOID[\"WGS 84\",6378137,298.257223563,LENGTHUNIT[\"metre\",1]],ENSEMBLEACCURACY[2.0]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4326]],CONVERSION[\"Popular Visualisation Pseudo-Mercator\",METHOD[\"Popular Visualisation Pseudo Mercator\",ID[\"EPSG\",1024]],PARAMETER[\"Latitude of natural origin\",0,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8801]],PARAMETER[\"Longitude of natural origin\",0,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8802]],PARAMETER[\"False easting\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8806]],PARAMETER[\"False northing\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8807]]],CS[Cartesian,2],AXIS[\"easting (X)\",east,ORDER[1],LENGTHUNIT[\"metre\",1]],AXIS[\"northing (Y)\",north,ORDER[2],LENGTHUNIT[\"metre\",1]],USAGE[SCOPE[\"Web mapping and visualisation.\"],AREA[\"World between 85.06\u00b0S and 85.06\u00b0N.\"],BBOX[-85.06,-180,85.06,180]],ID[\"EPSG\",3857]]",
   3035:
     "PROJCRS[\"ETRS89-extended / LAEA Europe\",BASEGEOGCRS[\"ETRS89\",ENSEMBLE[\"European Terrestrial Reference System 1989 ensemble\",MEMBER[\"European Terrestrial Reference Frame 1989\"],MEMBER[\"European Terrestrial Reference Frame 1990\"],MEMBER[\"European Terrestrial Reference Frame 1991\"],MEMBER[\"European Terrestrial Reference Frame 1992\"],MEMBER[\"European Terrestrial Reference Frame 1993\"],MEMBER[\"European Terrestrial Reference Frame 1994\"],MEMBER[\"European Terrestrial Reference Frame 1996\"],MEMBER[\"European Terrestrial Reference Frame 1997\"],MEMBER[\"European Terrestrial Reference Frame 2000\"],MEMBER[\"European Terrestrial Reference Frame 2005\"],MEMBER[\"European Terrestrial Reference Frame 2014\"],MEMBER[\"European Terrestrial Reference Frame 2020\"],ELLIPSOID[\"GRS 1980\",6378137,298.257222101,LENGTHUNIT[\"metre\",1]],ENSEMBLEACCURACY[0.1]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4258]],CONVERSION[\"Europe Equal Area 2001\",METHOD[\"Lambert Azimuthal Equal Area\",ID[\"EPSG\",9820]],PARAMETER[\"Latitude of natural origin\",52,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8801]],PARAMETER[\"Longitude of natural origin\",10,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8802]],PARAMETER[\"False easting\",4321000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8806]],PARAMETER[\"False northing\",3210000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8807]]],CS[Cartesian,2],AXIS[\"northing (Y)\",north,ORDER[1],LENGTHUNIT[\"metre\",1]],AXIS[\"easting (X)\",east,ORDER[2],LENGTHUNIT[\"metre\",1]],USAGE[SCOPE[\"Statistical analysis.\"],AREA[\"Europe - European Union (EU) countries and candidates. Europe - onshore and offshore: Albania; Andorra; Austria; Belgium; Bosnia and Herzegovina; Bulgaria; Croatia; Cyprus; Czechia; Denmark; Estonia; Faroe Islands; Finland; France; Germany; Gibraltar; Greece; Hungary; Iceland; Ireland; Italy; Kosovo; Latvia; Liechtenstein; Lithuania; Luxembourg; Malta; Monaco; Montenegro; Netherlands; North Macedonia; Norway including Svalbard and Jan Mayen; Poland; Portugal including Madeira and Azores; Romania; San Marino; Serbia; Slovakia; Slovenia; Spain including Canary Islands; Sweden; Switzerland; T\u00fcrkiye (Turkey); United Kingdom (UK) including Channel Islands and Isle of Man; Vatican City State.\"],BBOX[24.6,-35.58,84.73,44.83]],ID[\"EPSG\",3035]]",
-  32632:
-    "PROJCRS[\"WGS 84 / UTM zone 32N\",BASEGEOGCRS[\"WGS 84\",ENSEMBLE[\"World Geodetic System 1984 ensemble\",MEMBER[\"World Geodetic System 1984 (Transit)\"],MEMBER[\"World Geodetic System 1984 (G730)\"],MEMBER[\"World Geodetic System 1984 (G873)\"],MEMBER[\"World Geodetic System 1984 (G1150)\"],MEMBER[\"World Geodetic System 1984 (G1674)\"],MEMBER[\"World Geodetic System 1984 (G1762)\"],MEMBER[\"World Geodetic System 1984 (G2139)\"],MEMBER[\"World Geodetic System 1984 (G2296)\"],ELLIPSOID[\"WGS 84\",6378137,298.257223563,LENGTHUNIT[\"metre\",1]],ENSEMBLEACCURACY[2.0]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4326]],CONVERSION[\"UTM zone 32N\",METHOD[\"Transverse Mercator\",ID[\"EPSG\",9807]],PARAMETER[\"Latitude of natural origin\",0,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8801]],PARAMETER[\"Longitude of natural origin\",9,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8802]],PARAMETER[\"Scale factor at natural origin\",0.9996,SCALEUNIT[\"unity\",1],ID[\"EPSG\",8805]],PARAMETER[\"False easting\",500000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8806]],PARAMETER[\"False northing\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8807]]],CS[Cartesian,2],AXIS[\"(E)\",east,ORDER[1],LENGTHUNIT[\"metre\",1]],AXIS[\"(N)\",north,ORDER[2],LENGTHUNIT[\"metre\",1]],USAGE[SCOPE[\"Navigation and medium accuracy spatial referencing.\"],AREA[\"Between 6\u00b0E and 12\u00b0E, northern hemisphere between equator and 84\u00b0N, onshore and offshore. Algeria. Austria. Cameroon. Denmark. Equatorial Guinea. France. Gabon. Germany. Italy. Libya. Liechtenstein. Monaco. Netherlands. Niger. Nigeria. Norway. Sao Tome and Principe. Svalbard. Sweden. Switzerland. Tunisia. Vatican City State.\"],BBOX[0,6,84,12]],ID[\"EPSG\",32632]]",
-  32633:
-    "PROJCRS[\"WGS 84 / UTM zone 33N\",BASEGEOGCRS[\"WGS 84\",ENSEMBLE[\"World Geodetic System 1984 ensemble\",MEMBER[\"World Geodetic System 1984 (Transit)\"],MEMBER[\"World Geodetic System 1984 (G730)\"],MEMBER[\"World Geodetic System 1984 (G873)\"],MEMBER[\"World Geodetic System 1984 (G1150)\"],MEMBER[\"World Geodetic System 1984 (G1674)\"],MEMBER[\"World Geodetic System 1984 (G1762)\"],MEMBER[\"World Geodetic System 1984 (G2139)\"],MEMBER[\"World Geodetic System 1984 (G2296)\"],ELLIPSOID[\"WGS 84\",6378137,298.257223563,LENGTHUNIT[\"metre\",1]],ENSEMBLEACCURACY[2.0]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4326]],CONVERSION[\"UTM zone 33N\",METHOD[\"Transverse Mercator\",ID[\"EPSG\",9807]],PARAMETER[\"Latitude of natural origin\",0,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8801]],PARAMETER[\"Longitude of natural origin\",15,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8802]],PARAMETER[\"Scale factor at natural origin\",0.9996,SCALEUNIT[\"unity\",1],ID[\"EPSG\",8805]],PARAMETER[\"False easting\",500000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8806]],PARAMETER[\"False northing\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8807]]],CS[Cartesian,2],AXIS[\"(E)\",east,ORDER[1],LENGTHUNIT[\"metre\",1]],AXIS[\"(N)\",north,ORDER[2],LENGTHUNIT[\"metre\",1]],USAGE[SCOPE[\"Navigation and medium accuracy spatial referencing.\"],AREA[\"Between 12\u00b0E and 18\u00b0E, northern hemisphere between equator and 84\u00b0N, onshore and offshore. Austria. Bosnia and Herzegovina. Cameroon. Central African Republic. Chad. Congo. Croatia. Czechia. Democratic Republic of the Congo (Zaire). Gabon. Germany. Hungary. Italy. Libya. Malta. Niger. Nigeria. Norway. Poland. San Marino. Slovakia. Slovenia. Svalbard. Sweden. Vatican City State.\"],BBOX[0,12,84,18]],ID[\"EPSG\",32633]]",
-  25832:
-    "PROJCRS[\"ETRS89 / UTM zone 32N\",BASEGEOGCRS[\"ETRS89\",ENSEMBLE[\"European Terrestrial Reference System 1989 ensemble\",MEMBER[\"European Terrestrial Reference Frame 1989\"],MEMBER[\"European Terrestrial Reference Frame 1990\"],MEMBER[\"European Terrestrial Reference Frame 1991\"],MEMBER[\"European Terrestrial Reference Frame 1992\"],MEMBER[\"European Terrestrial Reference Frame 1993\"],MEMBER[\"European Terrestrial Reference Frame 1994\"],MEMBER[\"European Terrestrial Reference Frame 1996\"],MEMBER[\"European Terrestrial Reference Frame 1997\"],MEMBER[\"European Terrestrial Reference Frame 2000\"],MEMBER[\"European Terrestrial Reference Frame 2005\"],MEMBER[\"European Terrestrial Reference Frame 2014\"],MEMBER[\"European Terrestrial Reference Frame 2020\"],ELLIPSOID[\"GRS 1980\",6378137,298.257222101,LENGTHUNIT[\"metre\",1]],ENSEMBLEACCURACY[0.1]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4258]],CONVERSION[\"UTM zone 32N\",METHOD[\"Transverse Mercator\",ID[\"EPSG\",9807]],PARAMETER[\"Latitude of natural origin\",0,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8801]],PARAMETER[\"Longitude of natural origin\",9,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8802]],PARAMETER[\"Scale factor at natural origin\",0.9996,SCALEUNIT[\"unity\",1],ID[\"EPSG\",8805]],PARAMETER[\"False easting\",500000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8806]],PARAMETER[\"False northing\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8807]]],CS[Cartesian,2],AXIS[\"(E)\",east,ORDER[1],LENGTHUNIT[\"metre\",1]],AXIS[\"(N)\",north,ORDER[2],LENGTHUNIT[\"metre\",1]],USAGE[SCOPE[\"Engineering survey, topographic mapping.\"],AREA[\"Europe between 6\u00b0E and 12\u00b0E: Austria; Denmark - onshore and offshore; Germany - onshore and offshore; Italy - onshore and offshore; Norway including Svalbard - onshore and offshore; Spain - offshore.\"],BBOX[36.53,6,84.01,12.01]],USAGE[SCOPE[\"Pan-European conformal mapping at scales larger than 1:500,000.\"],AREA[\"Europe between 6\u00b0E and 12\u00b0E and approximately 36\u00b030'N to 84\u00b0N.\"],BBOX[36.53,6,84.01,12.01]],ID[\"EPSG\",25832]]",
-  25833:
-    "PROJCRS[\"ETRS89 / UTM zone 33N\",BASEGEOGCRS[\"ETRS89\",ENSEMBLE[\"European Terrestrial Reference System 1989 ensemble\",MEMBER[\"European Terrestrial Reference Frame 1989\"],MEMBER[\"European Terrestrial Reference Frame 1990\"],MEMBER[\"European Terrestrial Reference Frame 1991\"],MEMBER[\"European Terrestrial Reference Frame 1992\"],MEMBER[\"European Terrestrial Reference Frame 1993\"],MEMBER[\"European Terrestrial Reference Frame 1994\"],MEMBER[\"European Terrestrial Reference Frame 1996\"],MEMBER[\"European Terrestrial Reference Frame 1997\"],MEMBER[\"European Terrestrial Reference Frame 2000\"],MEMBER[\"European Terrestrial Reference Frame 2005\"],MEMBER[\"European Terrestrial Reference Frame 2014\"],MEMBER[\"European Terrestrial Reference Frame 2020\"],ELLIPSOID[\"GRS 1980\",6378137,298.257222101,LENGTHUNIT[\"metre\",1]],ENSEMBLEACCURACY[0.1]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4258]],CONVERSION[\"UTM zone 33N\",METHOD[\"Transverse Mercator\",ID[\"EPSG\",9807]],PARAMETER[\"Latitude of natural origin\",0,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8801]],PARAMETER[\"Longitude of natural origin\",15,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8802]],PARAMETER[\"Scale factor at natural origin\",0.9996,SCALEUNIT[\"unity\",1],ID[\"EPSG\",8805]],PARAMETER[\"False easting\",500000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8806]],PARAMETER[\"False northing\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8807]]],CS[Cartesian,2],AXIS[\"(E)\",east,ORDER[1],LENGTHUNIT[\"metre\",1]],AXIS[\"(N)\",north,ORDER[2],LENGTHUNIT[\"metre\",1]],USAGE[SCOPE[\"Engineering survey, topographic mapping.\"],AREA[\"Europe between 12\u00b0E and 18\u00b0E: Austria; Croatia; Denmark - offshore and offshore; Germany - onshore and offshore; Italy - onshore and offshore; Norway including Svalbard - onshore and offshore.\"],BBOX[34.79,12,84.01,18.01]],USAGE[SCOPE[\"Pan-European conformal mapping at scales larger than 1:500,000.\"],AREA[\"Europe between 12\u00b0E and 18\u00b0E and approximately 34\u00b030'N to 84\u00b0N.\"],BBOX[34.49,12,84.01,18.01]],ID[\"EPSG\",25833]]",
 };
 
 const DEG = Math.PI / 180;
@@ -255,8 +251,43 @@ function tmerc({ lon0, k0, x0, y0, ellps }) {
   };
 }
 
+const UTM_BASE = {
+  WGS84: "BASEGEOGCRS[\"WGS 84\",ENSEMBLE[\"World Geodetic System 1984 ensemble\",MEMBER[\"World Geodetic System 1984 (Transit)\"],MEMBER[\"World Geodetic System 1984 (G730)\"],MEMBER[\"World Geodetic System 1984 (G873)\"],MEMBER[\"World Geodetic System 1984 (G1150)\"],MEMBER[\"World Geodetic System 1984 (G1674)\"],MEMBER[\"World Geodetic System 1984 (G1762)\"],MEMBER[\"World Geodetic System 1984 (G2139)\"],MEMBER[\"World Geodetic System 1984 (G2296)\"],ELLIPSOID[\"WGS 84\",6378137,298.257223563,LENGTHUNIT[\"metre\",1]],ENSEMBLEACCURACY[2.0]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4326]]",
+  GRS80: "BASEGEOGCRS[\"ETRS89\",ENSEMBLE[\"European Terrestrial Reference System 1989 ensemble\",MEMBER[\"European Terrestrial Reference Frame 1989\"],MEMBER[\"European Terrestrial Reference Frame 1990\"],MEMBER[\"European Terrestrial Reference Frame 1991\"],MEMBER[\"European Terrestrial Reference Frame 1992\"],MEMBER[\"European Terrestrial Reference Frame 1993\"],MEMBER[\"European Terrestrial Reference Frame 1994\"],MEMBER[\"European Terrestrial Reference Frame 1996\"],MEMBER[\"European Terrestrial Reference Frame 1997\"],MEMBER[\"European Terrestrial Reference Frame 2000\"],MEMBER[\"European Terrestrial Reference Frame 2005\"],MEMBER[\"European Terrestrial Reference Frame 2014\"],MEMBER[\"European Terrestrial Reference Frame 2020\"],ELLIPSOID[\"GRS 1980\",6378137,298.257222101,LENGTHUNIT[\"metre\",1]],ENSEMBLEACCURACY[0.1]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4258]]",
+};
+
+/** Zone, hemisphere and ellipsoid of a UTM EPSG code, or null. */
+function utmZone(epsg) {
+  if (epsg >= 32601 && epsg <= 32660) return { zone: epsg - 32600, south: false, ellps: "WGS84" };
+  if (epsg >= 32701 && epsg <= 32760) return { zone: epsg - 32700, south: true, ellps: "WGS84" };
+  if (epsg >= 25828 && epsg <= 25838) return { zone: epsg - 25800, south: false, ellps: "GRS80" };
+  return null;
+}
+
+const utmLon0 = (zone) => (zone - 1) * 6 - 180 + 3;
+
+/** pyproj's WKT of a UTM zone. */
+function utmWkt(epsg) {
+  const u = utmZone(epsg);
+  if (!u) return null;
+  const name = `UTM zone ${u.zone}${u.south ? "S" : "N"}`;
+  const deg = 'ANGLEUNIT["degree",0.0174532925199433]';
+  const metre = 'LENGTHUNIT["metre",1]';
+  return (
+    `PROJCRS["${u.ellps === "WGS84" ? "WGS 84" : "ETRS89"} / ${name}",${UTM_BASE[u.ellps]},` +
+    `CONVERSION["${name}",METHOD["Transverse Mercator",ID["EPSG",9807]],` +
+    `PARAMETER["Latitude of natural origin",0,${deg},ID["EPSG",8801]],` +
+    `PARAMETER["Longitude of natural origin",${utmLon0(u.zone)},${deg},ID["EPSG",8802]],` +
+    `PARAMETER["Scale factor at natural origin",0.9996,SCALEUNIT["unity",1],ID["EPSG",8805]],` +
+    `PARAMETER["False easting",500000,${metre},ID["EPSG",8806]],` +
+    `PARAMETER["False northing",${u.south ? 10000000 : 0},${metre},ID["EPSG",8807]]],` +
+    `CS[Cartesian,2],AXIS["(E)",east,ORDER[1],${metre}],AXIS["(N)",north,ORDER[2],${metre}],` +
+    `${UTM_USAGE[epsg]},ID["EPSG",${epsg}]]`
+  );
+}
+
 const geographic = { forward: (lon, lat) => [lon, lat], inverse: (lon, lat) => [lon, lat], geographic: true };
-const utm = (zone, ellps) => tmerc({ lon0: (zone - 1) * 6 - 180 + 3, k0: 0.9996, x0: 500000, y0: 0, ellps });
+const utm = ({ zone, south, ellps }) => tmerc({ lon0: utmLon0(zone), k0: 0.9996, x0: 500000, y0: south ? 10000000 : 0, ellps });
 
 /** Projection (`forward(lon, lat)` / `inverse(x, y)`, east-north order) and axis order per EPSG code. */
 const SYSTEMS = {
@@ -264,10 +295,6 @@ const SYSTEMS = {
   4258: { proj: () => geographic, latFirst: true },
   3857: { proj: webmerc, latFirst: false },
   3035: { proj: () => laea({ lat0: 52, lon0: 10, x0: 4321000, y0: 3210000, ellps: "GRS80" }), northFirst: true },
-  32632: { proj: () => utm(32, "WGS84") },
-  32633: { proj: () => utm(33, "WGS84") },
-  25832: { proj: () => utm(32, "GRS80") },
-  25833: { proj: () => utm(33, "GRS80") },
 };
 
 /** EPSG code of a CRS given as a number, "EPSG:<code>", a WKT with an EPSG id or `{epsg}`. */
@@ -283,12 +310,16 @@ export function epsgOf(crs) {
 }
 
 /** pyproj's WKT of an EPSG code (null when PSA.js does not know it). */
-export const wktOf = (epsg) => CRS_WKT[epsg] ?? null;
+export const wktOf = (epsg) => CRS_WKT[epsg] ?? utmWkt(epsg);
 
 function system(epsg) {
   const s = SYSTEMS[epsg];
-  if (!s) throw new Error(`NotImplementedError: coordinate transformations for EPSG:${epsg} are not available in PSA.js (supported: ${Object.keys(SYSTEMS).join(", ")})`);
-  return s;
+  if (s) return s;
+  const u = utmZone(epsg);
+  if (u) return { proj: () => utm(u) };
+  throw new Error(
+    `NotImplementedError: coordinate transformations for EPSG:${epsg} are not available in PSA.js (supported: ${Object.keys(SYSTEMS).join(", ")} and the UTM zones 32601-32660, 32701-32760, 25828-25838)`,
+  );
 }
 
 /**
