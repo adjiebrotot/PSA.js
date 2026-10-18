@@ -691,6 +691,13 @@ export class Network {
     const names = buildSuffixedNames(name, suffix);
     // stochastic networks: remove the components from all scenarios
     const labels = c.static.index.isMulti ? Index.fromProduct([this.scenarios.values, names.values], ["scenario", "name"]) : names;
+    // pandas' `drop` raises for unknown labels
+    const present = new Set(c.static.index.values.map(labelKey));
+    const missing = labels.values.filter((l) => !present.has(labelKey(l)));
+    if (missing.length) {
+      const repr = (v) => (Array.isArray(v) ? `(${v.map(repr).join(", ")})` : typeof v === "string" ? `'${v}'` : String(v));
+      throw new Error(`KeyError: "[${missing.map(repr).join(", ")}] not found in axis"`);
+    }
     c.static = c.static.dropRows(labels);
     for (const k of Object.keys(c.dynamic)) {
       const df = c.dynamic[k];

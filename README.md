@@ -87,9 +87,11 @@ options object: `n.optimize({ snapshots, multi_investment_periods: true })`.
   `<list>_pw_<attr>`), Excel workbooks (`import_from_excel`,
   `export_to_excel`; PyPSA's sheet layout, no extra dependency), HDF5 stores
   in pandas' `HDFStore` layout (`import_from_hdf5`, `export_to_hdf5`; files
-  written by PSA.js re-import identically in PyPSA) and PYPOWER cases
-  (`import_from_pypower_ppc`). netCDF and HDF5 files also load from http(s)
-  URLs (`ioOptions.allow_network_requests`, PyPSA's
+  written by PSA.js re-import identically in PyPSA), PYPOWER cases
+  (`import_from_pypower_ppc`) and pandapower networks
+  (`import_from_pandapower_net`, from the JSON `pandapower.to_json` writes).
+  netCDF and HDF5 files also load from http(s) URLs
+  (`ioOptions.allow_network_requests`, PyPSA's
   `options.general.allow_network_requests`).
 - **Topology and power flow**: sub-networks, cycle matrices (networkx-ordered
   `bfs-refined` default and `paton` cycle bases), PTDF/BODF, linear power flow,
@@ -186,7 +188,7 @@ from libm by one ulp on some CPUs).
 ## Not implemented / known differences
 
 See [`NEXT_STEPS.md`](NEXT_STEPS.md) for the remaining work list. In short:
-the pandapower importer, plotting, `to_crs`, segmentation of
+plotting, `to_crs`, segmentation of
 non-hourly snapshots, k-means busmaps (a seeded approximation,
 not scikit-learn's), solvers other than HiGHS.
 

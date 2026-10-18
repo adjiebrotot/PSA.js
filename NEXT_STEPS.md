@@ -1,6 +1,6 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 120 tests: the parity
+State at hand-off: all PSA.js tests pass (`npm test`: 121 tests: the parity
 scenarios, IO tests and the example scripts; `npm run test:browser` passes in
 headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
 of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
@@ -127,13 +127,18 @@ browser smoke test are run separately.
       PyPSA imports PSA.js stores identically (run manually; all 9 pass).
       Like PyPSA, stochastic networks raise NotImplementedError. `new
       Network("x.nc" | "x.h5")` raises (the loaders are async).
-- [ ] **IO formats**: `import_from_pandapower_net` (needs a pandapower net,
-      i.e. Python).
+- [x] `import_from_pandapower_net` (scenario `io_pandapower`): reads the JSON
+      written by `pandapower.to_json` (path, text or object; test nets in
+      `test/networks/pandapower`), all of PyPSA's mapping incl. bus switch
+      amalgamation, `extra_line_data`, `use_pandapower_index`; PyPSA's
+      failures on unnamed loads (`case9`) and on buses removed twice
+      (`example_multivoltage`) are mirrored. `n.remove` now raises for
+      unknown names like pandas' `drop`.
 - [x] Small API gaps found by diffing `dir(pypsa.Network())`: deprecated
       `n.cluster` aliases (`busmap_by_hac`, `busmap_by_greedy_modularity`,
       `cluster_spatially_by_*`), `n.statistics.n` / `.is_multi_indexed`,
       `Network.get_network` (raises outside collections). Remaining: `plot`,
-      `explore`, `to_crs`, pandapower.
+      `explore`, `to_crs`.
 - [x] Shapes: WKT geometries kept in shapely's canonical form and written
       rounded like `GeoSeries.to_wkt()` (GEOS number formatting, ties to
       even; `src/core/wkt.js`), identical through CSV, netCDF and Excel
