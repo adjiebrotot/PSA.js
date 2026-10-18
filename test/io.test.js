@@ -228,3 +228,18 @@ test("Excel export keeps unrelated sheets and replaces stale ones", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("float32 netCDF: PyPSA's file and a PSA.js export", async () => {
+  const fx = loadFixture("io_float32");
+  const n = await Network.from_netcdf(ncPath("ac-dc-meshed-f32"));
+  assertNetworkMatches(n, fx.network_nc, { rtol: 0, atol: 0 });
+  const dir = mkdtempSync(path.join(os.tmpdir(), "psa-f32-"));
+  try {
+    const m = await Network.from_netcdf(ncPath("ac-dc-meshed-solved"));
+    await m.export_to_netcdf(path.join(dir, "f32.nc"), { float32: true, compression: { zlib: false } });
+    const k = await Network.from_netcdf(path.join(dir, "f32.nc"));
+    assertNetworkMatches(k, fx.network_nc, { rtol: 0, atol: 0 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

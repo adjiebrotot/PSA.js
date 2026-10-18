@@ -84,8 +84,10 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       `cluster_spatially_by_*`), `n.statistics.n` / `.is_multi_indexed`,
       `Network.get_network` (raises outside collections). Remaining: `plot`,
       `explore`, `to_crs`, HDF5, pandapower.
-- [ ] netCDF extras: `float32`, `compression=None`, URL inputs, browser support
-      (h5wasm in-memory files), shapes/geometry (WKT) round trip.
+- [ ] netCDF extras: URL inputs, browser support (h5wasm in-memory files),
+      shapes/geometry (WKT) round trip, float32 variables stored as float32
+      (PSA.js rounds the values but writes float64). Done: `float32` and
+      PyPSA's `compression` dict (`io.test.js`, fixture `io_float32`).
 - [ ] `to_crs` (coordinate transformation; needs a proj4 equivalent).
 - [ ] **Clustering**: `segment` (tsam), `busmap_by_hac` with linkages other
       than "ward" (sklearn's `linkage_tree`: single, complete, average, other

@@ -76,6 +76,10 @@ n.optimize(include_objective_constant=False)
 n.model.solver_model = None
 n.export_to_netcdf(NETCDF / "stochastic.nc")
 write_fixture("io_stochastic", {"network": dump_network(n), "network_nc": dump_network(pypsa.Network(NETCDF / "stochastic.nc"))})
+# float32 netCDF export (values rounded to single precision)
+n = pypsa.Network(NETCDF / "ac-dc-meshed-solved.nc")
+n.export_to_netcdf(NETCDF / "ac-dc-meshed-f32.nc", float32=True)
+write_fixture("io_float32", {"network_nc": dump_network(pypsa.Network(NETCDF / "ac-dc-meshed-f32.nc"))})
 print("wrote netcdf fixtures")
 
 # Excel: PyPSA's export of the networks above and PyPSA's re-import of it

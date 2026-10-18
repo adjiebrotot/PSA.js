@@ -309,6 +309,9 @@ class NetCDFWriter {
 
 /** Write the network to a netCDF file at `path`. */
 async function exportToNetCDF(n, path, { export_standard_types = false, compression = 4, float32 = false } = {}) {
+  // PyPSA's form: null -> {zlib: true, complevel: 4}; {zlib: false} disables
+  if (compression === null || compression === undefined) compression = 4;
+  else if (typeof compression === "object") compression = compression.zlib === false ? 0 : (compression.complevel ?? 4);
   const h5 = await getH5();
   const ex = collectExport(n, { export_standard_types });
   const f = new h5.File(path, "w", { track_order: true });

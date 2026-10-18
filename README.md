@@ -150,8 +150,8 @@ python diff_fixtures.py [--rtol 1e-9]    # what changed vs. the committed fixtur
 Fixtures are deterministic (fixed hash seed, `mtime=0` gzip): with the pinned
 environment a full regeneration rewrites every JSON fixture byte-identically
 unless PyPSA's behaviour changed. Two exceptions show up in `git status`
-without being changes: the netCDF files (HDF5 metadata differs between runs;
-the IO tests check their content) and the SOS section of
+without being changes: the netCDF and Excel files (HDF5 metadata and
+workbook timestamps differ between runs; the IO tests check their content) and the SOS section of
 `scenario_opt_piecewise` (linopy writes it in non-deterministic order; the
 comparator treats it as a set). `diff_fixtures.py` compares fixture contents
 and reports the latter as the only difference.
