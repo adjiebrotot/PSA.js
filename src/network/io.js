@@ -12,6 +12,7 @@ import { Index } from "../core/index.js";
 import { Network, updatePortsComponentAttrs } from "./network.js";
 import { logger } from "../logger.js";
 import { PYPSA_VERSION } from "../components/types.js";
+import { wktOf } from "../core/crs.js";
 
 /** IO options (PyPSA: `pypsa.options.general.allow_network_requests`). */
 export const ioOptions = { allow_network_requests: true };
@@ -258,7 +259,9 @@ function importFromImporter(n, importer, skipTime = false) {
   }
   for (const [attr, val] of Object.entries(attrs)) {
     if (attr === "model" || attr === "objective" || attr === "objective_constant") n[`_${attr}`] = val;
-    else if (attr === "srid") n.srid = val;
+    // PyPSA sets `n.srid`, which raises unless it equals the default CRS
+    // (so PyPSA cannot import networks in other CRS); PSA.js keeps the CRS
+    else if (attr === "srid") n._crs = { _crs: n._crs.epsg === Number(val) ? n._crs._crs : wktOf(Number(val)), epsg: Number(val) };
     else n[attr] = val;
     if (attr === "_linearized_uc") n._linearizedUcSet = true;
   }
@@ -383,7 +386,7 @@ export function collectExport(n, { export_standard_types = false } = {}) {
   }
   if (!n._linearizedUcSet) delete attrs._linearized_uc;
 
-  const crsWkt = n._crs._crs ?? (n.srid === 4326 ? DEFAULT_CRS_WKT : null);
+  const crsWkt = n._crs._crs ?? wktOf(n.srid);
   const crs = crsWkt === null ? {} : { _crs: crsWkt };
 
   // snapshots (snapshot_weightings.reset_index())

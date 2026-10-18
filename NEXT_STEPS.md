@@ -1,6 +1,6 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 123 tests: the parity
+State at hand-off: all PSA.js tests pass (`npm test`: 124 tests: the parity
 scenarios, IO tests and the example scripts; `npm run test:browser` passes in
 headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
 of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
@@ -141,18 +141,19 @@ browser smoke test are run separately.
       `stores()`, `component`, `df`, `static`, `pnl`, `dynamic`,
       `iterate_components`), `investment_period_weightings`, `scenarios`;
       `n.optimize.expressions.n`. A fresh diff of `dir()` against PyPSA now
-      leaves `n.plot`, `n.explore`, `n.to_crs` and the xarray views `c.da` /
+      leaves `n.plot`, `n.explore` and the xarray views `c.da` /
       `c.ds` (and `c.n_save`).
 - [x] Small API gaps found by diffing `dir(pypsa.Network())`: deprecated
       `n.cluster` aliases (`busmap_by_hac`, `busmap_by_greedy_modularity`,
       `cluster_spatially_by_*`), `n.statistics.n` / `.is_multi_indexed`,
       `Network.get_network` (raises outside collections). Remaining: `plot`,
-      `explore`, `to_crs`.
+      `explore`.
 - [x] Shapes: WKT geometries kept in shapely's canonical form and written
       rounded like `GeoSeries.to_wkt()` (GEOS number formatting, ties to
       even; `src/core/wkt.js`), identical through CSV, netCDF and Excel
       (`test/networks/shapes`, fixture `io_shapes`). Geometric operations
-      (areas, buffers, `to_crs`) are not available.
+      (areas, buffers) are not available. Non-finite coordinates are written
+      as `Infinity` / `NaN` like GEOS 3.14 (PSA.js wrote `Inf` before).
 - [x] Browser support: `npm run test:browser` (esbuild bundle in headless
       Chromium, also a CI job): optimisation with HiGHS WASM, statistics,
       CSV via `MemoryFolder`, Excel via bytes (bundled inflate when no zlib),
@@ -161,9 +162,16 @@ browser smoke test are run separately.
       stored as float32 like PyPSA's `typecast_float32`; PyPSA reads the file
       identically to its own) and PyPSA's `compression` dict (`io.test.js`,
       fixture `io_float32`).
-- [ ] `to_crs` (coordinate transformation; needs PROJ-accurate projections
-      and pyproj's WKT per EPSG code; PyPSA's own `to_crs` swaps the axes, see
-      section 3).
+- [x] `to_crs`, `n.crs` / `n.srid` (scenario `crs`, 11 records): EPSG 4326,
+      4258, 3857, 3035, 32632, 32633, 25832 and 25833 with pyproj's WKT
+      (`src/core/crs.js`: PROJ's webmerc, ellipsoidal oblique LAEA with an
+      exact authalic-latitude inverse, Poder/Engsager transverse Mercator,
+      `adjlon` and PROJ's range checks giving `Infinity`). Shapes are
+      transformed in x/y order, buses with PyPSA's axis-swapping
+      `Transformer.from_crs(current, new)` (mirrored). `n.crs` has
+      `to_epsg()` / `to_wkt()`; setting `n.srid` / `n.crs` to another CRS
+      raises like PyPSA (geopandas `set_crs`). Exports now carry the WKT of
+      any supported EPSG code. Other EPSG codes raise NotImplementedError.
 - [x] **Clustering** done: calendar offsets in `resample` (`W`, `W-<day>`,
       `ME`, `MS`, `QE[-<month>]`, `QS[-<month>]`, `YE[-<month>]`,
       `YS[-<month>]` and their multiples such as `2W` or `3ME`, with pandas'
@@ -294,6 +302,10 @@ browser smoke test are run separately.
          `always_xy=True` and passes (x, y), so for EPSG:4326 (lat/lon axis
          order) longitudes are taken as latitudes: London (-0.13, 51.5) ends
          up at (-1.19e6, 9.26e6) in EPSG:3035, x/y are swapped for EPSG:3857.
+      1b. A network exported after `to_crs` to anything but EPSG:4326 cannot
+         be imported again: the importer sets `n._crs` from `crs.json` and
+         then `n.srid`, whose `set_crs` raises because the shapes still have
+         the default CRS (PSA.js imports such files).
       2. `segment` passes `period_duration=len(snapshots)` to tsam, which
          reads it in hours: with 3-hourly snapshots tsam forms three periods
          and the result covers only the first third of the series.

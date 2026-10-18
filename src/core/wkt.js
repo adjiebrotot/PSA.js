@@ -40,7 +40,11 @@ export function parseWkt(s) {
   };
   const coord = () => {
     const xs = [];
-    while (peek() !== undefined && peek() !== "," && peek() !== ")") xs.push(Number(take()));
+    while (peek() !== undefined && peek() !== "," && peek() !== ")") {
+      const t = take();
+      // GEOS writes Infinity / NaN; older versions wrote Inf
+      xs.push(/^[-+]?inf$/i.test(t) ? (t.startsWith("-") ? -Infinity : Infinity) : Number(t));
+    }
     return xs;
   };
   const list = (item) => {
@@ -147,7 +151,7 @@ function scientific(x, p) {
  */
 export function formatCoordinate(x, precision = -1) {
   if (Number.isNaN(x)) return "NaN";
-  if (!Number.isFinite(x)) return x > 0 ? "Inf" : "-Inf";
+  if (!Number.isFinite(x)) return x > 0 ? "Infinity" : "-Infinity";
   if (x === 0) return "0";
   const sign = x < 0 ? "-" : "";
   const a = Math.abs(x);

@@ -3,12 +3,13 @@
  * Network container (mirrors `pypsa.Network`).
  */
 
-import { canonicalWkt } from "../core/wkt.js";
+import { canonicalWkt, parseWkt, writeWkt } from "../core/wkt.js";
 import { Components, RE_PORTS_GE_2 } from "../components/components.js";
 import { componentTypes, getComponentType, allStandardAttrs, typToDtype, PYPSA_VERSION } from "../components/types.js";
 import { DataFrame, Series, isNumberArray, makeFilled } from "../core/frame.js";
 import { Index, asIndex, labelKey } from "../core/index.js";
 import { pyFloatRepr } from "../core/csv.js";
+import { epsgOf, wktOf, transformer } from "../core/crs.js";
 import { ComponentsStore, installStoreAccessors } from "./store.js";
 import { NOMINAL_ATTRS } from "../components/components.js";
 import { importPiecewiseFromDf, piecewiseFromAddValue } from "../components/piecewise.js";
@@ -161,6 +162,31 @@ function copyFrame(df) {
   return df.copy();
 }
 
+/** A parsed WKT geometry with every coordinate pair mapped by `fn(x, y)`. */
+function mapCoordinates(g, fn) {
+  const pt = (c) => {
+    const [x, y] = fn(c[0], c[1]);
+    return [x, y, ...c.slice(2)];
+  };
+  if (g.parts === null) return g;
+  const walk = (parts, depth) => (depth === 0 ? pt(parts) : parts.map((p) => walk(p, depth - 1)));
+  const depth = { POINT: 0, LINESTRING: 1, MULTIPOINT: 1, POLYGON: 2, MULTILINESTRING: 2, MULTIPOLYGON: 3 }[g.type];
+  if (depth === undefined) return { ...g, parts: g.parts.map((p) => mapCoordinates(p, fn)) };
+  return { ...g, parts: walk(g.parts, depth) };
+}
+
+const CRS_PROTO = {
+  to_epsg() {
+    return this.epsg;
+  },
+  to_wkt() {
+    return this._crs ?? wktOf(this.epsg);
+  },
+  toString() {
+    return `EPSG:${this.epsg}`;
+  },
+};
+
 export class Network {
   /**
    * @param {object} [opts]
@@ -300,12 +326,31 @@ export class Network {
     return this._crs.epsg;
   }
 
+  /**
+   * Set the EPSG code of the coordinates. Like PyPSA (geopandas' `set_crs`
+   * without `allow_override`), changing it raises; use `to_crs`.
+   */
   set srid(v) {
-    this._crs = { _crs: null, epsg: Number(v) };
+    this.crs = Number(v);
   }
 
+  /**
+   * Coordinate reference system: `{epsg, _crs}` (WKT) with pyproj-like
+   * `to_epsg()` / `to_wkt()`.
+   */
   get crs() {
-    return this._crs;
+    const c = this._crs;
+    return Object.assign(Object.create(CRS_PROTO), c);
+  }
+
+  /** Set the CRS (EPSG code, "EPSG:<code>" or WKT); a different CRS raises like PyPSA. */
+  set crs(v) {
+    const epsg = epsgOf(v);
+    if (epsg !== this._crs.epsg) {
+      throw new Error(
+        "ValueError: The GeoSeries already has a CRS which is not equal to the passed CRS. Specify 'allow_override=True' to allow replacing the existing CRS without doing any transformation. If you actually want to transform the geometries, use 'GeoSeries.to_crs' instead.",
+      );
+    }
   }
 
   get model() {
@@ -969,6 +1014,38 @@ export class Network {
   /**
    * Deep copy. With `snapshots` / `investment_periods`, only these are copied.
    */
+  /**
+   * Transform the shape geometries and bus coordinates to another CRS (EPSG
+   * code or "EPSG:<code>"; supported: 4326, 4258, 3857, 3035, 32632, 32633,
+   * 25832, 25833). Like PyPSA, shapes are transformed in x/y order while the
+   * bus coordinates go through `Transformer.from_crs(current, new)` without
+   * `always_xy`, i.e. in each CRS's axis order (latitude first for
+   * geographic CRS), which swaps them; see NEXT_STEPS.
+   */
+  to_crs(newCrs) {
+    const from = this.srid;
+    const to = epsgOf(newCrs);
+    if (to === null) throw new Error(`CRSError: Invalid projection: ${newCrs}`);
+    const shapes = transformer(from, to, { always_xy: true });
+    const buses = transformer(from, to);
+    const st = this.c.shapes.static;
+    if (st.index.length && st.has("geometry")) {
+      st.set(
+        "geometry",
+        Array.from(st.col("geometry"), (g) => (typeof g === "string" && g.trim() ? writeWkt(mapCoordinates(parseWkt(g), shapes)) : g)),
+      );
+    }
+    this._crs = { _crs: wktOf(to), epsg: to };
+    const b = this.c.buses.static;
+    if (b.index.length) {
+      const xs = b.col("x");
+      const ys = b.col("y");
+      const out = Array.from(xs, (x, i) => buses(x, ys[i]));
+      b.set("x", Float64Array.from(out, (o) => o[0]));
+      b.set("y", Float64Array.from(out, (o) => o[1]));
+    }
+  }
+
   copy({ snapshots = null, investment_periods = null, ignore_standard_types = false } = {}) {
     if (snapshots === null && investment_periods === null && !ignore_standard_types) {
       return deepCopyNetwork(this);
