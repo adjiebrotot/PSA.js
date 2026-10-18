@@ -89,7 +89,9 @@ sources with `npm run docs`).
 
 - **Data model**: all component types, defaults, standard line/transformer
   types, `add`/`remove`, snapshots, weightings, investment periods, `copy`,
-  `merge`, `slice`, multi-port links and processes.
+  `merge`, `slice`, multi-port links and processes; `c.da.<attr>` / `c.ds`
+  views as labelled arrays (`DataArray`, `Dataset`) with PyPSA's
+  dimensions, also for stochastic networks.
 - **IO**: CSV folders (import and byte-identical export), netCDF import/export
   in PyPSA's layout (files written by PSA.js re-import identically in PyPSA),
   including piecewise breakpoint data (`<list>-<attr>-pw.csv`,

@@ -6,6 +6,7 @@
 
 import assert from "node:assert/strict";
 import * as psa from "../src/index.js";
+import { DataArray, Dataset } from "../src/core/dataarray.js";
 import { Network, NetworkCollection, DataFrame, Series, Index, LinearExpression, QuadraticExpression } from "../src/index.js";
 import path from "node:path";
 import { ROOT, examplePath, decode as decodeFixture, assertFrameClose, assertSeriesClose, assertNetworkMatches, isClose, fmtLabel } from "./helpers.js";
@@ -348,6 +349,7 @@ export async function runScenario(scenario, onRecord = null) {
         else if (what === "result") records[key] = results[op[3]];
         else if (what === "result_path") records[key] = await getPath(results[op[3]], op[4]);
         else if (what === "path") records[key] = await getPath(n, op[3]);
+        else if (what === "dataarray") records[key] = await getPath(n, op[3]);
         else if (what === "model_terms") {
           const m = n.optimize.create_model(decodeValue(op[3] ?? {}, n));
           records[key] = Object.fromEntries([...m.constraints].map(([k, c]) => [k, c.termCount]));
@@ -423,6 +425,29 @@ export function assertRecordMatches(actual, expected, opts) {
       });
       break;
     }
+    case "dataarray": {
+      assert.ok(actual instanceof DataArray, `${where}: expected DataArray, got ${actual?.constructor?.name}`);
+      assert.deepEqual(actual.dims, expected.dims, `${where}: dims differ`);
+      if (expected.name !== undefined) assert.equal(actual.name, expected.name, `${where}: name differs`);
+      expected.coords.forEach((c, d) => {
+        assert.deepEqual(actual.coords[actual.dims[d]].values.map(fmtLabel), c.values.map(fmtLabel), `${where}: coords of ${expected.dims[d]} differ`);
+      });
+      assert.equal(actual.values.length, expected.values.length, `${where}: size differs`);
+      expected.values.forEach((v, i) => {
+        const a = actual.values[i];
+        const b = decodeFixture(v);
+        if (typeof b === "number" || b === null || b === undefined) {
+          const an = a === null || a === undefined ? NaN : typeof a === "boolean" ? Number(a) : a;
+          if (!isClose(an, b ?? NaN, opts.rtol ?? 1e-9, opts.atol ?? 1e-9)) assert.fail(`${where}[${i}]: PSA.js=${a} PyPSA=${b}`);
+        } else assert.equal(a, b, `${where}[${i}]`);
+      });
+      break;
+    }
+    case "dataset":
+      assert.ok(actual instanceof Dataset, `${where}: expected Dataset, got ${actual?.constructor?.name}`);
+      assert.deepEqual([...actual.data_vars.keys()], Object.keys(expected.vars), `${where}: variables differ`);
+      for (const [k, v] of Object.entries(expected.vars)) assertRecordMatches(actual.data_vars.get(k), v, { ...opts, path: `${where}.${k}` });
+      break;
     case "lp":
       assertLpMatches(actual.$lp, expected.text, opts);
       break;

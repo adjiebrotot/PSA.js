@@ -27,6 +27,7 @@ export { StatisticsAccessor, groupers, statisticsOptions, get_transmission_branc
 
 export { Index } from "./core/index.js";
 export { DataFrame, Series } from "./core/frame.js";
+export { DataArray, Dataset } from "./core/dataarray.js";
 export { readCSV, writeCSV } from "./core/csv.js";
 export { Components } from "./components/components.js";
 export { componentTypes, getComponentType } from "./components/types.js";

@@ -168,6 +168,17 @@ def quadexpr_json(e):
     }
 
 
+def dataarray_json(da) -> dict:
+    """An xarray DataArray: dims, coordinates per dim and the values in C order."""
+    return {
+        "$type": "dataarray",
+        "name": da.name,
+        "dims": list(da.dims),
+        "coords": [index_json(pd.Index(list(da.coords[d].values))) for d in da.dims],
+        "values": [value(x) for x in np.asarray(da.values).ravel()],
+    }
+
+
 def to_json(obj):
     import linopy
 
@@ -381,6 +392,13 @@ def _run_op(op, state, records, results):
                 records[key] = to_json(get_path(results[op[3]], op[4]))
             elif what == "path":
                 records[key] = to_json(get_path(n, op[3]))
+            elif what == "dataarray":
+                # c.da.<attr> / c.ds views compared as labelled arrays
+                obj = get_path(n, op[3])
+                if hasattr(obj, "data_vars"):
+                    records[key] = {"$type": "dataset", "vars": {k: dataarray_json(v) for k, v in obj.data_vars.items()}}
+                else:
+                    records[key] = dataarray_json(obj)
             elif what == "model_terms":
                 # linopy's `_term` size per constraint (it decides how the LP writer slices blocks)
                 m = n.optimize.create_model(**decode(op[3] if len(op) > 3 else {}, n))

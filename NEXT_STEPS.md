@@ -1,6 +1,6 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 136 tests: the parity
+State at hand-off: all PSA.js tests pass (`npm test`: 137 tests: the parity
 scenarios, IO tests and the example scripts; `npm run test:browser` passes in
 headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
 of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
@@ -41,9 +41,9 @@ Candidates for the next session, roughly by value:
 4. **Clustering leftovers**: `busmap_by_hac` with a callable or
    precomputed metric; `busmap_by_kmeans` parity is unlikely (threaded
    scikit-learn reductions).
-5. **xarray views** `c.da` / `c.ds`: PSA.js has no xarray; a small
-   labelled N-d array (dims, coords, values) built from `c.static` /
-   `c.dynamic` would cover the common read-only uses.
+5. ~~xarray views `c.da` / `c.ds`~~ done (`DataArray` / `Dataset`,
+   scenario `components_da`); arithmetic between DataArrays (broadcasting
+   by dims) is not implemented.
 6. Quadratic constraints in the linopy-style API (LP writing; HiGHS cannot
    solve them) and the stochastic items in section 2 that PyPSA itself
    does not support yet.
@@ -211,8 +211,15 @@ Candidates for the next session, roughly by value:
       `stores()`, `component`, `df`, `static`, `pnl`, `dynamic`,
       `iterate_components`), `investment_period_weightings`, `scenarios`;
       `n.optimize.expressions.n`. A fresh diff of `dir()` against PyPSA now
-      leaves `n.plot`, `n.explore` and the xarray views `c.da` /
-      `c.ds` (and `c.n_save`).
+      leaves only `n.plot` and `n.explore`.
+- [x] Component views `c.da.<attr>` / `c.ds` and `c.n_save` (scenario
+      `components_da`, 30 records): a small labelled array
+      (`src/core/dataarray.js`: dims, coords, C-ordered values, `sel`,
+      `isel`, `transpose`, `to_pandas`) with PyPSA's dimensions: static
+      (name), time-varying (snapshot, name), the activity mask, multi-period
+      tuple snapshots; stochastic (scenario, name) and either (snapshot,
+      scenario, name) or (scenario, name, snapshot) following pandas' level
+      order (time series for only some components sort the `name` level).
 - [x] Small API gaps found by diffing `dir(pypsa.Network())`: deprecated
       `n.cluster` aliases (`busmap_by_hac`, `busmap_by_greedy_modularity`,
       `cluster_spatially_by_*`), `n.statistics.n` / `.is_multi_indexed`,

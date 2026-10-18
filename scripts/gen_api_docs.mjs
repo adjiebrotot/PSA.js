@@ -136,6 +136,7 @@ const sections = [
   render("Temporal clustering (`n.cluster.temporal`)", "n.cluster.temporal.", Object.getPrototypeOf(n.cluster.temporal)),
   render("Network collections (`NetworkCollection`)", "nc.", psa.NetworkCollection.prototype, "", { stopAt: psa.Network.prototype, fallback: [psa.Network.prototype, "n."] }),
   render("Sub-networks (`SubNetwork`)", "sub.", psa.SubNetwork.prototype),
+  render("Labelled arrays (`DataArray`, from `c.da.<attr>`)", "da.", psa.DataArray.prototype, "`c.da.p_max_pu` gives a `DataArray` (dims, `coords`, `values` in C order) like PyPSA's xarray accessor; `c.ds` a `Dataset` of all attributes (`ds.data_vars`, `ds.get(name)`)."),
   render("Costs (`costs`, `pypsa.costs`)", "costs.", psa.costs),
   render("Geography (`geo`, `pypsa.geo`)", "geo.", psa.geo),
   render("Example networks (`examples`, `pypsa.examples`)", "examples.", psa.examples, "Async loaders of PyPSA's published example networks (`const n = await examples.ac_dc_meshed()`), cached on disk under Node.js; `options.general.allow_network_requests` must be true unless the file is cached."),
