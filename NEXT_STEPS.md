@@ -89,7 +89,11 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       even; `src/core/wkt.js`), identical through CSV, netCDF and Excel
       (`test/networks/shapes`, fixture `io_shapes`). Geometric operations
       (areas, buffers, `to_crs`) are not available.
-- [ ] netCDF extras: URL inputs, browser support (h5wasm in-memory files),
+- [x] Browser support: `npm run test:browser` (esbuild bundle in headless
+      Chromium, also a CI job): optimisation with HiGHS WASM, statistics,
+      CSV via `MemoryFolder`, Excel via bytes (bundled inflate when no zlib).
+- [ ] netCDF extras: URL inputs, browser support (h5wasm's browser build with
+      in-memory files; `from_netcdf` / `export_to_netcdf` use `h5wasm/node`),
       float32 variables stored as float32
       (PSA.js rounds the values but writes float64). Done: `float32` and
       PyPSA's `compression` dict (`io.test.js`, fixture `io_float32`).

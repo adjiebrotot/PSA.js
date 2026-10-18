@@ -12,7 +12,8 @@
     "examples"
   ],
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test:browser": "node scripts/browser_smoke.mjs"
   },
   "engines": {
     "node": ">=22.3"
@@ -24,5 +25,9 @@
   },
   "optionalDependencies": {
     "h5wasm": "0.10.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.10",
+    "playwright-core": "^1.55.1"
   }
 }

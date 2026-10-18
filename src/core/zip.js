@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 /**
  * Minimal ZIP archive reading and writing (for xlsx files): stored and
- * deflated entries, CRC-32, no encryption or ZIP64. Compression uses
- * Node.js' zlib when available; elsewhere entries are stored.
+ * deflated entries, CRC-32, no encryption or ZIP64. Node.js' zlib is used
+ * when available; elsewhere entries are written stored and read with the
+ * bundled inflate.
  */
 
 const zlib = globalThis.process?.getBuiltinModule?.("node:zlib") ?? null;
@@ -87,6 +88,127 @@ export function writeZip(entries) {
   return out;
 }
 
+// ----------------------------------------------------------------------
+// inflate (RFC 1951), used where no zlib is available (browsers)
+// ----------------------------------------------------------------------
+
+const LEN_BASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+const LEN_EXTRA = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+const DIST_BASE = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+const DIST_EXTRA = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+const CL_ORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+
+/** Canonical Huffman decoding table from code lengths: {counts, symbols}. */
+function huffman(lengths) {
+  const counts = new Uint16Array(16);
+  for (const l of lengths) counts[l]++;
+  counts[0] = 0;
+  const offs = new Uint16Array(16);
+  for (let i = 1; i < 16; i++) offs[i] = offs[i - 1] + counts[i - 1];
+  const symbols = new Uint16Array(lengths.length);
+  lengths.forEach((l, sym) => {
+    if (l) symbols[offs[l]++] = sym;
+  });
+  return { counts, symbols };
+}
+
+/** Decompress a raw deflate stream. */
+export function inflateRaw(data) {
+  let pos = 0;
+  let bit = 0;
+  let out = new Uint8Array(Math.max(1024, data.length * 4));
+  let n = 0;
+  const ensure = (k) => {
+    if (n + k <= out.length) return;
+    const grown = new Uint8Array(Math.max(out.length * 2, n + k));
+    grown.set(out.subarray(0, n));
+    out = grown;
+  };
+  const bits = (k) => {
+    let v = 0;
+    for (let i = 0; i < k; i++) {
+      if (pos >= data.length) throw new Error("inflate: unexpected end of data");
+      v |= ((data[pos] >>> bit) & 1) << i;
+      if (++bit === 8) {
+        bit = 0;
+        pos++;
+      }
+    }
+    return v;
+  };
+  const decode = ({ counts, symbols }) => {
+    let code = 0;
+    let first = 0;
+    let index = 0;
+    for (let len = 1; len < 16; len++) {
+      code |= bits(1);
+      const count = counts[len];
+      if (code - first < count) return symbols[index + code - first];
+      index += count;
+      first = (first + count) << 1;
+      code <<= 1;
+    }
+    throw new Error("inflate: invalid Huffman code");
+  };
+  const fixedLit = huffman(Array.from({ length: 288 }, (_, i) => (i < 144 ? 8 : i < 256 ? 9 : i < 280 ? 7 : 8)));
+  const fixedDist = huffman(new Array(30).fill(5));
+  let final = 0;
+  while (!final) {
+    final = bits(1);
+    const type = bits(2);
+    if (type === 0) {
+      if (bit) {
+        bit = 0;
+        pos++;
+      }
+      const len = data[pos] | (data[pos + 1] << 8);
+      pos += 4;
+      ensure(len);
+      out.set(data.subarray(pos, pos + len), n);
+      n += len;
+      pos += len;
+      continue;
+    }
+    let lit = fixedLit;
+    let dist = fixedDist;
+    if (type === 2) {
+      const hlit = bits(5) + 257;
+      const hdist = bits(5) + 1;
+      const hclen = bits(4) + 4;
+      const cl = new Array(19).fill(0);
+      for (let i = 0; i < hclen; i++) cl[CL_ORDER[i]] = bits(3);
+      const clTable = huffman(cl);
+      const lengths = [];
+      while (lengths.length < hlit + hdist) {
+        const sym = decode(clTable);
+        if (sym < 16) lengths.push(sym);
+        else if (sym === 16) {
+          const prev = lengths[lengths.length - 1];
+          for (let r = bits(2) + 3; r > 0; r--) lengths.push(prev);
+        } else for (let r = sym === 17 ? bits(3) + 3 : bits(7) + 11; r > 0; r--) lengths.push(0);
+      }
+      lit = huffman(lengths.slice(0, hlit));
+      dist = huffman(lengths.slice(hlit));
+    } else if (type !== 1) throw new Error("inflate: invalid block type");
+    for (;;) {
+      const sym = decode(lit);
+      if (sym < 256) {
+        ensure(1);
+        out[n++] = sym;
+      } else if (sym === 256) break;
+      else {
+        const li = sym - 257;
+        const len = LEN_BASE[li] + bits(LEN_EXTRA[li]);
+        const di = decode(dist);
+        const d = DIST_BASE[di] + bits(DIST_EXTRA[di]);
+        ensure(len);
+        for (let k = 0; k < len; k++, n++) out[n] = out[n - d];
+      }
+    }
+  }
+  return out.slice(0, n);
+}
+
 /** Entries of a ZIP archive as a Map name -> Uint8Array. */
 export function readZip(bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -116,10 +238,8 @@ export function readZip(bytes) {
     const start = lho + 30 + lnlen + lxlen;
     const data = bytes.subarray(start, start + csize);
     if (method === 0) out.set(name, data.slice());
-    else if (method === 8) {
-      if (!zlib) throw new Error("Deflated zip entries need Node.js' zlib");
-      out.set(name, new Uint8Array(zlib.inflateRawSync(data)));
-    } else throw new Error(`Unsupported zip compression method ${method}`);
+    else if (method === 8) out.set(name, zlib ? new Uint8Array(zlib.inflateRawSync(data)) : inflateRaw(data));
+    else throw new Error(`Unsupported zip compression method ${method}`);
   }
   return out;
 }

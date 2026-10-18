@@ -261,3 +261,21 @@ test("shapes: WKT geometries through CSV, netCDF and Excel", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("pure-JS inflate matches zlib on PyPSA's workbook entries", async () => {
+  const { inflateRaw } = await import("../src/core/zip.js");
+  const zlib = await import("node:zlib");
+  const { readFileSync } = await import("node:fs");
+  const bytes = new Uint8Array(readFileSync(xlPath("scigrid-de")));
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let checked = 0;
+  for (let p = 0; p + 30 < bytes.length; p++) {
+    if (view.getUint32(p, true) !== 0x04034b50 || view.getUint16(p + 8, true) !== 8) continue;
+    const csize = view.getUint32(p + 18, true);
+    const start = p + 30 + view.getUint16(p + 26, true) + view.getUint16(p + 28, true);
+    const data = bytes.subarray(start, start + csize);
+    assert.deepEqual(Buffer.from(inflateRaw(data)), zlib.inflateRawSync(data));
+    checked++;
+  }
+  assert.ok(checked > 5);
+});
