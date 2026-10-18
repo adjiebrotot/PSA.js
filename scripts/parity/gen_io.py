@@ -77,3 +77,21 @@ n.model.solver_model = None
 n.export_to_netcdf(NETCDF / "stochastic.nc")
 write_fixture("io_stochastic", {"network": dump_network(n), "network_nc": dump_network(pypsa.Network(NETCDF / "stochastic.nc"))})
 print("wrote netcdf fixtures")
+
+# Excel: PyPSA's export of the networks above and PyPSA's re-import of it
+EXCEL = ROOT / "test" / "fixtures" / "excel"
+EXCEL.mkdir(parents=True, exist_ok=True)
+excel_sources = {ex: pypsa.Network(EXAMPLES / ex / ex) for ex in ["ac-dc-meshed", "storage-hvdc", "model-energy", "scigrid-de"]}
+excel_sources["ac-dc-meshed-solved"] = pypsa.Network(NETCDF / "ac-dc-meshed-solved.nc")
+excel_sources["multiperiod"] = pypsa.Network(NETCDF / "multiperiod.nc")
+excel_sources["piecewise"] = pypsa.Network(NETCDF / "piecewise.nc")
+excel_records = {}
+for name, n in excel_sources.items():
+    fn = EXCEL / f"{name}.xlsx"
+    if fn.exists():
+        fn.unlink()
+    n.export_to_excel(fn)
+    m = pypsa.Network(fn)
+    excel_records[name] = {"network": dump_network(m), "piecewise": dump_piecewise(m)}
+write_fixture("io_excel", excel_records)
+print("wrote excel fixtures")

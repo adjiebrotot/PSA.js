@@ -62,8 +62,17 @@ scenarios plus IO tests). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`).
       fills, outer joins, `groupby().sum()`, `@`, `merge`) live in
       `src/optimization/statistic_expressions.js`.
 - [ ] Piecewise data on stochastic networks (PyPSA raises too).
-- [ ] **IO formats**: Excel (`import_from_excel`/`export_to_excel`, e.g. via
-      SheetJS), HDF5 (pandas HDFStore layout), `import_from_pypower_ppc`,
+- [x] **Excel IO** (`import_from_excel` / `export_to_excel`, `Network.from_excel`,
+      `new Network("file.xlsx")`): bespoke zip + SpreadsheetML reader/writer
+      (`src/core/zip.js`, `src/network/excel.js`), PyPSA's sheet layout incl.
+      short sheet names, stacked piecewise sheets and append mode (unrelated
+      sheets kept, stale ones removed). Tests: PyPSA workbooks of 7 networks
+      import identically and round-trip (`io.test.js`, fixtures in
+      `test/fixtures/excel`); `scripts/parity/check_js_excel.py` confirms that
+      PyPSA imports PSA.js workbooks identically (run manually; all 7 pass).
+      Like the netCDF files, regenerated workbooks differ in metadata bytes.
+      Browser use needs the workbook bytes and, for deflated workbooks, a zlib.
+- [ ] **IO formats**: HDF5 (pandas HDFStore layout), `import_from_pypower_ppc`,
       `import_from_pandapower_net` (likely out of scope without Python).
 - [ ] netCDF extras: `float32`, `compression=None`, URL inputs, browser support
       (h5wasm in-memory files), shapes/geometry (WKT) round trip.

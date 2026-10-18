@@ -20,3 +20,6 @@ networkx==3.7
 # busmap_by_hac (scenario clustering_hac); its distances go through numpy's BLAS
 # `dot`, which uses FMA on x86-64 CPUs with FMA support (PSA.js emulates that)
 scikit-learn==1.9.1
+# Excel IO fixtures (gen_io.py) and check_js_excel.py
+openpyxl==3.1.5
+python-calamine==0.9.0

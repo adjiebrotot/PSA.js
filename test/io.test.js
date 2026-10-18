@@ -193,3 +193,38 @@ test("stochastic network: netCDF import, export and round trip", async () => {
   }
   assert.throws(() => m.export_to_csv_folder(new MemoryFolder()), /not supported in the CSV exporter/);
 });
+
+// Excel: PyPSA's workbooks import identically; PSA.js workbooks round-trip
+const xlPath = (name) => path.join(ROOT, "test", "fixtures", "excel", `${name}.xlsx`);
+const excelFx = loadFixture("io_excel");
+for (const [name, fx] of Object.entries(excelFx).filter(([k]) => !k.startsWith("_"))) {
+  test(`import ${name} from PyPSA Excel`, () => {
+    const n = Network.from_excel(xlPath(name));
+    assertNetworkMatches(n, fx.network, { rtol: 0, atol: 0 });
+    assertPiecewiseMatches(n, fx.piecewise, `${name} excel`);
+  });
+
+  test(`Excel round trip ${name}`, () => {
+    const n = Network.from_excel(xlPath(name));
+    const m = Network.from_excel(n.export_to_excel(null));
+    assertNetworkMatches(m, fx.network, { rtol: 0, atol: 0 });
+    assertPiecewiseMatches(m, fx.piecewise, `${name} excel round trip`);
+  });
+}
+
+test("Excel export keeps unrelated sheets and replaces stale ones", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "psa-xlsx-"));
+  try {
+    const fn = path.join(dir, "net.xlsx");
+    const n = Network.from_csv_folder(examplePath("ac-dc-meshed"));
+    n.export_to_excel(fn);
+    const m = Network.from_csv_folder(examplePath("ac-dc-meshed"));
+    m.remove("Link", m.c.links.static.index.values);
+    m.export_to_excel(fn);
+    const k = Network.from_excel(fn);
+    assert.equal(k.c.links.static.index.length, 0);
+    assert.equal(k.c.lines.static.index.length, n.c.lines.static.index.length);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
