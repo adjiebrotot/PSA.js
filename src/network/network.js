@@ -10,6 +10,7 @@ import { DataFrame, Series, isNumberArray, makeFilled } from "../core/frame.js";
 import { Index, asIndex, labelKey } from "../core/index.js";
 import { pyFloatRepr } from "../core/csv.js";
 import { pyJsonClone } from "../core/pyjson.js";
+import { normalizeCarrierNiceNames } from "../statistics/nice_names.js";
 import { epsgOf, wktOf, transformer } from "../core/crs.js";
 import { get_option } from "../options.js";
 import { ComponentsStore, installStoreAccessors } from "./store.js";
@@ -948,13 +949,14 @@ export class Network {
 
   /** Unit of the buses with carrier `bus_carrier` (one unit, else an error). */
   bus_carrier_unit(bus_carrier) {
+    bus_carrier = normalizeCarrierNiceNames(this, bus_carrier);
     if (bus_carrier === null || bus_carrier === undefined) return "carrier dependent";
     const bcs = typeof bus_carrier === "string" ? [bus_carrier] : bus_carrier;
     const buses = this.c.buses.static;
     const carriers = buses.col("carrier");
     const present = new Set(carriers);
-    const missing = bcs.filter((b) => !present.has(b));
-    if (missing.length) throw new Error(`Bus carriers ${missing} not in network`);
+    const missing = [...new Set(bcs.filter((b) => !present.has(b)))];
+    if (missing.length) throw new Error(`ValueError: Bus carriers {${missing.map((b) => `'${b}'`).join(", ")}} not in network`);
     const units = [...new Set(buses.col("unit").filter((u, i) => bcs.includes(carriers[i])))];
     if (units.length > 1) {
       logger.warning(`Multiple units found for carrier ${bcs}: ${units}`);

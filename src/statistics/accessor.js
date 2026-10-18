@@ -20,6 +20,9 @@ import { scenarioView } from "../network/scenarios.js";
 import { PySet } from "../core/pyset.js";
 
 import { statisticsOptions } from "../options.js";
+import { normalizeCarrierNiceNames } from "./nice_names.js";
+
+export { normalizeCarrierNiceNames };
 
 export { statisticsOptions };
 
@@ -106,26 +109,6 @@ export function isNa(v) {
   return v === null || v === undefined || (typeof v === "number" && Number.isNaN(v));
 }
 
-export function normalizeCarrierNiceNames(n, carrier) {
-  if (carrier === null || carrier === undefined) return carrier;
-  const scalar = typeof carrier === "string";
-  if (!scalar && !Array.isArray(carrier)) return carrier;
-  const carriers = scalar ? [carrier] : carrier;
-  const st = n.c.carriers.static;
-  const nice = st.has("nice_name") ? st.col("nice_name") : [];
-  // scenario-indexed carriers: the first value per name (`groupby(level="name").first()`)
-  const seen = new Set();
-  const entries = st.index.values
-    .map((k, i) => [st.index.isMulti ? k[k.length - 1] : k, nice[i]])
-    .filter(([k]) => (seen.has(k) ? false : seen.add(k)))
-    .filter(([, v]) => v !== "" && !isNa(v));
-  if (!entries.length) return carrier;
-  const counts = new Map();
-  for (const [, v] of entries) counts.set(v, (counts.get(v) ?? 0) + 1);
-  const toCarrier = new Map(entries.filter(([, v]) => counts.get(v) === 1).map(([k, v]) => [v, k]));
-  const out = carriers.map((c) => toCarrier.get(c) ?? c);
-  return scalar ? out[0] : out;
-}
 
 /** Python `re.search` semantics for `str.contains`. */
 export function contains(s, pattern) {
@@ -912,11 +895,14 @@ export class StatisticsAccessor {
 
   /** Supply (positive part of the energy balance). */
   supply(opts = {}) {
+    // PyPSA computes it through energy_balance, which checks the bus carriers
+    this._n.bus_carrier_unit(opts.bus_carrier ?? null);
     return this._finalize(this._energyBalanceTab({ groupby: "carrier", ...opts }, "supply"), "Supply", "carrier dependent");
   }
 
   /** Withdrawal (negative part of the energy balance). */
   withdrawal(opts = {}) {
+    this._n.bus_carrier_unit(opts.bus_carrier ?? null);
     return this._finalize(this._energyBalanceTab({ groupby: "carrier", ...opts }, "withdrawal"), "Withdrawal", "carrier dependent");
   }
 
@@ -1015,10 +1001,9 @@ export class StatisticsAccessor {
     const o = { ...DEFAULTS, groupby_time: "mean", at_port: "all", ...opts };
     const rev = this._revenueTab(o, "both");
     const denom = this._operationTab({ ...o, at_port: [0], bus_carrier: null, drop_zero: false, round: null });
-    let out;
-    if (denom.empty) out = rev.map(() => NaN);
-    else out = rev.combine(denom, (a, b) => a / b);
-    return this._finalize(out, "Market Value", "currency / operational unit");
+    // without operation PyPSA returns the revenue (named "Revenue") set to NaN
+    if (denom.empty) return this._finalize(rev.map(() => NaN), "Revenue", "currency");
+    return this._finalize(rev.combine(denom, (a, b) => a / b), "Market Value", "currency / operational unit");
   }
 
   /** Average marginal prices per bus (load or time weighted). */
@@ -1208,18 +1193,18 @@ export class StatisticsAccessor {
   /** Overview table of the main statistics (deprecated in PyPSA but kept). */
   call(opts = {}) {
     const funcs = [
-      ["optimal_capacity", "Optimal Capacity"],
-      ["installed_capacity", "Installed Capacity"],
-      ["supply", "Supply"],
-      ["withdrawal", "Withdrawal"],
-      ["energy_balance", "Energy Balance"],
-      ["transmission", "Transmission"],
-      ["capacity_factor", "Capacity Factor"],
-      ["curtailment", "Curtailment"],
-      ["capex", "Capital Expenditure"],
-      ["opex", "Operational Expenditure"],
-      ["revenue", "Revenue"],
-      ["market_value", "Market Value"],
+      "optimal_capacity",
+      "installed_capacity",
+      "supply",
+      "withdrawal",
+      "energy_balance",
+      "transmission",
+      "capacity_factor",
+      "curtailment",
+      "capex",
+      "opex",
+      "revenue",
+      "market_value",
     ];
     // PyPSA passes every argument explicitly, so e.g. `at_port=None` replaces
     // the defaults of the individual statistics
@@ -1236,7 +1221,14 @@ export class StatisticsAccessor {
       round: null,
       ...opts,
     };
-    const res = funcs.map(([f, name]) => [name, this[f](args)]);
+    // columns are keyed by each result's name, so a result named like an
+    // earlier one replaces it in place (PyPSA's dict)
+    const byName = new Map();
+    for (const f of funcs) {
+      const s = this[f](args);
+      byName.set(s.attrs.name, s);
+    }
+    const res = [...byName];
     const keys = new Map();
     for (const [, s] of res) for (const l of s.index.values) keys.set(labelKey(l), l);
     const labels = [...keys.values()].sort(compareLabels);

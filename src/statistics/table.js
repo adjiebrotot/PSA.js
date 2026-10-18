@@ -119,6 +119,37 @@ export class Tab {
 }
 
 /** Aggregation of an array of numbers like pandas (NaN skipped). */
+/** Kahan-compensated sum of the non-NaN values and their count (pandas' cython `group_sum`). */
+function kahanSum(values) {
+  let sum = 0;
+  let comp = 0;
+  let count = 0;
+  for (const x of values) {
+    if (Number.isNaN(x)) continue;
+    count++;
+    const y = x - comp;
+    const t = sum + y;
+    comp = t - sum - y;
+    // infinite values make the compensation NaN (pandas GH#53606)
+    if (Number.isNaN(comp)) comp = 0;
+    sum = t;
+  }
+  return [sum, count];
+}
+
+/**
+ * Aggregate the values of one group like pandas' `groupby().agg(agg)`: sums and
+ * means are Kahan-compensated as in pandas' cython group kernels.
+ */
+export function groupAggregate(values, agg) {
+  if (agg === "sum") return kahanSum(values)[0];
+  if (agg === "mean") {
+    const [sum, count] = kahanSum(values);
+    return count ? sum / count : NaN;
+  }
+  return aggregate(values, agg);
+}
+
 export function aggregate(values, agg) {
   if (typeof agg === "function") return agg(values);
   const v = values.filter((x) => !Number.isNaN(x));
@@ -241,7 +272,7 @@ export function groupRows(tab, keys, names, agg) {
   const rows = labels.map((l) => {
     const members = groups.get(labelKey(l));
     const out = new Float64Array(w);
-    for (let j = 0; j < w; j++) out[j] = aggregate(members.map((i) => tab.rows[i][j]), agg);
+    for (let j = 0; j < w; j++) out[j] = groupAggregate(members.map((i) => tab.rows[i][j]), agg);
     return out;
   });
   return new Tab(new Index(labels, multi ? names : names[0]), tab.cols, rows);

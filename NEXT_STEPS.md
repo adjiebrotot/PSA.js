@@ -1,6 +1,6 @@
 # Remaining work for the next session
 
-State at hand-off: all PSA.js tests pass (`npm test`: 133 tests: the parity
+State at hand-off: all PSA.js tests pass (`npm test`: 134 tests: the parity
 scenarios, IO tests and the example scripts; `npm run test:browser` passes in
 headless Chromium). Reference PyPSA: v1.4.0 (`6c45594`, fork `master`). Work
 of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
@@ -157,6 +157,20 @@ browser smoke test are run separately.
       `await examples.carbon_management()`, `n.optimize.create_model().to_lp()`
       against `n.optimize.create_model().to_file(..., io_api="lp")`
       (`node --max-old-space-size=12000` for the full network).
+- [x] Statistics on PyPSA's published example networks (checked by hand):
+      the overview and 21 statistics (capex variants, capacities, opex,
+      supply, withdrawal, transmission, energy balance incl. time series,
+      curtailment, capacity factor, revenue, market value, system cost,
+      prices) match PyPSA on all six networks, incl. the solved
+      `carbon_management` network. Fixed on the way (scenario
+      `statistics_quirks`): grouped sums and means are Kahan-compensated
+      like pandas' cython group kernels (cancellation in
+      `expanded_capex`), `market_value` without operation returns the
+      revenue under its "Revenue" name so PyPSA's overview has no Market
+      Value column (the overview keys columns by result name), and
+      `supply` / `withdrawal` reject bus carriers missing from the network
+      (through `energy_balance`'s `bus_carrier_unit`, which now also maps
+      nice names).
 - [x] Module helpers (scenario `module_helpers`): `costs.annuity` /
       `costs.periodized_cost` on numbers, arrays and Series (pandas
       alignment), `geo.haversine_pts` / `geo.haversine` / `geo.compute_bbox`
