@@ -7,7 +7,8 @@ of the last session is on branch `claude/stoic-gauss-ka4jkc` (no PR opened).
 
 Fixture environment: `scripts/parity/requirements.txt` now also pins
 scikit-learn (HAC), openpyxl and python-calamine (Excel), PyTables (HDF5),
-PYPOWER and tsam. tsam's metadata caps numpy/pandas below the pins (installing
+PYPOWER and tsam, and names the CBC / GLPK executables (`coinor-cbc`,
+`glpk-utils`) that `opt_cli_solvers` needs. tsam's metadata caps numpy/pandas below the pins (installing
 it normally downgrades them to numpy 2.4.6 / pandas 3.0.5, which moves
 solver-derived voltage angles by an ulp), so it is installed with `--no-deps`;
 `generate_all.sh` now warns when numpy, pandas, scipy, highspy or linopy differ
@@ -18,10 +19,13 @@ browser smoke test are run separately.
 
 ## 0. Suggested next steps
 
-Done in earlier sessions: HAC linkages, HDF5 IO, URL inputs, more examples
-and the API reference, stochastic components added after `set_scenarios`,
-package options, module helpers (`costs`, `geo`, `examples`), LP and
-statistics parity on PyPSA's published example networks (see section 2).
+Done in earlier sessions: HAC linkages (incl. precomputed / callable
+metrics), HDF5 IO, URL inputs, more examples and the API reference,
+stochastic components added after `set_scenarios`, package options, module
+helpers (`costs`, `geo`, `examples`), LP / statistics / solve parity on
+PyPSA's published example networks (incl. the 310 MB PyPSA-Eur LP), CBC and
+GLPK command-line solvers, `c.da` / `c.ds` views, all UTM zones and LCC
+projections in `to_crs` (see section 2).
 
 Candidates for the next session, roughly by value:
 
