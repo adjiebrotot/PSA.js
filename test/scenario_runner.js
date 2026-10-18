@@ -48,6 +48,11 @@ export function decodeValue(v, n) {
       const columns = spec.column_names ? new Index(spec.columns, spec.column_names) : spec.columns;
       return new DataFrame({ index: new Index(spec.index), columns, data });
     }
+    if ("$columns" in v) {
+      // a column subset of a frame reached by path
+      const df = getPathSync(n, v.$columns.path);
+      return new DataFrame({ index: df.index, columns: v.$columns.columns, data: new Map(v.$columns.columns.map((c) => [c, df.col(c)])) });
+    }
     if ("$var" in v) return n.model.variables.get(v.$var);
     if ("$result" in v) return currentResults[v.$result];
     if ("$da" in v) {

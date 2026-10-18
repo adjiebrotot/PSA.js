@@ -17,3 +17,6 @@ scipy==1.18.1
 xarray==2026.9.0
 netcdf4==1.7.5
 networkx==3.7
+# busmap_by_hac (scenario clustering_hac); its distances go through numpy's BLAS
+# `dot`, which uses FMA on x86-64 CPUs with FMA support (PSA.js emulates that)
+scikit-learn==1.9.1

@@ -89,3 +89,11 @@ export function pyHypot(x, y) {
   r += (hi - rr - rre + lo2) / (2 * r);
   return r / scale;
 }
+
+/** `fma(a, b, c)`: `a * b + c` rounded once (as hardware FMA, e.g. in BLAS kernels). */
+export function pyFma(a, b, c) {
+  const [p, e] = twoProd(a, b);
+  if (!Number.isFinite(p)) return a * b + c;
+  const [s, t] = twoSum(p, c);
+  return s + (t + e);
+}

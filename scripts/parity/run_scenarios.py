@@ -79,6 +79,10 @@ def decode(v, n):
             if spec.get("column_names"):
                 columns = pd.MultiIndex.from_tuples([tuple(c) for c in columns], names=spec["column_names"])
             return pd.DataFrame([[decode(x, n) for x in row] for row in spec["data"]], index=spec["index"], columns=columns)
+        if "$columns" in v:
+            # a column subset of a frame reached by path
+            spec = v["$columns"]
+            return get_path(n, spec["path"])[spec["columns"]]
         if "$var" in v:
             return n.model.variables[v["$var"]]
         if "$result" in v:

@@ -11,6 +11,7 @@ import { haversinePts } from "../components/components.js";
 import { logger } from "../logger.js";
 import { pyHypot } from "../core/pymath.js";
 import { greedy_modularity_communities } from "./modularity.js";
+import { wardClustering } from "./hac.js";
 
 const sumKeepNa = (xs) => {
   const v = xs.filter((x) => !(typeof x === "number" && Number.isNaN(x)));
@@ -653,6 +654,45 @@ export function busmap_by_greedy_modularity(n, n_clusters, buses_i = null) {
   );
 }
 
+/**
+ * Busmap by hierarchical agglomerative clustering (scikit-learn's Ward
+ * linkage) of `feature` rows, constrained to buses connected by branches.
+ * Without a feature all buses are equally similar.
+ */
+export function busmap_by_hac(n, n_clusters, { buses_i = null, branch_components = null, feature = null, affinity = "euclidean", linkage = "ward" } = {}) {
+  if (linkage !== "ward") throw new Error(`NotImplementedError: busmap_by_hac supports linkage='ward' only, got '${linkage}'`);
+  if (affinity !== "euclidean" && affinity !== "l2") {
+    throw new Error(`ValueError: ${affinity} was provided as metric. Ward can only work with euclidean distances (i.e. 'euclidean' and 'l2').`);
+  }
+  const static_ = n.c.buses.static;
+  const buses = buses_i === null ? static_.index.values : asList(buses_i);
+  let X;
+  if (feature === null) {
+    logger.warning(
+      "No feature is specified for Hierarchical Clustering. Falling back to default, where all buses have equal similarity. You can specify a feature as pandas.DataFrame indexed with buses_i.",
+    );
+    X = buses.map(() => [0]);
+  } else if (feature instanceof DataFrame) {
+    // rows in the frame's order, as scikit-learn takes the values
+    X = feature.index.values.map((_, i) => feature.columns.values.map((c) => Number(feature.col(c)[i])));
+  } else X = feature.map((r) => (Array.isArray(r) ? r.map(Number) : [Number(r)]));
+  // adjacency of the branches among buses_i (cols[j][i]: bus i -> bus j)
+  const cols = n.adjacency_matrix({ branch_components: branch_components ?? [...n.branch_components], return_dataframe: false });
+  const sample = new Map(buses.map((b, k) => [static_.index.getLoc(b), k]));
+  const pairs = [];
+  cols.forEach((col, j) => {
+    if (!sample.has(j)) return;
+    col.forEach((v, i) => {
+      if (v !== 0 && sample.has(i)) pairs.push([sample.get(i), sample.get(j)]);
+    });
+  });
+  const labels = wardClustering(X, pairs, n_clusters);
+  return new Series(
+    Array.from(labels, String),
+    new Index(buses, "name"),
+  );
+}
+
 function asList(x) {
   return x instanceof Index ? x.values : Array.isArray(x) ? x : [x];
 }
@@ -693,9 +733,15 @@ export class SpatialClusteringAccessor {
     return busmap_by_stubs(this._n, matching_attrs);
   }
 
-  busmap_by_hac() {
+  busmap_by_hac(n_clusters, opts = {}) {
     scenariosNotImplemented(this._n, "busmap_by_hac");
-    throw new Error("busmap_by_hac (scikit-learn agglomerative clustering) is not available in PSA.js; compute a busmap and use cluster_by_busmap.");
+    return busmap_by_hac(this._n, n_clusters, opts);
+  }
+
+  cluster_by_hac(n_clusters, { line_length_factor = 1.0, ...opts } = {}) {
+    scenariosNotImplemented(this._n, "cluster_by_hac");
+    const busmap = busmap_by_hac(this._n, n_clusters, opts);
+    return get_clustering_from_busmap(this._n, busmap, { line_length_factor }).n;
   }
 
   busmap_by_greedy_modularity(n_clusters, buses_i = null) {
