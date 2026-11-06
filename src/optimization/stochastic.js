@@ -12,12 +12,16 @@
  * holds that scenario's data) and merges them into the stochastic model with
  * PyPSA's dimension order and label numbering:
  *
- * - variables `(snapshot, name)` become `(scenario, name, snapshot)`,
- *   variables without a snapshot dimension are shared;
+ * - variables `(snapshot, name)` become `(scenario, name, snapshot)`
+ *   (`(snapshot, scenario, name)` for components whose `c.da` layout is
+ *   snapshot-major, see `isSnapshotMajor`), variables without a snapshot
+ *   dimension are shared;
  * - constraints `(snapshot, name, ...)` become `(scenario, name, snapshot, ...)`
- *   (`(snapshot, scenario, name)` for the nodal balance of multi-period
- *   networks), `(name)` become `(name, scenario)`, `()` become `(scenario)`
- *   and constraints over other dimensions gain a leading `scenario`;
+ *   (`(snapshot, scenario, name)` for snapshot-major components, and for the
+ *   nodal balance of multi-period networks or when its first contributing
+ *   component is snapshot-major), `(name)` become `(name, scenario)`, `()`
+ *   become `(scenario)` and constraints over other dimensions gain a leading
+ *   `scenario`;
  * - sums over all names and snapshots (global constraints) list their terms
  *   name-major, following the stochastic variable layout;
  * - the objective is the probability-weighted CAPEX and OPEX of all
@@ -28,6 +32,7 @@ import { Index } from "../core/index.js";
 import { DataFrame, isNumberArray } from "../core/frame.js";
 import { Model, Variable, unravel } from "./linopy.js";
 import { scenarioView, copyFrame } from "../network/scenarios.js";
+import { isSnapshotMajor } from "../network/scenario_frames.js";
 
 export { scenarioView };
 
@@ -36,17 +41,33 @@ export { scenarioView };
 // ----------------------------------------------------------------------
 
 /** Stochastic dims of a variable, or null if it is shared across scenarios. */
-function variableDims(dims) {
+function variableDims(dims, snapshotMajor = false) {
   if (!dims.includes("snapshot")) return null;
   const rest = dims.filter((d) => d !== "snapshot" && d !== "name");
+  if (snapshotMajor && dims.includes("name")) return ["snapshot", "scenario", "name", ...rest];
   return ["scenario", ...(dims.includes("name") ? ["name"] : []), "snapshot", ...rest];
 }
 
+/** Components whose operational variables are laid out (snapshot, scenario, name). */
+function snapshotMajorComponents(n) {
+  return new Set([...n.components.values()].filter(isSnapshotMajor).map((c) => c.name));
+}
+
+/** The component whose expression leads the nodal balance (PyPSA's `args` order). */
+function nodalBalanceLead(n) {
+  for (const name of ["Generator", "Store", "StorageUnit", "Line", "Transformer", "Link"]) {
+    if (!n.c.get(name).static.empty) return name;
+  }
+  return null;
+}
+
 /** Stochastic dims of a constraint (PyPSA's xarray broadcasting order). */
-function constraintDims(name, dims, multiInvest) {
+function constraintDims(name, dims, multiInvest, major = new Set(), lead = null) {
   if (dims.includes("snapshot") && dims.includes("name")) {
     const rest = dims.filter((d) => d !== "snapshot" && d !== "name");
-    if (multiInvest && name.endsWith("nodal_balance")) return ["snapshot", "scenario", "name", ...rest];
+    const owner = name.split("-")[0];
+    const nodal = name.endsWith("nodal_balance");
+    if ((nodal && (multiInvest || major.has(lead))) || (!nodal && major.has(owner))) return ["snapshot", "scenario", "name", ...rest];
     return ["scenario", "name", "snapshot", ...rest];
   }
   if (dims.length === 1 && dims[0] === "name") return name.endsWith("-maint-event-count") ? ["scenario", "name"] : ["name", "scenario"];
@@ -100,10 +121,11 @@ function mergeVariables(M, n, models, scenarios) {
     M.add_variables({ name: "CVaR" });
   };
   if (cvarAfter === null) addCvar();
+  const major = snapshotMajorComponents(n);
   for (const name of order) {
     const dets = models.map((m) => m.variables.get(name) ?? null);
     const ref = dets.find((d) => d !== null);
-    const sdims = variableDims(ref.dims);
+    const sdims = variableDims(ref.dims, major.has(name.split("-")[0]));
     if (sdims === null) {
       // shared (first-stage) variable
       const v = new Variable(M, {
@@ -214,10 +236,12 @@ function mergeConstraints(M, n, models, scenarios, maps, { extra = false, rowMap
   );
   const owner = makeOwner(M);
   const multiInvest = Boolean(n._multi_invest);
+  const major = snapshotMajorComponents(n);
+  const lead = nodalBalanceLead(n);
   for (const name of order) {
     const dets = models.map((m) => m.constraints.get(name) ?? null);
     const ref = dets.find((d) => d !== null);
-    const sdims = constraintDims(name, ref.dims, multiInvest);
+    const sdims = constraintDims(name, ref.dims, multiInvest, major, lead);
     const coords = sdims.map((dim) => (dim === "scenario" ? scenarios : ref.coords[ref.dims.indexOf(dim)]));
     const con = M.new_constraint(name, sdims, coords);
     const toDet = positionMap(sdims, con.shape, con.strides, ref.dims, ref.strides);

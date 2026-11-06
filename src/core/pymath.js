@@ -57,3 +57,43 @@ export function pyPow(x, y) {
   if (y < 0) result = ddDivOne(result);
   return result[0] + result[1];
 }
+
+function twoSum(a, b) {
+  const s = a + b;
+  const bb = s - a;
+  return [s, a - (s - bb) + (b - bb)];
+}
+
+/**
+ * `math.hypot(x, y)` / `abs(complex(x, y))` correctly rounded (as glibc):
+ * the sum of squares in double-double and one Newton step on the square root.
+ */
+export function pyHypot(x, y) {
+  x = Math.abs(x);
+  y = Math.abs(y);
+  if (x === Infinity || y === Infinity) return Infinity;
+  if (Number.isNaN(x) || Number.isNaN(y)) return NaN;
+  if (x === 0 || y === 0) return x + y;
+  // scale into a safe range (powers of two are exact)
+  const big = Math.max(x, y);
+  const scale = big > 1e150 ? 2 ** -600 : big < 1e-150 ? 2 ** 600 : 1;
+  x *= scale;
+  y *= scale;
+  const [p1, e1] = twoProd(x, x);
+  const [p2, e2] = twoProd(y, y);
+  const [s, se] = twoSum(p1, p2);
+  const lo = se + e1 + e2;
+  const [hi, lo2] = fastTwoSum(s, lo);
+  let r = Math.sqrt(hi);
+  const [rr, rre] = twoProd(r, r);
+  r += (hi - rr - rre + lo2) / (2 * r);
+  return r / scale;
+}
+
+/** `fma(a, b, c)`: `a * b + c` rounded once (as hardware FMA, e.g. in BLAS kernels). */
+export function pyFma(a, b, c) {
+  const [p, e] = twoProd(a, b);
+  if (!Number.isFinite(p)) return a * b + c;
+  const [s, t] = twoSum(p, c);
+  return s + (t + e);
+}

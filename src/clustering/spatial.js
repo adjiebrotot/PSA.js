@@ -9,6 +9,9 @@ import { DataFrame, Series, isNumberArray } from "../core/frame.js";
 import { Network } from "../network/network.js";
 import { haversinePts } from "../components/components.js";
 import { logger } from "../logger.js";
+import { pyHypot } from "../core/pymath.js";
+import { greedy_modularity_communities } from "./modularity.js";
+import { agglomerativeClustering } from "./hac.js";
 
 const sumKeepNa = (xs) => {
   const v = xs.filter((x) => !(typeof x === "number" && Number.isNaN(x)));
@@ -624,6 +627,81 @@ export function busmap_by_kmeans(n, bus_weightings, n_clusters, { buses_i = null
   return new Series(labels, new Index(names, "name"));
 }
 
+/**
+ * Busmap from Clauset-Newman-Moore greedy modularity communities of the line
+ * graph, weighted by `s_nom / |r + jx|` (networkx, exactly `n_clusters`
+ * communities; labels by decreasing community size).
+ */
+export function busmap_by_greedy_modularity(n, n_clusters, buses_i = null) {
+  if (buses_i && !(buses_i instanceof Index) && !Array.isArray(buses_i)) buses_i = buses_i.buses_i ?? null;
+  const buses = buses_i === null ? n.c.buses.static.index.values : asList(buses_i);
+  n.calculate_dependent_values();
+  const st = n.c.lines.static;
+  const inBuses = new Set(buses.map(labelKey));
+  const edges = [];
+  st.index.values.forEach((_, i) => {
+    const b0 = st.col("bus0")[i];
+    const b1 = st.col("bus1")[i];
+    if (!inBuses.has(labelKey(b0)) || !inBuses.has(labelKey(b1))) return;
+    edges.push([b0, b1, st.col("s_nom")[i] / pyHypot(st.col("r")[i], st.col("x")[i])]);
+  });
+  const communities = greedy_modularity_communities(buses, edges, { best_n: n_clusters, cutoff: n_clusters });
+  const label = new Map();
+  communities.forEach((c, k) => c.forEach((b) => label.set(labelKey(b), String(k))));
+  return new Series(
+    buses.map((b) => label.get(labelKey(b))),
+    new Index(buses.map(String), "name"),
+  );
+}
+
+/**
+ * Busmap by hierarchical agglomerative clustering (scikit-learn's Ward,
+ * complete, average or single linkage) of `feature` rows, constrained to
+ * buses connected by branches. `affinity` is a metric name, "precomputed"
+ * (`feature` is the distance matrix between the buses) or a function of two
+ * feature rows. Without a feature all buses are equally similar.
+ */
+export function busmap_by_hac(n, n_clusters, { buses_i = null, branch_components = null, feature = null, affinity = "euclidean", linkage = "ward" } = {}) {
+  if (!["ward", "complete", "average", "single"].includes(linkage)) throw new Error(`ValueError: Unknown linkage type ${linkage}.`);
+  if (typeof affinity !== "function" && !["euclidean", "l2", "manhattan", "l1", "cosine", "precomputed"].includes(affinity)) {
+    throw new Error(`NotImplementedError: metric '${affinity}' is not available in PSA.js`);
+  }
+  if (linkage === "ward" && affinity !== "euclidean" && affinity !== "l2") {
+    throw new Error(`ValueError: ${affinity} was provided as metric. Ward can only work with euclidean distances (i.e. 'euclidean' and 'l2').`);
+  }
+  const static_ = n.c.buses.static;
+  const buses = buses_i === null ? static_.index.values : asList(buses_i);
+  let X;
+  if (feature === null) {
+    logger.warning(
+      "No feature is specified for Hierarchical Clustering. Falling back to default, where all buses have equal similarity. You can specify a feature as pandas.DataFrame indexed with buses_i.",
+    );
+    X = buses.map(() => [0]);
+  } else if (feature instanceof DataFrame) {
+    // rows in the frame's order, as scikit-learn takes the values
+    X = feature.index.values.map((_, i) => feature.columns.values.map((c) => Number(feature.col(c)[i])));
+  } else X = feature.map((r) => (Array.isArray(r) ? r.map(Number) : [Number(r)]));
+  // adjacency of the branches among buses_i (cols[j][i]: bus i -> bus j)
+  const cols = n.adjacency_matrix({ branch_components: branch_components ?? [...n.branch_components], return_dataframe: false });
+  const sample = new Map(buses.map((b, k) => [static_.index.getLoc(b), k]));
+  const pairs = [];
+  cols.forEach((col, j) => {
+    if (!sample.has(j)) return;
+    col.forEach((v, i) => {
+      if (v !== 0 && sample.has(i)) pairs.push([sample.get(i), sample.get(j)]);
+    });
+  });
+  const labels = agglomerativeClustering(X, pairs, n_clusters, { linkage, metric: affinity });
+  return new Series(
+    Array.from(labels, String),
+    new Index(buses, "name"),
+  );
+}
+
+function asList(x) {
+  return x instanceof Index ? x.values : Array.isArray(x) ? x : [x];
+}
+
 /** `_scenarios_not_implemented`: spatial clustering does not support stochastic networks. */
 function scenariosNotImplemented(n, method) {
   if (n.has_scenarios) throw new Error(`ValueError: Method '${method}' is not yet implemented for stochastic networks.`);
@@ -635,39 +713,65 @@ export class SpatialClusteringAccessor {
     this._n = n;
   }
 
+  /**
+   * Clustering result (`Clustering` with the clustered network, busmap and linemap) for a busmap; aggregation strategies as in PyPSA.
+   */
   get_clustering_from_busmap(busmap, opts = {}) {
     scenariosNotImplemented(this._n, "get_clustering_from_busmap");
     return get_clustering_from_busmap(this._n, busmap, opts);
   }
 
+  /** The network clustered along `busmap` (bus -> cluster). */
   cluster_by_busmap(busmap, opts = {}) {
     scenariosNotImplemented(this._n, "cluster_by_busmap");
     return get_clustering_from_busmap(this._n, busmap, opts).n;
   }
 
+  /** Busmap by weighted k-means of the bus coordinates (a seeded k-means++, not scikit-learn's). */
   busmap_by_kmeans(bus_weightings, n_clusters, opts = {}) {
     scenariosNotImplemented(this._n, "busmap_by_kmeans");
     return busmap_by_kmeans(this._n, bus_weightings, n_clusters, opts);
   }
 
+  /** The network clustered by `busmap_by_kmeans`. */
   cluster_by_kmeans(bus_weightings, n_clusters, { line_length_factor = 1.0, ...opts } = {}) {
     scenariosNotImplemented(this._n, "cluster_by_kmeans");
     const busmap = busmap_by_kmeans(this._n, bus_weightings, n_clusters, opts);
     return get_clustering_from_busmap(this._n, busmap, { line_length_factor }).n;
   }
 
+  /** Busmap that merges stub buses (degree one) into their neighbours. */
   busmap_by_stubs(matching_attrs = null) {
     return busmap_by_stubs(this._n, matching_attrs);
   }
 
-  busmap_by_hac() {
+  /**
+   * Busmap by hierarchical agglomerative clustering of `feature` rows constrained to connected buses (`linkage`: ward, complete, average, single; `affinity`: euclidean, manhattan, cosine).
+   */
+  busmap_by_hac(n_clusters, opts = {}) {
     scenariosNotImplemented(this._n, "busmap_by_hac");
-    throw new Error("busmap_by_hac (scikit-learn agglomerative clustering) is not available in PSA.js; compute a busmap and use cluster_by_busmap.");
+    return busmap_by_hac(this._n, n_clusters, opts);
   }
 
-  busmap_by_greedy_modularity() {
+  /** The network clustered by `busmap_by_hac`. */
+  cluster_by_hac(n_clusters, { line_length_factor = 1.0, ...opts } = {}) {
+    scenariosNotImplemented(this._n, "cluster_by_hac");
+    const busmap = busmap_by_hac(this._n, n_clusters, opts);
+    return get_clustering_from_busmap(this._n, busmap, { line_length_factor }).n;
+  }
+
+  /** Busmap by greedy modularity communities (Clauset-Newman-Moore) of the bus graph. */
+  busmap_by_greedy_modularity(n_clusters, buses_i = null) {
     scenariosNotImplemented(this._n, "busmap_by_greedy_modularity");
-    throw new Error("busmap_by_greedy_modularity (networkx) is not available in PSA.js; compute a busmap and use cluster_by_busmap.");
+    return busmap_by_greedy_modularity(this._n, n_clusters, buses_i);
+  }
+
+  /** The network clustered by `busmap_by_greedy_modularity`. */
+  cluster_by_greedy_modularity(n_clusters, buses_i = null, { line_length_factor = 1.0 } = {}) {
+    scenariosNotImplemented(this._n, "cluster_by_greedy_modularity");
+    if (buses_i && !(buses_i instanceof Index) && !Array.isArray(buses_i)) ({ buses_i = null, line_length_factor = 1.0 } = buses_i);
+    const busmap = busmap_by_greedy_modularity(this._n, n_clusters, buses_i);
+    return get_clustering_from_busmap(this._n, busmap, { line_length_factor }).n;
   }
 }
 

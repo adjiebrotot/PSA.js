@@ -1189,8 +1189,30 @@ export function define_kirchhoff_voltage_constraints(n, sns, cycle_basis_method 
     }
     return [vars, coeffs, "=", r(lc, 0)];
   };
-  if (aligned) m.add_constraints("Kirchhoff-Voltage-Law", ["snapshot", "cycle"], [allSns, cycleIdx], row);
-  else m.add_constraints("Kirchhoff-Voltage-Law", ["cycle", "snapshot"], [cycleIdx, allSns], (cyc, si) => row(si, cyc));
+  const con = aligned
+    ? m.add_constraints("Kirchhoff-Voltage-Law", ["snapshot", "cycle"], [allSns, cycleIdx], row)
+    : m.add_constraints("Kirchhoff-Voltage-Law", ["cycle", "snapshot"], [cycleIdx, allSns], (cyc, si) => row(si, cyc));
+  // linopy's `flow @ C` is compacted (zeros pruned): its `_term` size is the
+  // most nonzeros of a cycle per branch type (summed over the types and the
+  // optimised phase shifts), the largest over the investment periods
+  const maxNonzeros = (C, rowOf, names) => {
+    let mx = 0;
+    for (let cyc = 0; cyc < C.columns.length; cyc++) {
+      const col = C.col(cyc);
+      let k = 0;
+      for (const nm of names.values) if (col[rowOf.get(nm)] !== 0) k++;
+      mx = Math.max(mx, k);
+    }
+    return mx;
+  };
+  con.nterm = Math.max(
+    ...parts.map((p) => {
+      let k = 0;
+      for (const { flowNames, rowOf } of p.typeTerms) k += maxNonzeros(p.C, rowOf, flowNames);
+      if (p.shift && !p.shift.optNames.empty) k += maxNonzeros(p.shift.Cplain, p.shift.rowOf, p.shift.optNames);
+      return k;
+    }),
+  );
 }
 
 /**

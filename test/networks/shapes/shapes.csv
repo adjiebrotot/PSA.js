@@ -1,0 +1,13 @@
+name,geometry,component,idx,type
+p1,POINT (9.52257596986262 52.36040905573),Bus,a,point
+p2,POINT(1e-05 -0.0000005),Bus,c,point
+p3,POINT Z (1.0000004 2.5 3.123456789),Bus,b,point
+l1,"LINESTRING (9.52257596986262 52.36040905573, 10.1 53.0)",Line,ab,line
+g1,"POLYGON ((0 0, 1.123456789 0, 1 1, 0 0), (0.2 0.2, 0.3 0.2, 0.3 0.3, 0.2 0.2))",,,region
+g2,"MULTIPOLYGON (((0 0, 1 0, 1 1, 0 0)), ((2 2, 3 2, 3 3, 2 2)))",,,region
+g3,"MULTIPOINT ((1 2), (3.0000001 4))",,,points
+g4,"MULTILINESTRING ((0 0, 1 1), (2 2, 3 3.14159265358979))",,,lines
+g5,"GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (0 0, 1 1))",,,collection
+g6,POINT EMPTY,,,empty
+g7,"POINT (123456789.123456789 12345678901234567890)",,,big
+g8,"POINT (0.0078125 -0.0078125)",,,tie

@@ -9,7 +9,9 @@ import { Network, ConsistencyError, checkForUnknownBuses } from "./network/netwo
 import { NOMINAL_ATTRS, Components } from "./components/components.js";
 import { logger } from "./logger.js";
 
-export const consistencyOptions = { numerical_tolerance: 1e-9 };
+import { consistencyOptions } from "./options.js";
+
+export { consistencyOptions };
 
 const RE_PORTS_FILTER = /^bus\d*$/;
 const RE_PORTS_GE_2 = /^bus([2-9]|[1-9]\d+)$/;
@@ -517,6 +519,51 @@ const STRICT_OPTIONS = [
   "slack_bus_consistency",
 ];
 
+/** dtype of a static column by its values (as pandas would hold them). */
+function columnDtype(arr, declared) {
+  const vals = Array.from(arr);
+  if (vals.every((v) => typeof v === "boolean")) return "bool";
+  if (vals.every((v) => typeof v === "number")) return declared === "int" && vals.every(Number.isInteger) ? "int" : "float";
+  if (vals.every((v) => typeof v === "string")) return "object";
+  return "object";
+}
+
+const PANDAS_DTYPE = { float: "float64", int: "int64", bool: "bool", object: "object" };
+
+/**
+ * Static attributes whose dtype differs from the attribute definition, and
+ * time series with non-numeric columns (`check_dtypes_`).
+ */
+function check_dtypes_(c, strict = false) {
+  const st = c.static;
+  const bad = [];
+  for (const [attr, def] of c.defaults) {
+    if (!def.static || attr === "name" || !st.has(attr)) continue;
+    const want = def.typ === "str" ? "object" : def.typ;
+    if (!(want in PANDAS_DTYPE)) continue; // e.g. shapes' geometry
+    // empty frames keep the declared dtypes
+    const have = st.index.length === 0 ? (st.dtypes[attr] ?? want) : columnDtype(st.col(attr), st.dtypes[attr]);
+    if (have !== want) bad.push([attr, have, want]);
+  }
+  if (bad.length) {
+    logOrRaise(
+      strict,
+      `The following attributes of the dataframe ${c.list_name} have the wrong dtype:\n${fmtIndex(bad.map(([a]) => a))}\nThey are:\n${bad.map(([a, h]) => `${a}    ${PANDAS_DTYPE[h]}`).join("\n")}\nbut should be:\n${bad.map(([a, , w]) => `${a}    ${PANDAS_DTYPE[w]}`).join("\n")}`,
+    );
+  }
+  for (const [attr, def] of c.defaults) {
+    const df = c.dynamic[attr];
+    if (!def.varying || !df || df.columns.length === 0 || df.index.length === 0) continue;
+    const cols = df.columns.values.filter((col) => !Array.from(df.col(col)).every((v) => typeof v === "number"));
+    if (cols.length) {
+      logOrRaise(
+        strict,
+        `The following columns of time-varying attribute ${attr} in ${c.list_name}_t have the wrong dtype:\n${fmtIndex(cols)}\nThey are:\n${cols.map((col) => `${col}    object`).join("\n")}\nbut should be:\n${def.typ}`,
+      );
+    }
+  }
+}
+
 /**
  * Run all consistency checks.
  * @param {object} [opts]
@@ -542,7 +589,7 @@ Network.prototype.consistency_check = function consistencyCheck({ check_dtypes =
     check_maintenance_attributes(this, c, s.includes("maintenance"));
     check_cost_consistency(c);
     check_dispatch_delays(this, c, s.includes("dispatch_delays"));
-    void check_dtypes;
+    if (check_dtypes) check_dtypes_(c, s.includes("dtypes"));
   }
   check_for_disconnected_buses(this, s.includes("disconnected_buses"));
   check_investment_periods(this, s.includes("investment_periods"));
@@ -554,6 +601,7 @@ Network.prototype.consistency_check = function consistencyCheck({ check_dtypes =
   check_stochastic_slack_bus_consistency(this, s.includes("slack_bus_consistency"));
 };
 
+/** Consistency checks needed for plotting (bus coordinates). */
 Network.prototype.consistency_check_plots = function consistencyCheckPlots({ strict = [] } = {}) {
   const s = strict.includes("all") ? ["unknown_carriers", "missing_carrier_colors"] : strict;
   for (const c of this.components.values()) check_for_unknown_carriers(this, c, s.includes("unknown_carriers"));

@@ -193,3 +193,233 @@ test("stochastic network: netCDF import, export and round trip", async () => {
   }
   assert.throws(() => m.export_to_csv_folder(new MemoryFolder()), /not supported in the CSV exporter/);
 });
+
+// Excel: PyPSA's workbooks import identically; PSA.js workbooks round-trip
+const xlPath = (name) => path.join(ROOT, "test", "fixtures", "excel", `${name}.xlsx`);
+const excelFx = loadFixture("io_excel");
+for (const [name, fx] of Object.entries(excelFx).filter(([k]) => !k.startsWith("_"))) {
+  test(`import ${name} from PyPSA Excel`, () => {
+    const n = Network.from_excel(xlPath(name));
+    assertNetworkMatches(n, fx.network, { rtol: 0, atol: 0 });
+    assertPiecewiseMatches(n, fx.piecewise, `${name} excel`);
+  });
+
+  test(`Excel round trip ${name}`, () => {
+    const n = Network.from_excel(xlPath(name));
+    const m = Network.from_excel(n.export_to_excel(null));
+    assertNetworkMatches(m, fx.network, { rtol: 0, atol: 0 });
+    assertPiecewiseMatches(m, fx.piecewise, `${name} excel round trip`);
+  });
+}
+
+test("Excel export keeps unrelated sheets and replaces stale ones", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "psa-xlsx-"));
+  try {
+    const fn = path.join(dir, "net.xlsx");
+    const n = Network.from_csv_folder(examplePath("ac-dc-meshed"));
+    n.export_to_excel(fn);
+    const m = Network.from_csv_folder(examplePath("ac-dc-meshed"));
+    m.remove("Link", m.c.links.static.index.values);
+    m.export_to_excel(fn);
+    const k = Network.from_excel(fn);
+    assert.equal(k.c.links.static.index.length, 0);
+    assert.equal(k.c.lines.static.index.length, n.c.lines.static.index.length);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("float32 netCDF: PyPSA's file and a PSA.js export", async () => {
+  const fx = loadFixture("io_float32");
+  const n = await Network.from_netcdf(ncPath("ac-dc-meshed-f32"));
+  assertNetworkMatches(n, fx.network_nc, { rtol: 0, atol: 0 });
+  const dir = mkdtempSync(path.join(os.tmpdir(), "psa-f32-"));
+  try {
+    const m = await Network.from_netcdf(ncPath("ac-dc-meshed-solved"));
+    await m.export_to_netcdf(path.join(dir, "f32.nc"), { float32: true, compression: { zlib: false } });
+    const k = await Network.from_netcdf(path.join(dir, "f32.nc"));
+    assertNetworkMatches(k, fx.network_nc, { rtol: 0, atol: 0 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("shapes: WKT geometries through CSV, netCDF and Excel", async () => {
+  const fx = loadFixture("io_shapes");
+  const shapes = path.join(ROOT, "test", "networks", "shapes");
+  const n = Network.from_csv_folder(shapes);
+  assertNetworkMatches(n, fx.network, { rtol: 0, atol: 0 });
+  assertExportMatches(n, fx.export, "shapes");
+  const fromNc = await Network.from_netcdf(ncPath("shapes"));
+  assertNetworkMatches(fromNc, fx.network_nc, { rtol: 0, atol: 0 });
+  const dir = mkdtempSync(path.join(os.tmpdir(), "psa-shapes-"));
+  try {
+    await n.export_to_netcdf(path.join(dir, "shapes.nc"));
+    assertNetworkMatches(await Network.from_netcdf(path.join(dir, "shapes.nc")), fx.network_nc, { rtol: 0, atol: 0 });
+    assertNetworkMatches(Network.from_excel(n.export_to_excel(null)), fx.network_nc, { rtol: 0, atol: 0 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("pure-JS inflate matches zlib on PyPSA's workbook entries", async () => {
+  const { inflateRaw } = await import("../src/core/zip.js");
+  const zlib = await import("node:zlib");
+  const { readFileSync } = await import("node:fs");
+  const bytes = new Uint8Array(readFileSync(xlPath("scigrid-de")));
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let checked = 0;
+  for (let p = 0; p + 30 < bytes.length; p++) {
+    if (view.getUint32(p, true) !== 0x04034b50 || view.getUint16(p + 8, true) !== 8) continue;
+    const csize = view.getUint32(p + 18, true);
+    const start = p + 30 + view.getUint16(p + 26, true) + view.getUint16(p + 28, true);
+    const data = bytes.subarray(start, start + csize);
+    assert.deepEqual(Buffer.from(inflateRaw(data)), zlib.inflateRawSync(data));
+    checked++;
+  }
+  assert.ok(checked > 5);
+});
+
+test("netCDF from and to bytes", async () => {
+  const { readFileSync } = await import("node:fs");
+  const fx = loadFixture("io_solved");
+  const n = await Network.from_netcdf(new Uint8Array(readFileSync(ncPath("ac-dc-meshed-solved"))));
+  assertNetworkMatches(n, fx.network_nc, { rtol: 0, atol: 0 });
+  const bytes = await n.export_to_netcdf(null);
+  assert.ok(bytes instanceof Uint8Array && bytes.length > 1000);
+  assertNetworkMatches(await Network.from_netcdf(bytes), fx.network_nc, { rtol: 0, atol: 0 });
+});
+
+// HDF5 (pandas HDFStore layout): PyPSA's stores import identically; PSA.js
+// stores round-trip (and import in PyPSA: scripts/parity/check_js_hdf5.py)
+const h5Path = (name) => path.join(ROOT, "test", "fixtures", "hdf5", `${name}.h5`);
+const hdf5Fx = loadFixture("io_hdf5");
+for (const [name, fx] of Object.entries(hdf5Fx).filter(([k]) => !k.startsWith("_"))) {
+  test(`import ${name} from PyPSA HDF5`, async () => {
+    const n = await Network.from_hdf5(h5Path(name));
+    assertNetworkMatches(n, fx.network, { rtol: 0, atol: 0 });
+    assertPiecewiseMatches(n, fx.piecewise, `${name} hdf5`);
+    assert.deepEqual(n.meta, fx.meta);
+  });
+
+  test(`HDF5 round trip ${name}`, async () => {
+    const n = await Network.from_hdf5(h5Path(name));
+    const m = await Network.from_hdf5(await n.export_to_hdf5(null));
+    assertNetworkMatches(m, fx.network, { rtol: 0, atol: 0 });
+    assertPiecewiseMatches(m, fx.piecewise, `${name} hdf5 round trip`);
+    assert.deepEqual(m.meta, fx.meta);
+  });
+}
+
+test("HDF5 export of a stochastic network raises", async () => {
+  const n = await Network.from_netcdf(ncPath("stochastic"));
+  await assert.rejects(() => n.export_to_hdf5(null), /NotImplementedError: Stochastic networks are not supported in the HDF5 exporter/);
+});
+
+test("netCDF and HDF5 from URLs (local HTTP server)", async () => {
+  const http = await import("node:http");
+  const { readFileSync } = await import("node:fs");
+  const { ioOptions } = await import("../src/index.js");
+  const server = http.createServer((req, res) => {
+    const file = req.url === "/solved.nc" ? ncPath("ac-dc-meshed-solved") : req.url === "/meta.h5" ? h5Path("ac-dc-meshed-meta") : null;
+    if (!file) {
+      res.writeHead(404, "Not Found").end();
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "application/octet-stream" }).end(readFileSync(file));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    assertNetworkMatches(await Network.from_netcdf(`${base}/solved.nc`), loadFixture("io_solved").network_nc, { rtol: 0, atol: 0 });
+    const m = await Network.from_hdf5(`${base}/meta.h5`);
+    assertNetworkMatches(m, hdf5Fx["ac-dc-meshed-meta"].network, { rtol: 0, atol: 0 });
+    assert.deepEqual(m.meta, hdf5Fx["ac-dc-meshed-meta"].meta);
+    await assert.rejects(() => Network.from_hdf5(`${base}/missing.h5`), /ValueError: Failed to retrieve network data from .*missing\.h5: HTTP Error 404/);
+    await assert.rejects(() => Network.from_netcdf("ftp://example.com/x.nc"), /ValueError: Invalid URL/);
+    assert.throws(() => Network.from_excel(`${base}/x.xlsx`), /ValueError: Excel workbooks at URLs/);
+    assert.throws(() => Network.from_csv_folder(`${base}/folder`), /ValueError: CSV folders cannot be read from URLs/);
+    ioOptions.allow_network_requests = false;
+    await assert.rejects(() => Network.from_netcdf(`${base}/solved.nc`), /ValueError: Network requests are disabled/);
+  } finally {
+    ioOptions.allow_network_requests = true;
+    server.close();
+  }
+});
+
+test("metadata JSON like Python's json module (NaN, Infinity, float repr)", async () => {
+  const { pyJsonLoads, pyJsonDumps } = await import("../src/core/pyjson.js");
+  // json.dumps({"a": float("nan"), "b": [float("inf"), -float("inf"), 0.0, 1, 1e-05, 1e16, 2.5], "c": "é\"Infinity"})
+  const text = '{"a": NaN, "b": [Infinity, -Infinity, 0.0, 1, 1e-05, 1e+16, 2.5], "c": "\\u00e9\\"Infinity"}';
+  const v = pyJsonLoads(text);
+  assert.ok(Number.isNaN(v.a));
+  assert.deepEqual(v.b, [Infinity, -Infinity, 0, 1, 1e-5, 1e16, 2.5]);
+  assert.equal(v.c, 'é"Infinity');
+  assert.equal(pyJsonDumps(v), text);
+  const n = new Network();
+  n.meta = v;
+  const folder = new MemoryFolder();
+  n.export_to_csv_folder(folder);
+  assert.equal(folder.read("meta.json"), text);
+  const m = Network.from_csv_folder(folder);
+  assert.equal(pyJsonDumps(m.copy().meta), text);
+});
+
+test("examples: download, cache, 404 fallback and disabled network requests", { skip: process.platform !== "linux" && "cache location test written for Linux" }, async () => {
+  const http = await import("node:http");
+  const { readFileSync, existsSync } = await import("node:fs");
+  const { examples, options, PYPSA_VERSION } = await import("../src/index.js");
+  const served = [];
+  const server = http.createServer((req, res) => {
+    served.push(req.url);
+    const file = req.url === `/v${PYPSA_VERSION}/ac_dc_meshed.nc` ? ncPath("ac-dc-meshed") : req.url === "/latest/storage_hvdc.nc" ? ncPath("storage-hvdc") : null;
+    if (!file) {
+      res.writeHead(404, "Not Found").end();
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "application/octet-stream" }).end(readFileSync(file));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const dir = mkdtempSync(path.join(os.tmpdir(), "psajs-cache-"));
+  const saved = [process.env.XDG_CACHE_HOME, examples._EXAMPLES_BASE_URL];
+  process.env.XDG_CACHE_HOME = dir;
+  examples._EXAMPLES_BASE_URL = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const expected = await Network.from_netcdf(ncPath("ac-dc-meshed"));
+    const n = await examples.ac_dc_meshed();
+    assert.equal(n.name, expected.name);
+    assert.deepEqual(n.c.buses.static.index.values, expected.c.buses.static.index.values);
+    const cached = path.join(dir, "psa.js", "examples", `v${PYPSA_VERSION}`, "ac_dc_meshed.nc");
+    assert.ok(existsSync(cached));
+    // cached files load without network requests
+    options.general.allow_network_requests = false;
+    served.length = 0;
+    assert.equal((await examples.ac_dc_meshed()).name, expected.name);
+    assert.deepEqual(served, []);
+    await assert.rejects(() => examples.storage_hvdc(), /ValueError: Network requests are disabled\. .*storage_hvdc\.nc/);
+    options.general.allow_network_requests = true;
+    // 404 for the version falls back to "latest"
+    const s = await examples.storage_hvdc();
+    assert.deepEqual(served, [`/v${PYPSA_VERSION}/storage_hvdc.nc`, "/latest/storage_hvdc.nc"]);
+    assert.equal(s.name, (await Network.from_netcdf(ncPath("storage-hvdc"))).name);
+    await assert.rejects(() => examples.scigrid_de(), /HTTP Error 404/);
+    examples.clear_cache();
+    assert.ok(!existsSync(cached));
+  } finally {
+    options.general.allow_network_requests = true;
+    if (saved[0] === undefined) delete process.env.XDG_CACHE_HOME;
+    else process.env.XDG_CACHE_HOME = saved[0];
+    examples._EXAMPLES_BASE_URL = saved[1];
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("UTM zone WKTs equal pyproj's for all WGS 84 and ETRS89 zones", async () => {
+  const { gunzipSync } = await import("node:zlib");
+  const { readFileSync } = await import("node:fs");
+  const { wktOf } = await import("../src/core/crs.js");
+  const fx = JSON.parse(gunzipSync(readFileSync(path.join(ROOT, "test", "fixtures", "crs_utm_wkt.json.gz"))).toString());
+  assert.equal(Object.keys(fx.wkt).length, 131);
+  for (const [code, wkt] of Object.entries(fx.wkt)) assert.equal(wktOf(Number(code)), wkt, `EPSG:${code}`);
+});

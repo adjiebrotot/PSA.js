@@ -41,6 +41,7 @@ export function framesEqual(a, b, path = "frame", log = false) {
   return true;
 }
 
+/** Whether two component sets hold equal data (`log_mode`: "silent", "verbose" or "strict"). */
 Components.prototype.equals = function componentsEquals(other, { log_mode = "silent" } = {}) {
   if (!(other instanceof Components) || other.name !== this.name) return false;
   const log = log_mode !== "silent";
@@ -162,10 +163,14 @@ Network.prototype.pnl = function pnl(component_name) {
   return this.c.get(component_name).dynamic;
 };
 
+/** Static data of a component class (`n.static("Generator")`, like `n.c.generators.static`). */
 Network.prototype.static = function staticData(component_name) {
   return this.c.get(component_name).static;
 };
 
+/**
+ * Time-varying data of a component class (`n.dynamic("Generator")`, like `n.c.generators.dynamic`).
+ */
 Network.prototype.dynamic = function dynamicData(component_name) {
   return this.c.get(component_name).dynamic;
 };

@@ -15,10 +15,12 @@
  * (weighted time sums), `groupby(...).sum()` and `merge`.
  */
 
+import { isSnapshotMajor } from "../network/scenario_frames.js";
 import { Index, compareLabels, labelKey } from "../core/index.js";
-import { LinearExpression } from "./expressions.js";
+import { LinearExpression, groupSum } from "./expressions.js";
 import { LOOKUP, denseValues } from "./common.js";
 import { groupers, resolve_at_port, get_transmission_branches, statisticsOptions, normalizeCarrierNiceNames, contains, isNa } from "../statistics/accessor.js";
+import { scenarioView } from "../network/scenarios.js";
 import { logger } from "../logger.js";
 
 // ----------------------------------------------------------------------
@@ -350,62 +352,48 @@ export function mergeAlong(exprs, dim) {
  * replaced by `group` (coordinates: key tuples named `names`). Terms are laid
  * out old term outermost and group member innermost, members padded with -1
  * to the largest group.
+ *
+ * Dimension order (`position`): "inPlace" replaces `dim` (grouping by one of
+ * its coordinates, e.g. `period`); otherwise linopy re-derives the order from
+ * its coordinates, which puts dimensions with a MultiIndex (multi-period
+ * snapshots) first, then a single grouping key ("first") or the other
+ * dimensions with `group` last ("last", key frames).
  */
-export function groupbySum(e, dim, keys, names, { inPlace = false } = {}) {
-  const d = e.dims.indexOf(dim);
-  if (d < 0) throw new Error(`Dimension ${dim} not in expression`);
-  const groups = new Map();
-  const labels = [];
-  keys.forEach((k, i) => {
-    if (k === null) return;
-    const lk = labelKey(k);
-    let g = groups.get(lk);
-    if (!g) {
-      g = [];
-      groups.set(lk, g);
-      labels.push(k);
-    }
-    g.push(i);
-  });
-  labels.sort(compareGroupKeys);
-  const members = labels.map((l) => groups.get(labelKey(l)));
-  const M = members.reduce((m, g) => Math.max(m, g.length), 0);
-  // the group dimension comes last (DataFrame groupers), or takes the place of
-  // the grouped dimension when grouping by one of its coordinates
-  const g0 = inPlace ? d : e.dims.length - 1;
-  const dims = e.dims.filter((x) => x !== dim);
-  const coords = e.coords.filter((_, i) => i !== d);
-  dims.splice(g0, 0, "group");
-  coords.splice(g0, 0, new Index(labels, names));
+export function groupbySum(e, dim, keys, names, { position = "last" } = {}) {
+  const res = groupbySumLast(e, dim, keys, names, { inPlace: position === "inPlace" });
+  if (position === "inPlace") return res;
+  const multi = res.dims.filter((d, i) => d !== "group" && res.coords[i].isMulti);
+  const rest = res.dims.filter((d) => d !== "group" && !multi.includes(d));
+  return transposeExpr(res, position === "first" ? [...multi, "group", ...rest] : [...multi, ...rest, "group"]);
+}
+
+/** Expression with its dimensions permuted to `dims` (terms per cell unchanged). */
+export function transposeExpr(e, dims) {
+  if (dims.every((d, i) => d === e.dims[i])) return e;
+  const coords = dims.map((d) => e.coords[e.dims.indexOf(d)]);
   const shape = shapeOf(coords);
   const size = sizeOf(shape);
   const strides = stridesOf(shape);
+  const src = dims.map((d) => e.strides[e.dims.indexOf(d)]);
   const nt = e.nterm;
-  const nterm = nt * M;
-  const vars = new Int32Array(size * nterm).fill(-1);
-  const coeffs = new Float64Array(size * nterm).fill(NaN);
+  const vars = new Int32Array(size * nt);
+  const coeffs = new Float64Array(size * nt);
   const consts = new Float64Array(size);
   for (let c = 0; c < size; c++) {
     const pos = unravel(c, shape, strides);
-    const g = members[pos[g0]];
-    let base = 0;
-    for (let i = 0; i < dims.length; i++) {
-      if (i === g0) continue;
-      const j = i < g0 ? i : i - 1; // position among the kept dims
-      base += pos[i] * e.strides[j < d ? j : j + 1];
+    let k = 0;
+    for (let i = 0; i < pos.length; i++) k += pos[i] * src[i];
+    for (let t = 0; t < nt; t++) {
+      vars[c * nt + t] = e.vars[k * nt + t];
+      coeffs[c * nt + t] = e.coeffs[k * nt + t];
     }
-    let s = 0;
-    for (let j = 0; j < g.length; j++) {
-      const ec = base + g[j] * e.strides[d];
-      for (let t = 0; t < nt; t++) {
-        vars[c * nterm + t * M + j] = e.vars[ec * nt + t];
-        coeffs[c * nterm + t * M + j] = e.coeffs[ec * nt + t];
-      }
-      s += fill0(e.consts[ec]);
-    }
-    consts[c] = s;
+    consts[c] = e.consts[k];
   }
-  return expr(e.model, dims, coords, nterm, vars, coeffs, consts);
+  return expr(e.model, dims, coords, nt, vars, coeffs, consts);
+}
+
+function groupbySumLast(e, dim, keys, names, { inPlace = false } = {}) {
+  return groupSum(e, dim, keys, names, { inPlace, compare: compareGroupKeys });
 }
 
 /** Sort order of group keys: per level, missing (NaN) keys last. */
@@ -479,7 +467,7 @@ export function regroup(e, keys) {
   const all = e.coords[d].names;
   const idx = keys.map((k) => all.indexOf(k));
   const tuples = e.coords[d].values.map((t) => idx.map((i) => t[i]));
-  return groupbySum(e, "group", tuples, keys);
+  return groupbySum(e, "group", tuples, keys, { position: keys.length === 1 ? "first" : "last" });
 }
 
 /** PyPSA `_restack_flat_groups`: a single grouping key names the dimension. */
@@ -592,11 +580,51 @@ export class StatisticExpressionsAccessor {
     this._n = n;
   }
 
+  /** The network the expressions are built for. */
+  get n() {
+    return this._n;
+  }
+
   get _model() {
     const m = this._n.model;
     if (!m) throw new Error("No model: call `n.optimize.create_model()` first.");
-    if (this._n.has_scenarios) throw new Error("NotImplementedError: n.optimize.expressions is not yet implemented for stochastic networks in PSA.js.");
     return m;
+  }
+
+  /** Scenarios of a stochastic network (the `scenario` coordinate), else null. */
+  get _scenarios() {
+    const n = this._n;
+    return n.has_scenarios ? n.scenarios : null;
+  }
+
+  /** Deterministic views of the scenarios (cached for one statistic call). */
+  _views() {
+    if (!this._viewCache) this._viewCache = this._scenarios.values.map((sc) => scenarioView(this._n, sc));
+    return this._viewCache;
+  }
+
+  /**
+   * Static column of `c` by name. On stochastic networks the values must be
+   * identical across scenarios (`pypsa.components.common.invariant`).
+   */
+  _invariant(c, values, attr) {
+    const st = c.static;
+    const out = new Map();
+    if (!st.index.isMulti) {
+      st.index.values.forEach((nm, i) => out.set(nm, values[i]));
+      return out;
+    }
+    const varies = [];
+    st.index.values.forEach((t, i) => {
+      const nm = t[t.length - 1];
+      const v = values[i];
+      if (!out.has(nm)) out.set(nm, v);
+      else if (!sameValue(out.get(nm), v) && !varies.includes(nm)) varies.push(nm);
+    });
+    if (varies.length) {
+      throw new Error(`ValueError: Expected static data which is identical across scenarios, got differing values for ${pyList(varies)} in '${attr}'.`);
+    }
+    return out;
   }
 
   get is_multi_indexed() {
@@ -604,22 +632,49 @@ export class StatisticExpressionsAccessor {
   }
 
   // -------------------------------------------------------------- data
-  /** Static attribute values of `names` as a constant over `name`. */
+  /**
+   * Static attribute values of `names` as a constant over `name` (`c.da[attr]`;
+   * over `(scenario, name)` on stochastic networks).
+   */
   _staticConst(c, attr, names, values = null) {
     const st = c.static;
     const col = values ?? st.col(attr);
-    return Const.names(
-      names,
-      names.values.map((nm) => {
-        const v = col[st.index.getLoc(nm)];
-        return typeof v === "boolean" ? Number(v) : v;
-      }),
-    );
+    const num = (i) => {
+      const v = i < 0 ? NaN : col[i];
+      return typeof v === "boolean" ? Number(v) : v;
+    };
+    const sc = this._scenarios;
+    if (sc === null) return Const.names(names, names.values.map((nm) => num(st.index.getLoc(nm))));
+    const nm = asNameIndex(names);
+    const out = new Float64Array(sc.length * nm.length);
+    sc.values.forEach((s, i) => {
+      for (let j = 0; j < nm.length; j++) out[i * nm.length + j] = num(st.index.getLoc([s, nm.at(j)]));
+    });
+    return new Const(["scenario", "name"], [sc, nm], out);
   }
 
-  /** Time-varying attribute over (snapshot, name). */
+  /**
+   * Time-varying attribute over (snapshot, name). On stochastic networks over
+   * `(scenario, name, snapshot)` or `(snapshot, scenario, name)`, the
+   * dimension order of PyPSA's `c.da[attr]` (see `scenarioMajor`).
+   */
   _dynamicConst(c, attr, sns, names) {
-    return Const.dense(sns, names, denseValues(c, attr, sns, names));
+    const sc = this._scenarios;
+    if (sc === null) return Const.dense(sns, names, denseValues(c, attr, sns, names));
+    const nm = asNameIndex(names);
+    const S = sc.length;
+    const N = nm.length;
+    const T = sns.length;
+    const major = scenarioMajor(c, attr, sc);
+    const out = new Float64Array(S * N * T);
+    sc.values.forEach((s, i) => {
+      const v = denseValues(scenarioData(c, s), attr, sns, nm); // (snapshot, name)
+      for (let t = 0; t < T; t++) {
+        for (let j = 0; j < N; j++) out[major ? (i * N + j) * T + t : (t * S + i) * N + j] = v[t * N + j];
+      }
+    });
+    if (major) return new Const(["scenario", "name", "snapshot"], [sc, nm, sns], out);
+    return new Const(["snapshot", "scenario", "name"], [sns, sc, nm], out);
   }
 
   /** Snapshot weightings `column` at the snapshots of `e`. */
@@ -639,8 +694,8 @@ export class StatisticExpressionsAccessor {
     const n = this._n;
     const c = n.c.get(cName);
     const p = c._as_port(port);
-    const names = c.static.index;
-    const ones = () => Const.names(names, new Float64Array(names.length).fill(1));
+    const names = c.names;
+    const ones = () => this._staticConst(c, null, names, new Float64Array(c.static.index.length).fill(1));
     if (n.one_port_components.has(cName)) return ones();
     if (n.passive_branch_components.has(cName)) return p === 0 ? ones().map(() => -1) : ones();
     if (cName === "Link" && p === 0) return ones().map(() => -1);
@@ -676,7 +731,7 @@ export class StatisticExpressionsAccessor {
     if (cName === "Load") {
       const c = n.c.get(cName);
       const sns = m.parameters.snapshots;
-      return fromConstant(m, this._dynamicConst(c, "p_set", sns, c.static.index));
+      return fromConstant(m, this._dynamicConst(c, "p_set", sns, c.names));
     }
     if (cName === "StorageUnit") {
       return LinearExpression.fromVariable(m.variables.get(`${cName}-p_dispatch`)).sub(m.variables.get(`${cName}-p_store`));
@@ -713,7 +768,7 @@ export class StatisticExpressionsAccessor {
       "snapshot",
       periodOf.map((p) => [p]),
       ["period"],
-      { inPlace: true },
+      { position: "inPlace" },
     );
     return restack(grouped);
   }
@@ -723,7 +778,13 @@ export class StatisticExpressionsAccessor {
     if (e.dims.includes("snapshot") || e.dims.includes("period")) return e;
     const c = this._n.c.get(cName);
     const idx = nameIndex(e);
-    const activeIn = (p) => c.static.index.filter(c.get_active_assets(p).values).intersection(idx);
+    const activeIn = (p) => {
+      const active = this._invariant(c, c.get_active_assets(p).values, "active");
+      return new Index(
+        [...active].filter(([, a]) => a).map(([nm]) => nm),
+        "name",
+      ).intersection(idx);
+    };
     if (!this.is_multi_indexed) return selName(e, activeIn(null));
     const periods = this._n.investment_periods;
     return mergeNewDim(
@@ -736,15 +797,20 @@ export class StatisticExpressionsAccessor {
   _filter_bus_carrier(cName, port, bus_carrier, e) {
     if (bus_carrier === null || bus_carrier === undefined) return e;
     const n = this._n;
-    const st = n.c.get(cName).static;
+    const c = n.c.get(cName);
     const idx = nameIndex(e);
-    const busCol = st.col(`bus${port}`);
+    const busOf = this._invariant(c, c.static.col(`bus${port}`), `bus${port}`);
+    // bus carriers by name (first row per bus on stochastic networks)
     const bs = n.c.buses.static;
-    const busCarriers = bs.col("carrier");
-    const unique = new Set(busCarriers);
+    const carrierOf = new Map();
+    bs.index.values.forEach((b, i) => {
+      const nm = bs.index.isMulti ? b[b.length - 1] : b;
+      if (!carrierOf.has(nm)) carrierOf.set(nm, bs.col("carrier")[i]);
+    });
+    const unique = new Set(carrierOf.values());
     const keep = idx.values.filter((nm) => {
-      const bi = bs.index.getLoc(busCol[st.index.getLoc(nm)]);
-      const pc = bi < 0 ? NaN : busCarriers[bi];
+      const bus = busOf.get(nm);
+      const pc = carrierOf.has(bus) ? carrierOf.get(bus) : NaN;
       if (isNa(pc)) return false;
       if (typeof bus_carrier === "string") return unique.has(bus_carrier) ? pc === bus_carrier : contains(pc, bus_carrier);
       if (Array.isArray(bus_carrier)) return bus_carrier.includes(pc);
@@ -754,11 +820,11 @@ export class StatisticExpressionsAccessor {
   }
 
   _filter_carrier(cName, carrier, e) {
-    const st = this._n.c.get(cName).static;
-    if (carrier === null || carrier === undefined || !st.has("carrier")) return e;
+    const c = this._n.c.get(cName);
+    if (carrier === null || carrier === undefined || !c.static.has("carrier")) return e;
     const idx = nameIndex(e);
-    const col = st.col("carrier");
-    const carriers = idx.values.map((nm) => col[st.index.getLoc(nm)]);
+    const carrierOf = this._invariant(c, c.static.col("carrier"), "carrier");
+    const carriers = idx.values.map((nm) => carrierOf.get(nm));
     const unique = new Set(carriers);
     const keep = idx.values.filter((_, i) => {
       const cc = carriers[i];
@@ -770,22 +836,43 @@ export class StatisticExpressionsAccessor {
   }
 
   // -------------------------------------------------------------- grouping
-  /** Key tuples (component first) per name of `names`, and the key names. */
+  /**
+   * Grouping keys of `cName`: `{names, keys}` with the key names (component
+   * first) and a map from asset name to its key values. Stochastic networks
+   * resolve the groupers per scenario; the keys must agree across scenarios.
+   */
   _get_grouping(cName, groupby, port, nice_names) {
-    const n = this._n;
-    let by;
-    if (typeof groupby === "function") by = groupers.resolve(n, cName, [groupby], { port, nice_names });
-    else if (typeof groupby === "string" || Array.isArray(groupby)) by = groupers.resolve(n, cName, Array.isArray(groupby) ? groupby : [groupby], { port, nice_names });
-    else throw new Error(`ValueError: Argument \`groupby\` must be a string, list-like, callable, or False, got ${groupby}.`);
-    return { names: ["component", ...by.map((g) => g.name)], columns: by.map((g) => g.values) };
+    if (typeof groupby !== "function" && typeof groupby !== "string" && !Array.isArray(groupby)) {
+      throw new Error(`ValueError: Argument \`groupby\` must be a string, list-like, callable, or False, got ${groupby}.`);
+    }
+    const spec = Array.isArray(groupby) ? groupby : [groupby];
+    const resolve = (n) => {
+      const by = groupers.resolve(n, cName, spec, { port, nice_names });
+      const idx = n.c.get(cName).static.index;
+      const keys = new Map(idx.values.map((nm, i) => [nm, by.map((g) => g.values[i])]));
+      return { names: ["component", ...by.map((g) => g.name)], keys };
+    };
+    if (this._scenarios === null) return resolve(this._n);
+    const per = this._views().map(resolve);
+    const first = per[0];
+    const varies = [];
+    for (const g of per.slice(1)) {
+      for (const [nm, k] of g.keys) {
+        const k0 = first.keys.get(nm);
+        if (!k.every((v, i) => sameValue(v, k0[i])) && !varies.includes(nm)) varies.push(nm);
+      }
+    }
+    if (varies.length) {
+      throw new Error(`ValueError: Expected static data which is identical across scenarios, got differing values for ${pyList(varies)} in columns ${pyList(first.names.slice(1))}.`);
+    }
+    return first;
   }
 
   _groupby(e, grouping, cName) {
-    const st = this._n.c.get(cName).static;
     const keys = nameIndex(e).values.map((nm) => {
-      const i = st.index.getLoc(nm);
+      const k = grouping.keys.get(nm);
       // missing keys (e.g. unconnected ports) form their own group, like linopy
-      return [cName, ...grouping.columns.map((col) => (i < 0 || isNa(col[i]) ? NaN : col[i]))];
+      return [cName, ...(k === undefined ? grouping.names.slice(1).map(() => NaN) : k.map((v) => (isNa(v) ? NaN : v)))];
     });
     return groupbySum(e, "name", keys, grouping.names);
   }
@@ -828,6 +915,15 @@ export class StatisticExpressionsAccessor {
 
   /** Evaluate `func(n, c, port)` for components and ports, filter, group and concatenate. */
   _aggregate_components(func, opts) {
+    this._viewCache = null;
+    try {
+      return this._aggregate_components_impl(func, opts);
+    } finally {
+      this._viewCache = null;
+    }
+  }
+
+  _aggregate_components_impl(func, opts) {
     const n = this._n;
     let { components, groupby_method: agg, groupby, aggregate_across_components, at_port, bus_carrier, carrier, nice_names } = opts;
     const isOne = typeof components === "string";
@@ -849,6 +945,11 @@ export class StatisticExpressionsAccessor {
         if (portSuffix === undefined) continue;
         let vals = func(n, cn, portSuffix);
         if (isSkipped(vals)) continue;
+        // a plain linopy Variable (operation without time aggregation) has no
+        // constant, so `linopy.merge` of ungrouped values fails in PyPSA
+        if (vals._isVariable && groupby === false) {
+          throw new Error("KeyError: \"No variable named 'const'. Variables on the dataset include ['lower', 'upper', 'scaling', 'labels', ...]\"");
+        }
         vals = this._filter_active_assets(cn, vals);
         vals = this._filter_bus_carrier(cn, portSuffix, bus_carrier, vals);
         vals = this._filter_carrier(cn, carrier, vals);
@@ -927,7 +1028,9 @@ export class StatisticExpressionsAccessor {
     const func = (n, cName, port) => {
       const v = this._operationalExpression(cName);
       const sns = v.coords[v.dims.indexOf("snapshot")];
-      const idx = new Index([...new Set(branches.values.filter((t) => t[0] === cName).map((t) => t[1]))], "name");
+      const ci = branches.names.indexOf("component");
+      const ni = branches.names.indexOf("name");
+      const idx = new Index([...new Set(branches.values.filter((t) => t[ci] === cName).map((t) => t[ni]))], "name");
       const eff = this._portEfficiency(cName, port, sns).sel("name", idx);
       const p = mulConst(selName(v, idx), eff);
       return this._aggregate_timeseries(p, "generators", o.groupby_time);
@@ -950,7 +1053,7 @@ export class StatisticExpressionsAccessor {
       const sns = v.coords[v.dims.indexOf("snapshot")];
       let coeffs = this._portEfficiency(cName, port, sns);
       if (c.static.has("sign")) {
-        const sign = this._staticConst(c, "sign", c.static.index);
+        const sign = this._staticConst(c, "sign", c.names);
         coeffs = combineConst(coeffs, sign, (a, b) => a * b);
       } else coeffs = coeffs.map((x) => x * 1.0);
       let pwVar = null;
@@ -985,12 +1088,14 @@ export class StatisticExpressionsAccessor {
     return this._aggregate_components(func, o);
   }
 
+  /** Supply (positive part of the energy balance) as an expression. */
   supply(opts = {}) {
     const o = { ...(opts ?? {}) };
     if (o.groupby === null || o.groupby === undefined) o.groupby = ["carrier", "bus_carrier"];
     return this.energy_balance({ ...o, direction: "supply" });
   }
 
+  /** Withdrawal (negative part of the energy balance) as an expression. */
   withdrawal(opts = {}) {
     const o = { ...(opts ?? {}) };
     if (o.groupby === null || o.groupby === undefined) o.groupby = ["carrier", "bus_carrier"];
@@ -1021,7 +1126,12 @@ export class StatisticExpressionsAccessor {
   operation(opts = {}) {
     const o = withDefaults("operation", opts, { groupby_time: "mean" });
     o.at_port = resolve_at_port(o.at_port, o.bus_carrier);
-    const func = (n, cName) => this._aggregate_timeseries(this._operationalExpression(cName), "generators", o.groupby_time);
+    const func = (n, cName) => {
+      const op = this._operationalExpression(cName);
+      const res = this._aggregate_timeseries(op, "generators", o.groupby_time);
+      if (res === op && cName !== "Load" && cName !== "StorageUnit") res._isVariable = true;
+      return res;
+    };
     return this._aggregate_components(func, o);
   }
 }
@@ -1058,4 +1168,69 @@ function combineConst(a, b, fn) {
     out[k] = fn(ia < 0 ? NaN : a.values[ia], ib < 0 ? NaN : b.values[ib]);
   }
   return new Const(dims, coords, out);
+}
+
+/** Equality of static values (NaN equals NaN, like `nunique(dropna=False)`). */
+function sameValue(a, b) {
+  return a === b || (isNa(a) && isNa(b));
+}
+
+function pyList(xs) {
+  return `[${xs.map((x) => `'${x}'`).join(", ")}]`;
+}
+
+/** Data of one scenario of a component (static rows and dynamic columns). */
+function scenarioData(c, scenario) {
+  const st = c.static;
+  const pos = st.index.locLevel("scenario", scenario);
+  const rows = new Index(
+    pos.map((i) => st.index.at(i)[1]),
+    "name",
+  );
+  const view = {
+    static: {
+      index: rows,
+      colOr: (attr, dflt) => {
+        const col = st.colOr(attr, null);
+        return col === null ? dflt : pos.map((i) => col[i]);
+      },
+    },
+    dynamic: {},
+  };
+  for (const [k, df] of Object.entries(c.dynamic)) {
+    if (!df.columns.isMulti) continue;
+    view.dynamic[k] = {
+      index: df.index,
+      has: (nm) => df.has([scenario, nm]),
+      col: (nm) => df.col([scenario, nm]),
+    };
+  }
+  return view;
+}
+
+/**
+ * Whether PyPSA's `c.da[attr]` of a stochastic network is laid out
+ * `(scenario, name, snapshot)` (true) or `(snapshot, scenario, name)`.
+ *
+ * `_to_xarray` unstacks the `(scenario, name)` columns, which puts the new
+ * coordinates first, and transposes to the coordinate order. The following
+ * `reindex(name=c.names).reindex(scenario=n.scenarios)` moves the coordinates
+ * back into dimension order unless the unstacked levels already match. They
+ * do when no or every column is time-varying; with some time-varying columns
+ * pandas concatenates the time-varying and static parts, whose level union is
+ * sorted.
+ */
+function scenarioMajor(c, attr, scenarios) {
+  const dyn = c.dynamic[attr];
+  // without static fill-ins the columns carry the levels of the static index
+  if (!dyn || dyn.columns.length === 0) return !isSnapshotMajor(c);
+  const have = new Set(dyn.columns.values.map(labelKey));
+  const diff = c.static.index.values.filter((t) => !have.has(labelKey(t)));
+  if (diff.length === 0) return !isSnapshotMajor(c);
+  const ordered = (tuples, i) => [...new Map(tuples.map((t) => [labelKey(t[i]), t[i]])).values()];
+  const sorted = (xs) => xs.slice().sort(compareLabels);
+  const same = (a, b) => a.length === b.length && a.every((x, i) => labelKey(x) === labelKey(b[i]));
+  const union = (a, b) => (same(a, b) ? a : sorted(ordered([...a, ...b].map((x) => [x]), 0)));
+  const level = (i) => union(ordered(dyn.columns.values, i), sorted(ordered(diff, i)));
+  return same(level(0), scenarios.values) && same(level(1), c.names.values);
 }

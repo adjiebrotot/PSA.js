@@ -1,5 +1,5 @@
 {
-  "description": "Consistency checks (warnings / strict errors), sanitize and carrier colours.",
+  "description": "Consistency checks (warnings / strict errors), sanitize and carrier colours, dtype checks (`check_dtypes`).",
   "ops": [
     ["new_network"],
     ["set_snapshots", [0, 1, 2]],
@@ -22,7 +22,18 @@
     ["record", "sanitized", "network"],
     ["expect_error", "after_sanitize", ["call", "consistency_check", [], {"strict": ["unknown_buses", "unknown_carriers"]}]],
     ["call", "c.carriers.assign_colors", [], {"overwrite": true, "palette": "tab20"}],
-    ["record", "colors", "path", ["c", "carriers", "static", "color"]]
+    ["record", "colors", "path", ["c", "carriers", "static", "color"]],
+    ["load_example", "ac-dc-meshed"],
+    ["expect_error", "dtypes_clean_ac_dc_meshed", ["call", "consistency_check", [], {"check_dtypes": true, "strict": ["dtypes"]}]],
+    ["load_example", "storage-hvdc"],
+    ["expect_error", "dtypes_clean_storage_hvdc", ["call", "consistency_check", [], {"check_dtypes": true, "strict": ["dtypes"]}]],
+    ["load_example", "model-energy"],
+    ["expect_error", "dtypes_clean_model_energy", ["call", "consistency_check", [], {"check_dtypes": true, "strict": ["dtypes"]}]],
+    ["load_example", "scigrid-de"],
+    ["expect_error", "dtypes_clean_scigrid_de", ["call", "consistency_check", [], {"check_dtypes": true, "strict": ["dtypes"]}]],
+    ["set_static_all", "generators", "build_year", 2020.5],
+    ["expect_error", "dtypes_float_build_year", ["call", "consistency_check", [], {"check_dtypes": true, "strict": ["dtypes"]}]],
+    ["expect_error", "dtypes_not_checked", ["call", "consistency_check", [], {"strict": ["dtypes"]}]]
   ],
   "tolerance": {"rtol": 1e-09, "atol": 1e-09}
 }

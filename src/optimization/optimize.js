@@ -25,10 +25,12 @@ import { checkForUnknownBuses } from "../network/network.js";
 import { define_piecewise, asPiecewiseOptions, optionsFor } from "./piecewise.js";
 import { scenarioView, mergeScenarioModels, distributeSolution, collectResults, dynamicIdentities } from "./stochastic.js";
 import { assert_invariant } from "../consistency.js";
+import { get_option } from "../options.js";
 
 let warnedObjectiveConstant = false;
 
 function resolveIncludeObjectiveConstant(value) {
+  if (value === null || value === undefined) value = get_option("params.optimize.include_objective_constant");
   if (value === null || value === undefined) {
     if (!warnedObjectiveConstant) {
       logger.warning(
@@ -953,6 +955,9 @@ export class OptimizationAccessor {
     this._n = n;
   }
 
+  /**
+   * Build the linopy model, solve it with HiGHS and assign the results (`await n.optimize(opts)`): `snapshots`, `multi_investment_periods`, `transmission_losses`, `linearized_unit_commitment`, `solver_options`, `extra_functionality`, ...
+   */
   async optimize(opts = {}) {
     const n = this._n;
     const {
@@ -962,10 +967,10 @@ export class OptimizationAccessor {
       linearized_unit_commitment = false,
       extra_functionality = null,
       assign_all_duals = false,
-      solver_name = "highs",
-      solver_options = {},
-      log_to_console = false,
-      include_objective_constant = null,
+      solver_name = get_option("params.optimize.solver_name"),
+      solver_options = get_option("params.optimize.solver_options"),
+      log_to_console = get_option("params.optimize.log_to_console"),
+      include_objective_constant = get_option("params.optimize.include_objective_constant"),
       committable_big_m = null,
       meshed_thresholds = null,
       cycle_basis_method = "bfs-refined",
@@ -1002,11 +1007,20 @@ export class OptimizationAccessor {
     return [status, condition];
   }
 
+  /** Build the optimisation model (`n.model`) without solving it; same options as `optimize`. */
   create_model(opts = {}) {
     return create_model(this._n, opts);
   }
 
-  async solve_model({ extra_functionality = null, solver_name = "highs", solver_options = {}, log_to_console = false, assign_all_duals = false, reformulate_sos = false } = {}) {
+  /** Solve the existing model (`n.model`) and assign the results. */
+  async solve_model({
+    extra_functionality = null,
+    solver_name = get_option("params.optimize.solver_name"),
+    solver_options = get_option("params.optimize.solver_options"),
+    log_to_console = get_option("params.optimize.log_to_console"),
+    assign_all_duals = false,
+    reformulate_sos = false,
+  } = {}) {
     const n = this._n;
     if (extra_functionality) await extra_functionality(n, n.model.parameters.snapshots);
     const [status, condition] = await n.model.solve({ solver_name, solver_options, log_to_console, reformulate_sos });
@@ -1021,18 +1035,22 @@ export class OptimizationAccessor {
     return [status, condition];
   }
 
+  /** Write the primal solution of `n.model` to the component data (`p`, `p_nom_opt`, ...). */
   assign_solution() {
     assign_solution(this._n);
   }
 
+  /** Write the duals of the model constraints (marginal prices, `mu_*`) to the component data. */
   assign_duals(assignAllDuals = false) {
     assign_duals(this._n, assignAllDuals);
   }
 
+  /** Derive results after a solve: branch flows at all ports, bus injections, voltage angles. */
   post_processing() {
     post_processing(this._n);
   }
 
+  /** Fix the capacities of extendable assets to their optimised values (no longer extendable). */
   fix_optimal_capacities() {
     const n = this._n;
     for (const [cName, attr] of Object.entries(NOMINAL_ATTRS)) {
@@ -1050,12 +1068,14 @@ export class OptimizationAccessor {
     }
   }
 
+  /** Set the dispatch setpoints (`p_set`) to the optimised dispatch. */
   fix_optimal_dispatch() {
     const n = this._n;
     for (const c of n.one_port_components) n.c.get(c).dynamic.p_set = n.c.get(c).dynamic.p.copy();
     for (const c of n.controllable_branch_components) n.c.get(c).dynamic.p_set = n.c.get(c).dynamic.p0.copy();
   }
 
+  /** Add expensive load-shedding generators at all (or the given) buses. */
   add_load_shedding({ suffix = " load shedding", buses = null, sign = 1e-3, marginal_cost = 1e2, p_nom = 1e9 } = {}) {
     const n = this._n;
     if (!n.c.carriers.static.index.has("Load")) n.add("Carrier", "Load");

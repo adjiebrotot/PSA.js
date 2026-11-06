@@ -9,6 +9,7 @@
  * solver PyPSA uses by default) reproduces PyPSA's solutions.
  */
 
+import { CLI_SOLVERS, solveWithCli } from "./cli_solvers.js";
 import { installExpressions } from "./expressions.js";
 import { Index } from "../core/index.js";
 import { polarsFloat } from "./format.js";
@@ -29,6 +30,39 @@ function stridesOf(shape) {
     acc *= shape[i];
   }
   return s;
+}
+
+/** Elements per block above which linopy's LP writer slices it (`slice_size`). */
+const LP_SLICE_SIZE = 2_000_000;
+
+/**
+ * Row order of linopy's LP writer, or null for plain C order: `iterate_slices`
+ * cuts a block whose size (incl. the `_term` dimension, `nterm`) exceeds
+ * `LP_SLICE_SIZE` into chunks of its largest dimension, each written in C order.
+ */
+export function lpRowOrder(shape, nterm = 1, sliceSize = LP_SLICE_SIZE) {
+  const total = sizeOf(shape);
+  if (!shape.length || total * nterm <= sliceSize) return null;
+  let lead = 0;
+  for (let d = 1; d < shape.length; d++) if (shape[d] > shape[lead]) lead = d;
+  const L = shape[lead];
+  const nSlices = Math.min(Math.max(Math.ceil((total * nterm) / sliceSize), 1), L);
+  const chunk = Math.ceil(L / nSlices);
+  const outer = sizeOf(shape.slice(0, lead));
+  const inner = sizeOf(shape.slice(lead + 1));
+  const order = new Int32Array(total);
+  let p = 0;
+  for (let start = 0; start < L; start += chunk) {
+    const end = Math.min(start + chunk, L);
+    for (let o = 0; o < outer; o++) for (let l = start; l < end; l++) for (let i = 0; i < inner; i++) order[p++] = (o * L + l) * inner + i;
+  }
+  return order;
+}
+
+/** Variable labels in the LP writer's order. */
+function lpLabels(v) {
+  const order = lpRowOrder(v.shape);
+  return order === null ? v.labels : Array.from(order, (k) => v.labels[k]);
 }
 
 /** Expand a value (scalar, flat array or function of position tuple) to a Float64Array. */
@@ -148,6 +182,16 @@ export class Constraint {
     this.rhs = new Float64Array(this.size);
     this.dual = null;
     this._n = 0;
+    /** linopy's `_term` size when it differs from the longest row (compacted expressions). */
+    this.nterm = null;
+  }
+
+  /** Size of linopy's `_term` dimension (decides how the LP writer slices the block). */
+  get termCount() {
+    if (this.nterm !== null) return this.nterm;
+    let mx = 0;
+    for (let k = 0; k < this.size; k++) mx = Math.max(mx, this.termPtr[k + 1] - this.termPtr[k]);
+    return mx;
   }
 
   /**
@@ -445,6 +489,7 @@ export class Model {
     }
   }
 
+  /** Add quadratic objective terms `coeffs * v1 * v2` (variable labels). */
   add_quadratic_objective_terms(v1, v2, coeffs) {
     for (let t = 0; t < v1.length; t++) {
       this.objective.q1.push(v1[t]);
@@ -484,6 +529,7 @@ export class Model {
     return [vs, cs];
   }
 
+  /** The quadratic objective terms as `[[v1, v2, coeff], ...]`. */
   quadraticTerms() {
     const o = this.objective;
     const v1 = [];
@@ -524,7 +570,9 @@ export class Model {
     if (this.constraints.size) {
       out.push("\n\ns.t.\n\n");
       for (const con of this.constraints.values()) {
-        for (let k = 0; k < con.size; k++) {
+        const order = lpRowOrder(con.shape, con.termCount);
+        for (let r = 0; r < con.size; r++) {
+          const k = order === null ? r : order[r];
           const label = con.labels[k];
           if (label === -1) continue;
           const [vs, cs] = con.rowTerms(k);
@@ -545,7 +593,9 @@ export class Model {
     if (bounded.length) {
       out.push("\n\nbounds\n\n");
       for (const v of bounded) {
-        for (let k = 0; k < v.size; k++) {
+        const order = lpRowOrder(v.shape);
+        for (let r = 0; r < v.size; r++) {
+          const k = order === null ? r : order[r];
           const l = v.labels[k];
           if (l === -1) continue;
           out.push(`${signed(v.lower[k])} <=  x${l} <= ${signed(v.upper[k])}\n`);
@@ -555,12 +605,12 @@ export class Model {
     const binaries = vars.filter((v) => v.binary);
     if (binaries.length) {
       out.push("\n\nbinary\n\n");
-      for (const v of binaries) for (const l of v.labels) if (l !== -1) out.push(` x${l}\n`);
+      for (const v of binaries) for (const l of lpLabels(v)) if (l !== -1) out.push(` x${l}\n`);
     }
     const integers = vars.filter((v) => v.integer);
     if (integers.length) {
       out.push("\n\ngeneral\n\n");
-      for (const v of integers) for (const l of v.labels) if (l !== -1) out.push(` x${l}\n`);
+      for (const v of integers) for (const l of lpLabels(v)) if (l !== -1) out.push(` x${l}\n`);
     }
     const sosVars = vars.filter((v) => v.sos);
     if (sosVars.length) {
@@ -597,10 +647,14 @@ export class Model {
   }
 
   /**
-   * Solve with HiGHS (highs-js). Returns [status, termination_condition].
+   * Solve with HiGHS (highs-js, also in browsers) or, under Node.js, with the
+   * CBC / GLPK executables (`solver_name: "cbc"` / `"glpk"`, run on the LP
+   * file like linopy does). Returns [status, termination_condition].
    */
-  async solve({ solver_name = "highs", solver_options = {}, log_to_console = false, reformulate_sos = false } = {}) {
-    if (solver_name !== "highs") throw new Error(`Solver ${solver_name} is not available in PSA.js (only 'highs').`);
+  async solve({ solver_name = "highs", solver_options = {}, log_to_console = null, reformulate_sos = false } = {}) {
+    if (solver_name !== "highs" && !(solver_name in CLI_SOLVERS)) {
+      throw new Error(`Solver ${solver_name} is not available in PSA.js (highs, ${Object.keys(CLI_SOLVERS).join(", ")}).`);
+    }
     if (reformulate_sos !== true && reformulate_sos !== false && reformulate_sos !== "auto") {
       throw new Error(`ValueError: Invalid value for reformulate_sos: ${reformulate_sos}. Must be True, False, or 'auto'.`);
     }
@@ -618,6 +672,7 @@ export class Model {
         this.undo_sos_reformulation(state);
       }
     }
+    if (solver_name !== "highs") return this._solveCli(solver_name, solver_options, log_to_console);
     const highs = await getHighs();
     // linopy sanitizes the constraints in place before writing the problem
     for (const con of this.constraints.values()) con.sanitize_zeros().sanitize_infinities();
@@ -673,6 +728,39 @@ export class Model {
     } finally {
       model.dispose();
     }
+  }
+
+  /** Solve with a command-line solver and assign the parsed solution (linopy's `assign_result`). */
+  async _solveCli(solver_name, solver_options, log_to_console) {
+    if (this.is_quadratic) throw new Error(`ValueError: Solver ${solver_name} does not support quadratic problems.`);
+    for (const con of this.constraints.values()) con.sanitize_zeros().sanitize_infinities();
+    const lp = this.to_lp();
+    this._lp = lp;
+    // PyPSA passes log_to_console on to linopy, which hands it to the solver as an option
+    const options = log_to_console === null || log_to_console === undefined ? solver_options : { ...solver_options, log_to_console };
+    const res = await solveWithCli(solver_name, lp, options);
+    // the LP file has no objective constant, so neither has the solver's objective
+    this.objectiveValue = res.objective;
+    this.status = res.status;
+    this.termination_condition = res.termination_condition;
+    if (res.status !== "ok" || !res.primal || !res.primal.size) return [this.status, this.termination_condition];
+    for (const v of this.variables.values()) {
+      v.solution = new Float64Array(v.size);
+      for (let k = 0; k < v.size; k++) {
+        const l = v.labels[k];
+        v.solution[k] = l === -1 ? NaN : res.primal.get(l) ?? NaN;
+      }
+    }
+    if (res.dual && res.dual.size) {
+      for (const c of this.constraints.values()) {
+        c.dual = new Float64Array(c.size);
+        for (let k = 0; k < c.size; k++) {
+          const l = c.labels[k];
+          c.dual[k] = l === -1 ? NaN : res.dual.get(l) ?? NaN;
+        }
+      }
+    }
+    return [this.status, this.termination_condition];
   }
 
   toString() {

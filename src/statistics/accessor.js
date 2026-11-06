@@ -15,11 +15,16 @@ import { Network } from "../network/network.js";
 import { NOMINAL_ATTRS } from "../components/components.js";
 import { LOOKUP } from "../optimization/common.js";
 import { logger } from "../logger.js";
-import { Tab, KeyError, isKeyError, groupRows, groupByLevels, concatRows, roundTo } from "./table.js";
+import { Tab, KeyError, isKeyError, groupRows, groupByLevels, concatRows, roundTo, aggregate } from "./table.js";
 import { scenarioView } from "../network/scenarios.js";
 import { PySet } from "../core/pyset.js";
 
-export const statisticsOptions = { nice_names: true, drop_zero: true, round: 5 };
+import { statisticsOptions } from "../options.js";
+import { normalizeCarrierNiceNames } from "./nice_names.js";
+
+export { normalizeCarrierNiceNames };
+
+export { statisticsOptions };
 
 // ----------------------------------------------------------------------
 // helpers
@@ -104,21 +109,6 @@ export function isNa(v) {
   return v === null || v === undefined || (typeof v === "number" && Number.isNaN(v));
 }
 
-export function normalizeCarrierNiceNames(n, carrier) {
-  if (carrier === null || carrier === undefined) return carrier;
-  const scalar = typeof carrier === "string";
-  if (!scalar && !Array.isArray(carrier)) return carrier;
-  const carriers = scalar ? [carrier] : carrier;
-  const st = n.c.carriers.static;
-  const nice = st.has("nice_name") ? st.col("nice_name") : [];
-  const entries = st.index.values.map((k, i) => [k, nice[i]]).filter(([, v]) => v !== "" && !isNa(v));
-  if (!entries.length) return carrier;
-  const counts = new Map();
-  for (const [, v] of entries) counts.set(v, (counts.get(v) ?? 0) + 1);
-  const toCarrier = new Map(entries.filter(([, v]) => counts.get(v) === 1).map(([k, v]) => [v, k]));
-  const out = carriers.map((c) => toCarrier.get(c) ?? c);
-  return scalar ? out[0] : out;
-}
 
 /** Python `re.search` semantics for `str.contains`. */
 export function contains(s, pattern) {
@@ -214,8 +204,14 @@ export class Groupers {
   /** Resolve a groupby spec into a list of {name, values}. */
   resolve(n, c, keys, { port = "", nice_names = false } = {}) {
     const list = typeof keys === "string" || typeof keys === "function" ? [keys] : keys;
-    return list.map((key) => {
-      if (typeof key === "function") return normalizeGrouper(key(n, c, { port, nice_names }), "group");
+    return list.flatMap((key) => {
+      if (typeof key === "function") {
+        const g = key(n, c, { port, nice_names });
+        // a list of Series groups by several keys (one level each), like pandas
+        if (Array.isArray(g) && g.length && g.every((x) => x instanceof Series)) return g.map((x) => normalizeGrouper(x, "group"));
+        if (g instanceof DataFrame) throw new Error("ValueError: Grouper for '<class 'pandas.DataFrame'>' not 1-dimensional");
+        return [normalizeGrouper(g, "group")];
+      }
       if (typeof this[key] === "function" && key !== "resolve" && key !== "add_grouper" && key !== "list_groupers") {
         return normalizeGrouper(this[key](n, c, { port, nice_names }), key);
       }
@@ -270,6 +266,7 @@ export function port_efficiency(n, cName, port = 0) {
 /** Branches connecting buses of the same carrier (component, name). */
 export function get_transmission_branches(n, bus_carrier = null) {
   const bc = n.c.buses.static;
+  if (bc.index.isMulti) return transmissionBranchesMulti(n, bus_carrier);
   const busCarrier = new Map(bc.index.values.map((b, i) => [b, bc.col("carrier")[i]]));
   let carriers = bus_carrier;
   if (typeof carriers === "string") carriers = [carriers];
@@ -291,6 +288,40 @@ export function get_transmission_branches(n, bus_carrier = null) {
     for (const nm of res) out.push([c, nm]);
   }
   return new Index(out, ["component", "name"]);
+}
+
+/**
+ * `get_transmission_branches` for scenario- or network-indexed buses (PyPSA's
+ * NetworkCollection path, also taken by stochastic networks): rows keep their
+ * leading levels, `(…levels, component, name)` per component and bus carrier
+ * in row order.
+ */
+function transmissionBranchesMulti(n, bus_carrier) {
+  const bc = n.c.buses.static;
+  const lead = bc.index.names.slice(0, -1);
+  // bus -> carrier by name, first row wins
+  const busCarrier = new Map();
+  bc.index.values.forEach((t, i) => {
+    const b = t[t.length - 1];
+    if (!busCarrier.has(b)) busCarrier.set(b, bc.col("carrier")[i]);
+  });
+  let carriers;
+  if (typeof bus_carrier === "string") carriers = [bus_carrier];
+  else if (bus_carrier === null || bus_carrier === undefined) carriers = [...new Set(busCarrier.values())];
+  else carriers = [...bus_carrier];
+  const out = [];
+  for (const c of n.branch_components) {
+    const st = n.c.get(c).static;
+    const busCols = st.columns.values.filter((col) => String(col).includes("bus"));
+    for (const carrier of carriers) {
+      st.index.values.forEach((t, i) => {
+        let cnt = 0;
+        for (const col of busCols) if (busCarrier.get(st.col(col)[i]) === carrier) cnt++;
+        if (cnt > 1) out.push(Array.isArray(t) ? [...t.slice(0, -1), c, t[t.length - 1]] : [t, c, t]);
+      });
+    }
+  }
+  return new Index(out, [...lead, "component", "name"]);
 }
 
 // ----------------------------------------------------------------------
@@ -510,7 +541,15 @@ export class StatisticsAccessor {
         for (const m of perMember) for (const [port] of m.get(cn) ?? []) if (!ports.includes(port)) ports.push(port);
         const values = ports.map((port) => {
           const parts = order.map(([key, s]) => [key, perMember[s].get(cn)?.find(([q]) => q === port)?.[1]]).filter(([, t]) => t !== undefined);
-          return prefixRows(parts, members.names);
+          const tab = prefixRows(parts, members.names);
+          if (groupby !== false || !n.has_scenarios) return tab;
+          // ungrouped values of stochastic networks follow the static rows
+          // (components added after `set_scenarios` come after both
+          // scenarios); time series of `sign * p` keep the sorted union of
+          // the static rows and the scenario-major result columns
+          const st = n.c.get(cn).static;
+          if (opts._signAligned && tab.cols !== null && st.has("sign") && !isScenarioMajor(st.index)) return sortedRows(tab);
+          return staticRowOrder(tab, st.index);
         });
         return [cn, this._combine_ports(values, opts.agg ?? "sum")];
       });
@@ -842,7 +881,7 @@ export class StatisticsAccessor {
       return this._aggregate_timeseries(p, weights, o.groupby_time);
     };
     void n;
-    return this._aggregate_components(func, { ...o, agg: o.groupby_method });
+    return this._aggregate_components(func, { ...o, agg: o.groupby_method, _signAligned: true });
   }
 
   /** Energy balance (supply positive, withdrawal negative). */
@@ -856,11 +895,14 @@ export class StatisticsAccessor {
 
   /** Supply (positive part of the energy balance). */
   supply(opts = {}) {
+    // PyPSA computes it through energy_balance, which checks the bus carriers
+    this._n.bus_carrier_unit(opts.bus_carrier ?? null);
     return this._finalize(this._energyBalanceTab({ groupby: "carrier", ...opts }, "supply"), "Supply", "carrier dependent");
   }
 
   /** Withdrawal (negative part of the energy balance). */
   withdrawal(opts = {}) {
+    this._n.bus_carrier_unit(opts.bus_carrier ?? null);
     return this._finalize(this._energyBalanceTab({ groupby: "carrier", ...opts }, "withdrawal"), "Withdrawal", "carrier dependent");
   }
 
@@ -959,10 +1001,9 @@ export class StatisticsAccessor {
     const o = { ...DEFAULTS, groupby_time: "mean", at_port: "all", ...opts };
     const rev = this._revenueTab(o, "both");
     const denom = this._operationTab({ ...o, at_port: [0], bus_carrier: null, drop_zero: false, round: null });
-    let out;
-    if (denom.empty) out = rev.map(() => NaN);
-    else out = rev.combine(denom, (a, b) => a / b);
-    return this._finalize(out, "Market Value", "currency / operational unit");
+    // without operation PyPSA returns the revenue (named "Revenue") set to NaN
+    if (denom.empty) return this._finalize(rev.map(() => NaN), "Revenue", "currency");
+    return this._finalize(rev.combine(denom, (a, b) => a / b), "Market Value", "currency / operational unit");
   }
 
   /** Average marginal prices per bus (load or time weighted). */
@@ -1152,18 +1193,18 @@ export class StatisticsAccessor {
   /** Overview table of the main statistics (deprecated in PyPSA but kept). */
   call(opts = {}) {
     const funcs = [
-      ["optimal_capacity", "Optimal Capacity"],
-      ["installed_capacity", "Installed Capacity"],
-      ["supply", "Supply"],
-      ["withdrawal", "Withdrawal"],
-      ["energy_balance", "Energy Balance"],
-      ["transmission", "Transmission"],
-      ["capacity_factor", "Capacity Factor"],
-      ["curtailment", "Curtailment"],
-      ["capex", "Capital Expenditure"],
-      ["opex", "Operational Expenditure"],
-      ["revenue", "Revenue"],
-      ["market_value", "Market Value"],
+      "optimal_capacity",
+      "installed_capacity",
+      "supply",
+      "withdrawal",
+      "energy_balance",
+      "transmission",
+      "capacity_factor",
+      "curtailment",
+      "capex",
+      "opex",
+      "revenue",
+      "market_value",
     ];
     // PyPSA passes every argument explicitly, so e.g. `at_port=None` replaces
     // the defaults of the individual statistics
@@ -1180,7 +1221,14 @@ export class StatisticsAccessor {
       round: null,
       ...opts,
     };
-    const res = funcs.map(([f, name]) => [name, this[f](args)]);
+    // columns are keyed by each result's name, so a result named like an
+    // earlier one replaces it in place (PyPSA's dict)
+    const byName = new Map();
+    for (const f of funcs) {
+      const s = this[f](args);
+      byName.set(s.attrs.name, s);
+    }
+    const res = [...byName];
     const keys = new Map();
     for (const [, s] of res) for (const l of s.index.values) keys.set(labelKey(l), l);
     const labels = [...keys.values()].sort(compareLabels);
@@ -1200,6 +1248,35 @@ export class StatisticsAccessor {
 }
 
 /** Concatenate `[[key, Tab]]` with the (scalar or tuple) keys as leading levels. */
+/** Whether `(scenario, name)` rows run scenario by scenario over the same names. */
+function isScenarioMajor(index) {
+  const names = [];
+  const scen = [];
+  for (const [sc, nm] of index.values) {
+    if (!scen.length || scen[scen.length - 1] !== sc) scen.push(sc);
+    if (scen.length === 1) names.push(nm);
+  }
+  if (new Set(scen).size !== scen.length || index.length !== scen.length * names.length) return false;
+  return index.values.every(([sc, nm], i) => sc === scen[Math.floor(i / names.length)] && nm === names[i % names.length]);
+}
+
+/** Rows of `tab` sorted by their labels (pandas' sorted union). */
+function sortedRows(tab) {
+  const take = tab.index.values.map((_, i) => i).sort((i, j) => compareLabels(tab.index.values[i], tab.index.values[j]));
+  return new Tab(new Index(take.map((i) => tab.index.values[i]), tab.index.names), tab.cols, take.map((i) => tab.rows[i]));
+}
+
+/** Rows `(scenario, name)` of `tab` in the order of the static index (others last). */
+function staticRowOrder(tab, staticIndex) {
+  if (!tab.index.isMulti || tab.index.names.length !== 2 || !staticIndex.isMulti) return tab;
+  const pos = new Map(staticIndex.values.map((t, i) => [`${t[0]}\u0000${t[1]}`, i]));
+  const keyed = tab.index.values.map((t, i) => [pos.get(`${t[0]}\u0000${t[1]}`) ?? Infinity, i]);
+  if (keyed.every(([p], i) => i === 0 || p >= keyed[i - 1][0])) return tab;
+  keyed.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const take = keyed.map(([, i]) => i);
+  return new Tab(new Index(take.map((i) => tab.index.values[i]), tab.index.names), tab.cols, take.map((i) => tab.rows[i]));
+}
+
 function prefixRows(parts, names) {
   const tuple = (k) => (Array.isArray(k) ? k : [k]);
   const tabs = parts.map(([, t]) => t);
@@ -1213,12 +1290,9 @@ function prefixRows(parts, names) {
 }
 
 function aggregateArr(a, agg) {
-  const v = a.filter((x) => !Number.isNaN(x));
-  if (agg === "max") return v.length ? Math.max(...v) : NaN;
-  if (agg === "min") return v.length ? Math.min(...v) : NaN;
-  if (agg === "mean") return v.length ? v.reduce((s, x) => s + x, 0) / v.length : NaN;
+  // unweighted `DataFrame.agg(agg)` over time (NaN skipped)
   if (typeof agg === "function") return agg(a);
-  throw new Error(`Unsupported time aggregation '${agg}'`);
+  return aggregate(Array.from(a), agg);
 }
 
 function wrapKeyError(fn) {
@@ -1289,6 +1363,14 @@ export function makeStatisticsAccessor(n) {
   }
   fn.groupers = groupers;
   fn._accessor = acc;
+  Object.defineProperty(fn, "is_multi_indexed", { get: () => acc.is_multi_indexed, enumerable: true });
+  Object.defineProperty(fn, "n", {
+    get: () => {
+      logger.warning("Accessing the network instance via `n` is deprecated. Use the network instance directly.");
+      return n;
+    },
+    enumerable: true,
+  });
   return fn;
 }
 

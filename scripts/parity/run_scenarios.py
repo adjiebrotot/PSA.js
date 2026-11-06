@@ -78,7 +78,49 @@ def decode(v, n):
             columns = spec["columns"]
             if spec.get("column_names"):
                 columns = pd.MultiIndex.from_tuples([tuple(c) for c in columns], names=spec["column_names"])
-            return pd.DataFrame([[decode(x, n) for x in row] for row in spec["data"]], index=spec["index"], columns=columns)
+            index = pd.Index(spec["index"], name=spec.get("index_name"))
+            return pd.DataFrame([[decode(x, n) for x in row] for row in spec["data"]], index=index, columns=columns)
+        if "$metric" in v:
+            # a callable distance of two feature rows, defined alike in test/scenario_runner.js
+            return {"chebyshev": lambda u, w: float(np.max(np.abs(u - w))), "weighted_l1": lambda u, w: float(np.sum(np.abs(u - w) * np.arange(1, len(u) + 1)))}[v["$metric"]]
+        if "$grouper" in v:
+            # a callable grouper over static columns ("{port}" is replaced by the port)
+            spec = v["$grouper"]
+
+            def grouper(n, c, port="", nice_names=True):
+                st = n.c[c].static
+                cols = [col.replace("{port}", port) for col in spec["columns"]]
+                series = [st[col].rename(name) for col, name in zip(cols, spec.get("names", cols))]
+                if spec.get("frame"):
+                    return pd.concat(series, axis=1)
+                return series if spec.get("list") else series[0]
+
+            return grouper
+        if "$pandapower" in v:
+            # a pandapower net stored with `pandapower.to_json` (path relative to the repository)
+            import pandapower
+
+            return pandapower.from_json(str(ROOT / v["$pandapower"]))
+        if "$ppc" in v:
+            # a PYPOWER case: matrices as numpy arrays
+            return {k: (np.array(x, dtype=float) if isinstance(x, list) else x) for k, x in v["$ppc"].items()}
+        if "$columns" in v:
+            # a column subset of a frame reached by path
+            spec = v["$columns"]
+            return get_path(n, spec["path"])[spec["columns"]]
+        if "$var" in v:
+            return n.model.variables[v["$var"]]
+        if "$result" in v:
+            return _RESULTS[v["$result"]]
+        if "$da" in v:
+            # DataArray with named dims; "snapshot" coordinates default to n.snapshots
+            import xarray as xr
+
+            spec = v["$da"]
+            coords = {d: (list(n.snapshots) if d == "snapshot" and d not in spec.get("coords", {}) else spec["coords"][d]) for d in spec["dims"]}
+            if "snapshot" in coords and not spec.get("coords", {}).get("snapshot"):
+                coords["snapshot"] = n.snapshots
+            return xr.DataArray(np.array(decode(spec["data"], n)), dims=spec["dims"], coords=coords, name=spec.get("name"))
         if "$series" in v:
             spec = v["$series"]
             idx = spec.get("index")
@@ -113,9 +155,38 @@ def linexpr_json(e) -> dict:
     }
 
 
+def quadexpr_json(e):
+    """A linopy QuadraticExpression: like a LinearExpression, with a (var1, var2) pair per term (var2 -1 for linear terms)."""
+    dims = [d for d in e.dims if d not in ("_term", "_factor")]
+    vars_ = e.vars.transpose(*dims, "_term", "_factor").values
+    coeffs = e.coeffs.transpose(*dims, "_term").values
+    const = e.const.transpose(*dims).values
+    return {
+        "dims": dims,
+        "coords": [{"names": list(e.indexes[d].names), "values": [nan_label(label(v)) for v in e.indexes[d]]} for d in dims],
+        "nterm": int(e.sizes["_term"]),
+        "vars": [int(x) for x in vars_.ravel()],
+        "coeffs": [value(x) for x in coeffs.ravel()],
+        "const": [value(x) for x in const.ravel()],
+    }
+
+
+def dataarray_json(da) -> dict:
+    """An xarray DataArray: dims, coordinates per dim and the values in C order."""
+    return {
+        "$type": "dataarray",
+        "name": da.name,
+        "dims": list(da.dims),
+        "coords": [index_json(pd.Index(list(da.coords[d].values))) for d in da.dims],
+        "values": [value(x) for x in np.asarray(da.values).ravel()],
+    }
+
+
 def to_json(obj):
     import linopy
 
+    if isinstance(obj, linopy.QuadraticExpression):
+        return {"$type": "quadexpr", **quadexpr_json(obj)}
     if isinstance(obj, linopy.LinearExpression):
         return {"$type": "linexpr", **linexpr_json(obj)}
     if isinstance(obj, pd.DataFrame):
@@ -153,23 +224,33 @@ def get_path(n, path):
 
 
 def run(scenario: dict) -> dict:
-    state = {"n": None}
+    state = {"n": None, "options": {}}
     records = {}
     results = {}
-    for op in scenario["ops"]:
-        if op[0] == "expect_error":
-            try:
-                _run_op(op[2], state, records, results)
-                raised = False
-            except Exception:
-                raised = True
-            records[op[1]] = {"$type": "value", "value": raised}
-            continue
-        _run_op(op, state, records, results)
+    try:
+        for op in scenario["ops"]:
+            if op[0] == "expect_error":
+                try:
+                    _run_op(op[2], state, records, results)
+                    raised = False
+                except Exception:
+                    raised = True
+                records[op[1]] = {"$type": "value", "value": raised}
+                continue
+            _run_op(op, state, records, results)
+    finally:
+        # options set by the scenario do not leak into the next one
+        for k, v in state["options"].items():
+            pypsa.set_option(k, v)
     return records
 
 
+_RESULTS = {}
+
+
 def _run_op(op, state, records, results):
+    global _RESULTS
+    _RESULTS = results
     n = state["n"]
     if True:
         kind = op[0]
@@ -228,6 +309,16 @@ def _run_op(op, state, records, results):
             res = target(*args, **kwargs)
             if out_key:
                 results[out_key] = res
+        elif kind == "set_option":
+            state["options"].setdefault(op[1], pypsa.get_option(op[1]))
+            pypsa.set_option(op[1], decode(op[2], n))
+        elif kind == "call_module":
+            # a function of the pypsa package, e.g. "costs.annuity"
+            target = pypsa
+            for part in op[1].split("."):
+                target = getattr(target, part)
+            res = target(*decode(op[2] if len(op) > 2 else [], n), **decode(op[3] if len(op) > 3 else {}, n))
+            results[op[4]] = res
         elif kind == "create_model":
             n.optimize.create_model(**decode(op[1] if len(op) > 1 else {}, n))
         elif kind == "add_constraint":
@@ -246,6 +337,27 @@ def _run_op(op, state, records, results):
             if post is not None:
                 e = e.sum() if post == "all" else e.sum(dim=post)
             results[out_key] = e
+        elif kind == "linexpr":
+            # a chain of linopy calls starting from a model variable or an earlier result
+            _, out_key, start, chain = op
+            import linopy
+
+            obj = n.model.variables[start["var"]] if "var" in start else results[start["result"]]
+            for step in chain:
+                name = step[0]
+                args = step[1] if len(step) > 1 else []
+                kwargs = step[2] if len(step) > 2 else {}
+                obj = getattr(obj, name)(*decode(args, n), **decode(kwargs, n))
+            if isinstance(obj, linopy.Variable):
+                obj = obj.to_linexpr()
+            results[out_key] = obj
+        elif kind == "set_objective":
+            # replace the objective by an expression (optionally added to the current one)
+            _, key, opts = op
+            expr = results[key]
+            if opts.get("add"):
+                expr = n.model.objective.expression + expr
+            n.model.add_objective(expr, overwrite=True, sense=opts.get("sense", "min"))
         elif kind == "expr_constraint":
             _, out_key, sign, rhs, cname = op
             n.model.add_constraints(results[out_key], sign, decode(rhs, n), name=cname)
@@ -283,6 +395,17 @@ def _run_op(op, state, records, results):
                 records[key] = to_json(get_path(results[op[3]], op[4]))
             elif what == "path":
                 records[key] = to_json(get_path(n, op[3]))
+            elif what == "dataarray":
+                # c.da.<attr> / c.ds views compared as labelled arrays
+                obj = get_path(n, op[3])
+                if hasattr(obj, "data_vars"):
+                    records[key] = {"$type": "dataset", "vars": {k: dataarray_json(v) for k, v in obj.data_vars.items()}}
+                else:
+                    records[key] = dataarray_json(obj)
+            elif what == "model_terms":
+                # linopy's `_term` size per constraint (it decides how the LP writer slices blocks)
+                m = n.optimize.create_model(**decode(op[3] if len(op) > 3 else {}, n))
+                records[key] = to_json({k: int(c.data.sizes.get("_term", 0)) for k, c in m.constraints.items()})
             elif what == "model_lp":
                 import tempfile, os
                 with tempfile.TemporaryDirectory() as d:

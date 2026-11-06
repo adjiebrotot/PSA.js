@@ -2,7 +2,10 @@
 /** Global constraints (mirrors `pypsa.optimization.global_constraints`). */
 
 import { Index } from "../core/index.js";
-import { NOMINAL_ATTRS, denseValues, staticValues, weightings } from "./common.js";
+import { NOMINAL_ATTRS, denseValues, staticValues, weightings, npSum } from "./common.js";
+
+/** `pandas.Series.sum()`: NaN skipped, numpy pairwise summation. */
+const pandasSum = (vals) => npSum(Array.from(vals, (v) => (Number.isNaN(v) ? 0 : v)));
 import { labeler1, labeler2 } from "./variables.js";
 import { logger } from "../logger.js";
 import { define_piecewise, optionsFor } from "./piecewise.js";
@@ -485,14 +488,14 @@ export function define_operational_limit(n, sns) {
           throw new Error(`Found non-cyclic ${kind} with continuous depletion over multiple investment periods combined with investment period year weightings != 1.`);
         }
         if (cont.some(Boolean) && Array.from(periodWeighting.values).every((x) => x === 1)) {
-          let ssum = 0;
+          const inits = [];
           sel.values.forEach((_, j) => {
             if (!cont[j]) return;
             vars.push(lastLabel(j));
             coeffs.push(-1);
-            ssum += init[j];
+            inits.push(init[j]);
           });
-          constAcc.value += ssum;
+          constAcc.value += pandasSum(inits);
         }
         const pp = sel.values.map((_, j) => j).filter((j) => ppFlag[j]);
         if (pp.length) {
@@ -508,13 +511,11 @@ export function define_operational_limit(n, sns) {
           }
         }
       } else {
-        let ssum = 0;
         sel.values.forEach((_, j) => {
           vars.push(lastLabel(j));
           coeffs.push(-1);
-          ssum += init[j];
         });
-        constAcc.value += ssum;
+        constAcc.value += pandasSum(Array.from(sel.values, (_, j) => init[j]));
       }
       void em;
     }

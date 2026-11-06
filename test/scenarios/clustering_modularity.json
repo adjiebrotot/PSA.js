@@ -1,0 +1,33 @@
+{
+  "description": "Spatial clustering by Clauset-Newman-Moore greedy modularity (networkx): busmaps of the SciGrid and AC-DC example networks (connected and disconnected line graphs, bus subsets) and a clustered network.",
+  "ops": [
+    ["load_example", "scigrid-de"],
+    ["call", "cluster.spatial.busmap_by_greedy_modularity", [5], {}, "bm5"],
+    ["record", "scigrid_busmap_5", "result", "bm5"],
+    ["call", "cluster.spatial.busmap_by_greedy_modularity", [30], {}, "bm30"],
+    ["record", "scigrid_busmap_30", "result", "bm30"],
+    ["call", "cluster.spatial.busmap_by_greedy_modularity", [120], {}, "bm120"],
+    ["record", "scigrid_busmap_120", "result", "bm120"],
+    ["load_example", "ac-dc-meshed"],
+    ["call", "cluster.spatial.busmap_by_greedy_modularity", [3], {}, "acdc3"],
+    ["record", "acdc_busmap_3", "result", "acdc3"],
+    ["call", "cluster.spatial.busmap_by_greedy_modularity", [7], {}, "acdc7"],
+    ["record", "acdc_busmap_7", "result", "acdc7"],
+    ["call", "cluster.spatial.busmap_by_greedy_modularity", [2], {"buses_i": {"$index": {"values": ["London", "Norwich", "Manchester", "Bremen", "Frankfurt"], "name": "name"}}}, "acdcsub"],
+    ["record", "acdc_busmap_sub", "result", "acdcsub"],
+    ["expect_error", "acdc_err_cluster_4", ["call_replace", "cluster.spatial.cluster_by_greedy_modularity", [4]]],
+    ["expect_error", "acdc_err_cluster_7", ["call_replace", "cluster.spatial.cluster_by_greedy_modularity", [7]]],
+    ["new_network"],
+    ["set_snapshots", [0, 1]],
+    ["add", "Bus", ["b0", "b1", "b2", "b3", "b4", "b5", "b6", "b7"], {"x": [0, 1, 0, 1, 5, 6, 5, 9], "y": [0, 0, 1, 1, 5, 5, 6, 9], "v_nom": 380}],
+    ["add", "Line", ["l01", "l02", "l13", "l23", "l34", "l45", "l46", "l56", "l57", "l57b"], {"bus0": ["b0", "b0", "b1", "b2", "b3", "b4", "b4", "b5", "b5", "b5"], "bus1": ["b1", "b2", "b3", "b3", "b4", "b5", "b6", "b6", "b7", "b7"], "x": [0.1, 0.2, 0.1, 0.3, 1.0, 0.1, 0.1, 0.2, 0.5, 0.4], "r": [0.01, 0.02, 0.01, 0.03, 0.1, 0.01, 0.01, 0.02, 0.05, 0.04], "s_nom": [100, 100, 200, 100, 50, 300, 100, 100, 80, 90]}],
+    ["add", "Generator", ["g0", "g5"], {"bus": ["b0", "b5"], "p_nom": [500, 400], "marginal_cost": [10, 20]}],
+    ["add", "Load", ["d3", "d6", "d7"], {"bus": ["b3", "b6", "b7"], "p_set": [100, 150, 50]}],
+    ["call", "cluster.spatial.busmap_by_greedy_modularity", [3], {}, "small3"],
+    ["record", "small_busmap_3", "result", "small3"],
+    ["call_replace", "cluster.spatial.cluster_by_greedy_modularity", [3], {"line_length_factor": 1.25}],
+    ["record", "small_clustered_3", "network"],
+    ["load_example", "ac-dc-meshed"],
+    ["expect_error", "acdc_err_cutoff", ["call", "cluster.spatial.busmap_by_greedy_modularity", [50]]]
+  ]
+}

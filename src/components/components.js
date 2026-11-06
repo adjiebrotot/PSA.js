@@ -6,6 +6,8 @@
 
 import { DataFrame, Series, isNumberArray } from "../core/frame.js";
 import { Index, asIndex, labelKey } from "../core/index.js";
+import { DataArray, Dataset } from "../core/dataarray.js";
+import { isSnapshotMajor } from "../network/scenario_frames.js";
 import { annuity, periodizedCost } from "../costs.js";
 import { typToDtype } from "./types.js";
 import { logger } from "../logger.js";
@@ -362,6 +364,7 @@ export class Components {
     return this.names.difference(this.active_assets);
   }
 
+  /** Restrict `data` (indexed by component names) to the active assets. */
   filter_by_active_assets(data, investment_period = null) {
     if (typeof investment_period === "number" && Number.isNaN(investment_period)) investment_period = null;
     if (data instanceof Index || Array.isArray(data)) {
@@ -407,6 +410,125 @@ export class Components {
     let df = new DataFrame({ index: snapshots, columns: names, data });
     if (index !== null) df = df.reindex({ columns: asIndex(index), fill: NaN });
     return df;
+  }
+
+  /** The network the component is attached to (raises when detached). */
+  get n_save() {
+    if (!this.attached) throw new Error("AttributeError: Component must be attached to a Network.");
+    return this.n;
+  }
+
+  /** PyPSA's class name of the component (`Generators`, `StorageUnits`). */
+  get _className() {
+    return this.list_name
+      .split("_")
+      .map((w) => w[0].toUpperCase() + w.slice(1))
+      .join("");
+  }
+
+  /**
+   * An attribute as a labelled array (PyPSA's `_as_xarray`): time-varying
+   * attributes (snapshot, name) combining static and dynamic values, static
+   * ones (name), `"active"` the activity mask. Stochastic networks add a
+   * `scenario` dimension: (snapshot, scenario, name) and (scenario, name);
+   * the mask is (scenario, name, snapshot) unless the component's name level
+   * makes PyPSA's layout snapshot-major.
+   */
+  _as_xarray(attr) {
+    const n = this.n_save;
+    const sns = new Index(n.snapshots.values, "snapshot");
+    const isActive = attr === "active";
+    const isDynamic = !isActive && Object.prototype.hasOwnProperty.call(this.dynamic, attr);
+    if (!isActive && !isDynamic && !this.static.has(attr)) {
+      throw new Error(`AttributeError: '${this._className}' components has no attribute '${attr}'.`);
+    }
+    const frame = isActive ? this.get_activity_mask() : isDynamic ? this._as_dynamic(attr) : null;
+    const timeVarying = frame !== null;
+    if (!this.has_scenarios) {
+      const names = new Index(this.static.index.values, "name");
+      if (!timeVarying) return new DataArray(Array.from(this.static.col(attr)), { dims: ["name"], coords: [names], name: attr });
+      const N = names.length;
+      const values = isActive ? new Array(sns.length * N) : new Float64Array(sns.length * N);
+      names.values.forEach((nm, j) => {
+        const col = frame.col(nm);
+        for (let t = 0; t < sns.length; t++) values[t * N + j] = col[t];
+      });
+      return new DataArray(values, { dims: ["snapshot", "name"], coords: [sns, names], name: attr });
+    }
+    const scenarios = new Index(n.scenarios.values, "scenario");
+    const names = new Index(this.names.values, "name");
+    const S = scenarios.length;
+    const N = names.length;
+    if (!timeVarying) {
+      const col = this.static.col(attr);
+      const values = [];
+      for (const sc of scenarios.values) {
+        for (const nm of names.values) {
+          const i = this.static.index.getLoc([sc, nm]);
+          values.push(i < 0 ? NaN : col[i]);
+        }
+      }
+      const out = values.every((v) => typeof v === "number") ? Float64Array.from(values) : values;
+      return new DataArray(out, { dims: ["scenario", "name"], coords: [scenarios, names], name: attr });
+    }
+    const T = sns.length;
+    const values = isActive ? new Array(T * S * N).fill(NaN) : new Float64Array(T * S * N).fill(NaN);
+    const snapshotMajor = isActive ? isSnapshotMajor(this) : this._dynamicSnapshotMajor(attr);
+    scenarios.values.forEach((sc, s) => {
+      names.values.forEach((nm, j) => {
+        if (!frame.has([sc, nm])) return;
+        const col = frame.col([sc, nm]);
+        for (let t = 0; t < T; t++) values[snapshotMajor ? (t * S + s) * N + j : (s * N + j) * T + t] = col[t];
+      });
+    });
+    return snapshotMajor
+      ? new DataArray(values, { dims: ["snapshot", "scenario", "name"], coords: [sns, scenarios, names], name: attr })
+      : new DataArray(values, { dims: ["scenario", "name", "snapshot"], coords: [scenarios, names, sns], name: attr });
+  }
+
+  /**
+   * Whether PyPSA's `c.da.<attr>` of a time-varying attribute is laid out
+   * (snapshot, scenario, name): `_as_dynamic` concatenates the time series of
+   * some components with the static values of the others, which sorts the
+   * `name` level; with time series for none or all of them the columns keep
+   * the component's own level order (`isSnapshotMajor`).
+   */
+  _dynamicSnapshotMajor(attr) {
+    const dyn = this.dynamic[attr];
+    const index = this.static.index;
+    if (!dyn.columns.length || index.values.every((t) => dyn.has(t))) return isSnapshotMajor(this);
+    const names = this.names.values;
+    const sorted = [...names].sort();
+    return names.some((nm, i) => nm !== sorted[i]);
+  }
+
+  /** Labelled arrays of the attributes, `c.da.p_max_pu` or `c.da["p_max_pu"]` (PyPSA's xarray accessor). */
+  get da() {
+    const c = this;
+    return new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          if (typeof prop === "symbol" || prop === "then") return undefined;
+          if (prop === "toString") return () => `<XarrayAccessor for ${c._className}>`;
+          return c._as_xarray(prop);
+        },
+        has: (_t, prop) => typeof prop === "string" && (c.static.has(prop) || prop in c.dynamic),
+        ownKeys: () => [...new Set([...c.static.columns, ...Object.keys(c.dynamic)])].sort(),
+        getOwnPropertyDescriptor: (_t, prop) => ({ enumerable: true, configurable: true, value: c._as_xarray(prop) }),
+      },
+    );
+  }
+
+  /**
+   * All attributes as a `Dataset` (PyPSA's `c.ds`): the static columns and
+   * the time-varying attributes with data.
+   */
+  get ds() {
+    const vars = new Map();
+    for (const attr of this.static.columns) vars.set(attr, this._as_xarray(attr));
+    for (const [attr, df] of Object.entries(this.dynamic)) if (df.index.length && df.columns.length) vars.set(attr, this._as_xarray(attr));
+    return new Dataset(vars);
   }
 
   // ------------------------------------------------------------------
@@ -605,11 +727,13 @@ export class Components {
   // Mutation helpers
   // ------------------------------------------------------------------
 
+  /** Add components of this class (`n.add(<class>, name, kwargs, opts)`). */
   add(name, kwargs = {}, opts = {}) {
     if (!this.attached) throw new Error("Components must be attached to a network to add components.");
     return this.n.add(this.name, name, kwargs, opts);
   }
 
+  /** Rename components (`{old: new}`) in static, dynamic and referencing data of the network. */
   rename_component_names(mapping) {
     for (const v of Object.values(mapping)) if (typeof v !== "string") throw new Error("New names must be strings.");
     this.static = this.static.renameIndex((v) => mapping[v] ?? v);
@@ -633,6 +757,7 @@ export class Components {
 
   // Buses -------------------------------------------------------------
 
+  /** Add the buses referenced by the components but missing from the network. */
   add_missing_buses(kwargs = {}) {
     if (this.name !== "Bus") throw new Error("add_missing_buses is only defined for buses");
     const n = this.n;
@@ -654,6 +779,7 @@ export class Components {
     return this.add(missing, kwargs, { return_names: true });
   }
 
+  /** Add the carriers referenced by the components but missing from the network. */
   add_missing_carriers(kwargs = {}) {
     if (this.name !== "Carrier") throw new Error("add_missing_carriers is only defined for carriers");
     const all = new Set();
